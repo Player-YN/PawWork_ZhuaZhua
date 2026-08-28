@@ -36,7 +36,7 @@ Comic / 自我介绍长图: one panel story per Frame (`comic-panel`). Paper cou
 
 On `CANVAS_QA_FAILED`, repair slots / change layout / split content and resubmit to the **same** artifact. Never a second poster file.
 
-After the poster exists, drive the canvas with the `deck` tool (`act=read|write|export`). Omit nodeId — host pins selection.
+After the poster exists, drive the canvas with the `deck` tool (`act=read|write|export`). Omit nodeId — host pins selection. After `run` writes slots JSON, `deck` write with that `path` — do not retype.
 
 - `setSlotText` / `setSlotSrc` — clicked node
 - Semantic `replacePlate` `{plateId|frameId, layoutId, themeId?, slots}` — rewrite one frame, keep identity

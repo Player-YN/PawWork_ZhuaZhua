@@ -13,7 +13,7 @@ Ops, snapshot, and `src` aliases (`wi_`, `图片N`) live on the `sheet` tool des
 
 1. Read `activeWorkbook` in the world snapshot first. Trust `overview.sheets[].rowCount`.
 2. If that is enough, skip inspect. More cells: `inspect` `view=workbook` or `view=range` — the range is a **sample**, not the whole table.
-3. Bulk over the inspect window (counts, filters, derived columns): `sheet` `act=snapshot` → `run` reads the `/scratch` CSV → `sheet` write onto the live book. `run` stdout is **not** a completed sheet.
+3. Bulk over the inspect window (counts, filters, derived columns): `sheet` `act=snapshot` → `run` reads the `/scratch` CSV → `sheet` write onto the live book. `run` stdout is **not** a completed sheet. After run writes JSON, call `sheet` `act=write` `setValues2d` with that path — do not retype cells.
 
 ## Selection and honesty
 

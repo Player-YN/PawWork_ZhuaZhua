@@ -12,6 +12,7 @@ function run() {
   const execution = beginExecution(store, sessionId, {});
   const fs = createSessionGuestFs(store, { sessionId, executionId: execution.executionId });
   fs.mkdirp('/artifacts');
+  fs.mkdirp('/scratch');
   const tools = createSessionTools({ store, execution, fs, sessionId });
   const runTool = tools.run;
   const inspectTool = tools.inspect;
@@ -78,6 +79,42 @@ function run() {
         .then((huge) => {
           assert.equal(huge.ok, false);
           assert.match(String(huge.error), /8000 chars/);
+          assert.match(String(tools.sheet.description), /path\|valuesPath\|from/);
+          assert.match(String(tools.sheet.description), /do not retype cells/i);
+          fs.writeFile(
+            '/scratch/detail-values.json',
+            JSON.stringify([['path-a'], ['path-b']]),
+            { mimeType: 'application/json' }
+          );
+          return tools.sheet.execute({
+            act: 'write',
+            artifactId: id,
+            commands: [{ op: 'setValues2d', a1: 'D2', path: '/scratch/detail-values.json' }]
+          });
+        })
+        .then((pathWrite) => {
+          assert.equal(pathWrite.ok, true, pathWrite.error);
+          assert.equal(String(pathWrite.readback.values[0][0]), 'path-a');
+          return tools.sheet.execute({
+            act: 'write',
+            artifactId: id,
+            commands: [{ op: 'setValues2d', a1: 'D2', path: '/scratch/no-such.json' }]
+          });
+        })
+        .then((missingPath) => {
+          assert.equal(missingPath.ok, false);
+          assert.equal(missingPath.code, 'ENOENT');
+          return tools.sheet.execute({
+            act: 'write',
+            artifactId: id,
+            commands: [{ a1: 'D2', values: [['no-op']] }]
+          });
+        })
+        .then((missingOp) => {
+          assert.equal(missingOp.ok, false);
+          assert.equal(missingOp.code, 'BAD_INPUT');
+          assert.match(String(missingOp.error || ''), /missing op/i);
+          assert.match(String(missingOp.hint || ''), /op/);
           console.log('test_sheet_run: ok');
         });
     });

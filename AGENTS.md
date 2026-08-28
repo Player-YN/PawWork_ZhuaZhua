@@ -20,8 +20,9 @@ This file is the auto-loaded spine. Keep it short.
 | **Product** | Session Workspace Runtime |
 | **Stable** | **`main`** · `C:\Users\yyy\Desktop\PawWork` |
 | **Dev** | **`runtime-vnext`** · `C:\Users\yyy\Desktop\PawWork-vnext` |
-| **Remote** | https://github.com/Player-YN/PawWork-vnext · default **`main`** |
-| **Release** | After a tested tip: merge **`runtime-vnext` → `main`** in the `Desktop\PawWork` worktree (never checkout `main` here); keep developing on `runtime-vnext` |
+| **Remote** | https://github.com/Player-YN/PawWork-vnext (private) · default **`main`** |
+| **Public** | https://github.com/Player-YN/PawWork_ZhuaZhua · `Desktop\PawWork_ZhuaZhua` · **tree sync**, never push private history |
+| **Release** | Merge **`runtime-vnext` → `main`** in `Desktop\PawWork` (never checkout `main` here); `git push origin main`; `npm run sync:public -- --commit --push`. CWS zip = `pack:extension`. Keep developing on `runtime-vnext`. |
 
 ---
 
@@ -123,8 +124,9 @@ PawWork-vnext/
 **Guest FS:** `/context` ro · `/artifacts` durable · `/scratch` execution-scoped.  
 **UI:** artifact shelf = **工作区** (always-open rail; blank Design/Slides/Sheet/Docs/Site templates at the foot). Click a file to preview. Selection chips = user capture (sticky 图片N / 截图N / 容器N / 表格N / 文字N / 页面N; numbering is per-group, fresh groups start at 1). URL 页面 items enter by paste or in-page 链接入组. Pasted images are ephemeral composer chips, not artifacts. **清空选中** drops page-capture Group items; Clipboard Group has its own clear. Chrome labels are **任务 / Task**; sessions rename via the pencil. `@` opens the mention picker anywhere. Composer typewriter = bilingual product manual. Clarify is control-plane UI.  
 **Office:** `sheet.html` · `design.html` · `site.html` · `docs.html` · `artifactPreview.html`. Agent-opened work tabs are silent (`active: false`) and join one Chrome tab group per session; user “打开” still focuses. In-flight writes lock that session’s work tab (stationary breathing rim + edge mist; no live-web lock). Preview host bar: `Ctrl±`/`0` viewport zoom + “?” shortcut list. Site: `Ctrl/Cmd` multi-pin; mutate the same `data-paw-kind=site` file (not a new HTML per tweak); site clone, declarative motion blueprint, and Site QA are landed. Slides PPTX export is triple-validated (OpenXML validator · LibreOffice · PowerPoint COM).  
-**Tools:** always on: inspect / acquire / run / clarify / sheet / deck / doc / web. Playbook-shaped `run` (`createScene` / `fromPage` / `fromRaster` / `fromSelection`, with or without `op=html`) binds on the host. `fromRaster scan:"auto"` is host quantize+CCA (text still from inspect). Image `path`/`item`/`handle` aliases resolve on deck/web/fromRaster. Inventory lists fat json-canvas. Missing canvas → `NO_CANVAS`. Unmarked pretty HTML is `USE_CANVAS`. Same-kind creates reuse fail-closed (`AMBIGUOUS_CANVAS` / `AMBIGUOUS_WORKBOOK` when two match and no target; `artifactMode:"new"` is the only second-book/visual path). Sheet interface contracts live in the sheet tool description. Skills: `slides` / `poster` (ex `html-deck` / `html-poster`; permanent id aliases).  
-**Prompt:** system prefix carries the authorized-page-context boundary; no `sessionId` in the prefix; skill catalog only (playbooks load via `inspect view=skill`).  
+**Tools:** always on: inspect / acquire / run / clarify / sheet / deck / doc / web. Clarify can yield questions or a plan; `/plan` (slash command, not a skill) forces a plan card this turn. Panel: Approve / Decline / 需要修改 (Required to change). Approve pins `execution.frozenPlan`; `prepareStep` re-injects the contract (not a chat bubble). Revise notes do not pin; model re-yields a new card (old card + notes stay). Playbook-shaped `run` (`createScene` / `fromPage` / `fromRaster` / `fromSelection`, with or without `op=html`) binds on the host. `fromRaster scan:"auto"` is host quantize+CCA (text still from inspect). Image `path`/`item`/`handle` aliases resolve on deck/web/fromRaster. Office writes that take a computed grid/slots/blocks/HTML payload accept guest `path`/`from` (host loads JSON, fail-closed); `run` computes, official tools apply — do not retype. No 9th tool. Inventory lists fat json-canvas. Missing canvas → `NO_CANVAS`. Unmarked pretty HTML is `USE_CANVAS`. Same-kind creates reuse fail-closed (`AMBIGUOUS_CANVAS` / `AMBIGUOUS_WORKBOOK` when two match and no target; `artifactMode:"new"` is the only second-book/visual path). Sheet interface contracts live in the sheet tool description. Skills: `slides` / `poster` (ex `html-deck` / `html-poster`; permanent id aliases).  
+**Prompt:** system prefix carries the authorized-page-context boundary; no `sessionId` in the prefix; skill catalog only (playbooks load via `inspect view=skill`). Model judges when work is complex enough to present a plan; host does not classify “structural” ops.  
+**Trajectory:** command skeleton (`[stripped]` / `[path-hydrate]` / `[omitted]`); empty official writes fail-speak (`BAD_INPUT`, never `ok` with `applied:0`); `user_stop` on the path; thought/text first-class; one-shot `plan-pinned` on approve (not every `prepareStep` hop).  
 **acquire:** BYOK `pagewand_web_acquire`. Search default **Tavily** (Brave optional; Firecrawl search only if those keys are empty). `fetch` uses Firecrawl scrape when a key is set, else anonymous GET. `map`/`crawl` require Firecrawl. Not browser-use; no `userScripts`.
 
 ---
@@ -145,10 +147,11 @@ npm run playwright:install   # Chromium for visual / packed-extension E2E only
 npm run test:visual-deck     # real tldraw harness pixels (requires playwright:install)
 npm run test:extension-e2e   # packed MV3 + local mock model (requires pack + playwright:install)
 npm run pack:extension       # artifacts/unpacked — no node_modules
+npm run sync:public          # copy `main` tree → ../PawWork_ZhuaZhua (no history)
 npm run ci:local
 ```
 
-**Load `artifacts/unpacked/` for size.** Repo root includes `node_modules` (~360MB) — never load the repo root as the extension. Pack is ~44MB (`esbuild.wasm` + `sheet-runtime.js` + `design-runtime.js` + loaders). Reload after `build:agent` / `build:sheet` / `build:design`. Develop on **`runtime-vnext`** in `Desktop\PawWork-vnext`. Merge tested tips onto **`main`** (`Desktop\PawWork`); keep developing on `runtime-vnext`.
+**Load `artifacts/unpacked/` for size.** Repo root includes `node_modules` (~360MB) — never load the repo root as the extension. Pack is ~44MB (`esbuild.wasm` + `sheet-runtime.js` + `design-runtime.js` + loaders). Reload after `build:agent` / `build:sheet` / `build:design`. Develop on **`runtime-vnext`** in `Desktop\PawWork-vnext`. Merge tested tips onto **`main`** (`Desktop\PawWork`); `npm run sync:public -- --commit --push` updates the public clone. Keep developing on `runtime-vnext`.
 
 ---
 

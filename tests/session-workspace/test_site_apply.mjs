@@ -55,6 +55,19 @@ assert.equal(renamed.ok, true);
 assert.match(renamed.html, />Acme Cloud</);
 assert.equal(renamed.readback.text, 'Acme Cloud');
 
+const replacedHtml = applySiteCommands(renamed.html, [
+  {
+    op: 'replaceHtml',
+    html: `<!DOCTYPE html><html data-paw-kind="site"><body><h1>整页替换</h1><p>path bind</p></body></html>`
+  }
+]);
+assert.equal(replacedHtml.ok, true, replacedHtml.error);
+assert.match(replacedHtml.html, /整页替换/);
+assert.match(replacedHtml.html, /data-paw-kind="site"/);
+const unmarked = applySiteCommands(renamed.html, [{ op: 'replaceHtml', html: '<div>pretty poster</div>' }]);
+assert.equal(unmarked.ok, false);
+assert.equal(unmarked.code, 'USE_CANVAS');
+
 const link = nodes.find((n) => n.tag === 'a');
 const hrefed = applySiteCommands(renamed.html, [{ op: 'setHref', nodeId: link.nodeId, href: '/docs' }]);
 assert.match(hrefed.html, /href="\/docs"/);

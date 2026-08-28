@@ -370,6 +370,157 @@ export function emptyGridError(field = 'values') {
   };
 }
 
+const GRID_WRITE_OPS = new Set(['setValues2d', 'applyGrid']);
+
+/** Guest JSON aliases — same `path` key as deck/web image src; valuesPath/from are explicit. */
+export function gridPathFromCommand(cmd) {
+  if (!cmd || typeof cmd !== 'object') return '';
+  return String(cmd.path || cmd.valuesPath || cmd.from || cmd.scratchPath || '').trim();
+}
+
+function sheetCommandOp(cmd) {
+  if (!cmd || typeof cmd !== 'object') return '';
+  return String(cmd.op || cmd.type || cmd.command || '').trim();
+}
+
+function guestReadError(path, err) {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/ENOENT/i.test(msg)) {
+    return {
+      ok: false,
+      code: 'ENOENT',
+      error: `grid file not found: ${path}`,
+      hint: 'write JSON to /scratch or /artifacts via run, then pass that path'
+    };
+  }
+  if (/FS_DENIED/i.test(msg)) {
+    return {
+      ok: false,
+      code: 'FS_DENIED',
+      error: msg,
+      hint: 'path must be a session guest file under /scratch or /artifacts'
+    };
+  }
+  return { ok: false, code: 'BAD_INPUT', error: msg, hint: 'pass path to a /scratch or /artifacts JSON grid' };
+}
+
+function parseGuestGridJson(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(text ?? ''));
+  } catch {
+    return {
+      ok: false,
+      code: 'BAD_INPUT',
+      error: 'grid JSON is invalid',
+      hint: 'write a JSON array (values[][]) or {values:[][]} — do not retype cells'
+    };
+  }
+  const values = Array.isArray(parsed) ? parsed : parsed && typeof parsed === 'object' ? parsed.values : null;
+  if (isEmptyGrid(values)) {
+    return {
+      ok: false,
+      code: 'BAD_INPUT',
+      error: 'grid JSON is empty or not a 2d array',
+      hint: 'write a non-empty values[][] JSON file, then pass path — do not retype cells'
+    };
+  }
+  return { ok: true, values };
+}
+
+export function loadGridFromGuestFs(fs, rawPath) {
+  const p = String(rawPath || '').trim();
+  if (!p) {
+    return {
+      ok: false,
+      code: 'BAD_INPUT',
+      error: 'grid path is empty',
+      hint: 'pass path / valuesPath / from to a /scratch or /artifacts JSON grid'
+    };
+  }
+  if (!fs || (typeof fs.readFileBytes !== 'function' && typeof fs.readFile !== 'function')) {
+    return {
+      ok: false,
+      code: 'BAD_INPUT',
+      error: 'guest FS unavailable for grid path',
+      hint: 'sheet write resolves path on the host before apply'
+    };
+  }
+  let text;
+  try {
+    if (typeof fs.readFileBytes === 'function') {
+      const bytes = fs.readFileBytes(p);
+      text = typeof bytes === 'string' ? bytes : new TextDecoder().decode(bytes);
+    } else {
+      text = String(fs.readFile(p) ?? '');
+    }
+  } catch (err) {
+    return guestReadError(p, err);
+  }
+  return parseGuestGridJson(text);
+}
+
+/**
+ * Bind setValues2d / applyGrid to a guest JSON grid. Inline values win.
+ * Fail-closed: missing file ENOENT, invalid/empty JSON BAD_INPUT.
+ */
+export function hydrateSheetGridCommands(fs, commands) {
+  const list = Array.isArray(commands) ? commands : commands && typeof commands === 'object' ? [commands] : [];
+  const out = [];
+  for (const cmd of list) {
+    if (!cmd || typeof cmd !== 'object') {
+      out.push(cmd);
+      continue;
+    }
+    const op = sheetCommandOp(cmd);
+    if (!GRID_WRITE_OPS.has(op) || !isEmptyGrid(cmd.values)) {
+      out.push(cmd);
+      continue;
+    }
+    const p = gridPathFromCommand(cmd);
+    if (!p) {
+      out.push(cmd);
+      continue;
+    }
+    const loaded = loadGridFromGuestFs(fs, p);
+    if (!loaded.ok) return loaded;
+    out.push({ ...cmd, values: loaded.values });
+  }
+  return { ok: true, commands: out };
+}
+
+export function missingGridSourceError(op = 'setValues2d') {
+  return {
+    ok: false,
+    code: 'BAD_INPUT',
+    error: `${op} needs values[][] or a guest path`,
+    hint: 'pass values, or path / valuesPath / from to /scratch or /artifacts JSON — do not retype cells'
+  };
+}
+
+export function missingSheetOpError(op = '') {
+  return {
+    ok: false,
+    code: 'BAD_INPUT',
+    error: op ? `unknown sheet op "${op}"` : 'sheet command is missing op',
+    hint: 'each commands[] item needs op (setRange / setFormula / setValues2d / applyGrid / …)'
+  };
+}
+
+/** Fail-closed: missing/unknown op, or grid write with neither values nor path. */
+export function malformedSheetWriteError(commands) {
+  const list = Array.isArray(commands) ? commands : commands && typeof commands === 'object' ? [commands] : [];
+  for (const cmd of list) {
+    if (!cmd || typeof cmd !== 'object') return missingSheetOpError();
+    const op = sheetCommandOp(cmd);
+    if (!SHEET_OPS.includes(op)) return missingSheetOpError(op);
+    if (GRID_WRITE_OPS.has(op) && isEmptyGrid(cmd.values) && !gridPathFromCommand(cmd)) {
+      return missingGridSourceError(op);
+    }
+  }
+  return null;
+}
+
 /**
  * Persist / live-unit snapshot: merge durable AOA into the Univer save()
  * so created sheets survive even if the raw unit lagged one paint.
@@ -890,7 +1041,7 @@ function paintGrid(sheet, sr, sc, grid) {
 /**
  * @param {object} workbookData
  * @param {object[]} commands
- * @param {{ agentWrite?: boolean, selections?: unknown }} [opts]
+ * @param {{ agentWrite?: boolean, selections?: unknown, inPlace?: boolean, fs?: object }} [opts]
  * @returns {{ data: object, applied: object[], readback: object|null, sheets: object[], error?: string }}
  */
 export function applyCommandsToWorkbookData(workbookData, commands, opts = {}) {
@@ -902,8 +1053,20 @@ export function applyCommandsToWorkbookData(workbookData, commands, opts = {}) {
   const unitId = workbookData?.id;
   const agentWrite = opts.agentWrite !== false;
   const inPlace = opts.inPlace === true;
-  let list = normalizeCommands(commands);
   let draftInfo = null;
+  const malformed = malformedSheetWriteError(commands);
+  if (malformed) {
+    return applyFail(workbookData, sheets, applied, readback, draftInfo, malformed);
+  }
+  let rawList = Array.isArray(commands) ? commands : commands && typeof commands === 'object' ? [commands] : [];
+  if (opts.fs) {
+    const hydrated = hydrateSheetGridCommands(opts.fs, rawList);
+    if (!hydrated.ok) {
+      return applyFail(workbookData, sheets, applied, readback, draftInfo, hydrated);
+    }
+    rawList = hydrated.commands;
+  }
+  let list = normalizeCommands(rawList);
 
   if (agentWrite) {
     list = fillMissingWriteTargets(list, opts.selections);
@@ -967,7 +1130,22 @@ export function applyCommandsToWorkbookData(workbookData, commands, opts = {}) {
 
     if (cmd.op === 'setValues2d' || cmd.op === 'applyGrid') {
       if (isEmptyGrid(cmd.values)) {
-        return applyFail(workbookData, sheets, applied, readback, draftInfo, emptyGridError('values'));
+        const unresolved = gridPathFromCommand(cmd);
+        return applyFail(
+          workbookData,
+          sheets,
+          applied,
+          readback,
+          draftInfo,
+          unresolved
+            ? {
+                ok: false,
+                code: 'BAD_INPUT',
+                error: `${cmd.op} path was not resolved to a grid`,
+                hint: 'host loads path/valuesPath/from from /scratch or /artifacts before apply'
+              }
+            : emptyGridError('values')
+        );
       }
     }
 

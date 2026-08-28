@@ -555,6 +555,89 @@ function run() {
   assert.equal(unnamedKeepsActive.ok, true);
   assert.equal(unnamedKeepsActive.sheets[0].rows[0][0], 'kept');
 
+  function guestFsFromMap(files) {
+    return {
+      readFileBytes(p) {
+        if (!Object.prototype.hasOwnProperty.call(files, p)) throw new Error(`ENOENT: ${p}`);
+        return new TextEncoder().encode(files[p]);
+      }
+    };
+  }
+
+  const pathWrite = applyCommandsToWorkbookData(
+    data0,
+    [{ op: 'setValues2d', sheet: 'S', a1: 'D2', path: '/scratch/detail-values.json' }],
+    {
+      agentWrite: true,
+      inPlace: true,
+      fs: guestFsFromMap({
+        '/scratch/detail-values.json': JSON.stringify([['压缩袋'], ['饮料架'], ['后备袋']])
+      })
+    }
+  );
+  assert.equal(pathWrite.ok, true, pathWrite.error);
+  assert.equal(pathWrite.sheets[0].rows[1][3], '压缩袋');
+  assert.equal(pathWrite.sheets[0].rows[2][3], '饮料架');
+  assert.equal(pathWrite.sheets[0].rows[3][3], '后备袋');
+  assert.notEqual(pathWrite.applied.length, 0);
+
+  const valuesPathWrite = applyCommandsToWorkbookData(
+    data0,
+    [{ op: 'applyGrid', sheet: 'S', a1: 'A2', valuesPath: '/artifacts/main-values.json' }],
+    {
+      agentWrite: true,
+      inPlace: true,
+      fs: guestFsFromMap({
+        '/artifacts/main-values.json': JSON.stringify({ values: [['wrapped-a', 1]] })
+      })
+    }
+  );
+  assert.equal(valuesPathWrite.ok, true, valuesPathWrite.error);
+  assert.equal(valuesPathWrite.sheets[0].rows[1][0], 'wrapped-a');
+
+  const missingPath = applyCommandsToWorkbookData(
+    data0,
+    [{ op: 'setValues2d', a1: 'D2', path: '/scratch/missing.json' }],
+    { agentWrite: true, inPlace: true, fs: guestFsFromMap({}) }
+  );
+  assert.equal(missingPath.ok, false);
+  assert.equal(missingPath.code, 'ENOENT');
+  assert.notEqual(missingPath.ok, true);
+
+  const badJson = applyCommandsToWorkbookData(
+    data0,
+    [{ op: 'setValues2d', a1: 'D2', from: '/scratch/broken.json' }],
+    { agentWrite: true, inPlace: true, fs: guestFsFromMap({ '/scratch/broken.json': '{not json' }) }
+  );
+  assert.equal(badJson.ok, false);
+  assert.equal(badJson.code, 'BAD_INPUT');
+
+  const emptyFile = applyCommandsToWorkbookData(
+    data0,
+    [{ op: 'setValues2d', a1: 'D2', path: '/scratch/empty.json' }],
+    { agentWrite: true, inPlace: true, fs: guestFsFromMap({ '/scratch/empty.json': '[]' }) }
+  );
+  assert.equal(emptyFile.ok, false);
+  assert.equal(emptyFile.code, 'BAD_INPUT');
+
+  const missingOp = applyCommandsToWorkbookData(
+    data0,
+    [{ a1: 'D2', values: [['x']] }],
+    { agentWrite: true, inPlace: true }
+  );
+  assert.equal(missingOp.ok, false);
+  assert.equal(missingOp.code, 'BAD_INPUT');
+  assert.match(String(missingOp.error || ''), /missing op/i);
+  assert.ok(!missingOp.applied?.length || missingOp.ok === false);
+
+  const unknownOp = applyCommandsToWorkbookData(
+    data0,
+    [{ op: 'paintColumn', a1: 'D2', values: [['x']] }],
+    { agentWrite: true, inPlace: true }
+  );
+  assert.equal(unknownOp.ok, false);
+  assert.equal(unknownOp.code, 'BAD_INPUT');
+
   console.log('test_sheet_apply: ok');
 }
 

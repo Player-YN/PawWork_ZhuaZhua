@@ -41,6 +41,14 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
   const system = buildSessionAgentInstructions({ sessionId: 's' });
   record('system-has-ask-once-policy', /ask once/i.test(system) && /do not guess/i.test(system), '');
   record('system-has-no-popcard-fence', !system.includes('```popcard'), '');
+  record(
+    'system-plan-is-judgment-not-host-taxonomy',
+    /Judge complexity before you move/.test(system) &&
+      /Do not ask whether to enter plan mode/.test(system) &&
+      !/createWorkbook requires plan/i.test(system) &&
+      !/structural op/i.test(system),
+    ''
+  );
 }
 
 {
@@ -183,6 +191,27 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
   record(
     'ui-clarifying-motion',
     /is-clarifying/.test(side) && /clarifyThreadPulse/.test(css) && /clarify-live-orb/.test(css),
+    ''
+  );
+  record(
+    'ui-plan-card-approve-or-decline',
+    /showPlanLive/.test(side) &&
+      /submitPlanDecision/.test(side) &&
+      /submitPlanRevise/.test(side) &&
+      /planApprove/.test(i18n) &&
+      /planRevise/.test(i18n) &&
+      /plan-approve-btn/.test(css) &&
+      /plan-revise-btn/.test(css),
+    ''
+  );
+  record(
+    'ui-plan-panel-details-and-seal',
+    /plan-panel/.test(side) &&
+      /plan-step-detail/.test(side) &&
+      /sealPlanPanel/.test(side) &&
+      /planAwaiting/.test(i18n) &&
+      /plan-step-chevron/.test(css) &&
+      /plan-panel/.test(css),
     ''
   );
 }

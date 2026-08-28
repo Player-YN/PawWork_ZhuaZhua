@@ -9,7 +9,9 @@ import { SITE_MOTION_CAPABILITY } from './siteMotionSchema.js';
 import {
   applyCommandsToWorkbookData,
   compactSheetList,
+  hydrateSheetGridCommands,
   inspectSheetSelection,
+  malformedSheetWriteError,
   overviewFromWorkbookData,
   overviewFromSheets,
   SHEET_SNAPSHOT_MAX_ROWS,
@@ -63,6 +65,14 @@ import { compactVisualCatalog, readVisualCatalog } from './visualAssets.js';
 import { preflightReplacePlatesFromStore } from './canvasOps.js';
 import { qaFailurePayload } from './canvasQaGate.js';
 import {
+  hydrateDeckCommands,
+  hydrateDocCommands,
+  malformedDeckWriteError,
+  malformedDocWriteError,
+  malformedWebWriteError,
+  resolveOfficeWriteInput
+} from './officePathHydrate.js';
+import {
   attachCanvasPreview,
   requestCanvasPreview,
   sessionToolToModelOutput
@@ -87,7 +97,7 @@ export function createOfficeTools(env) {
   const sheet = {
     name: 'sheet',
     description:
-      'Read, write, and snapshot a live Univer spreadsheet. Omit artifactId to target the focused book. act=read returns a used-range sample (truncated/next/sheetRowCount — never the whole table). act=snapshot dumps the used range (omit a1) to /scratch CSV for run; SNAPSHOT_TOO_LARGE → pass a smaller a1, never silent truncate. act=write applies commands[] in place (host pulses + Undo). Commands: setRange {a1,value,sheet?} (a1 may be B:B); setFormula {a1,formula}; setValues2d {a1,values[][] — required, empty/missing → BAD_INPUT}; insertRow/insertCol/deleteRow/deleteCol {index,count?}; sort {a1,column,direction,hasHeader}; numberFormat {a1,pattern} e.g. 0%; createSheet/renameSheet (createSheet materializes before later writes in the same or next apply); named sheet must exist or NO_SUCH_SHEET — omit sheet to target the active one. reshapeSplit {a1|column,itemDelim,fieldDelim?,mode?,headers?} splits one column into a draft sheet. insertCellImage/insertFloatImage/insertImage {a1,src} — omit src to pin the selection; src may be a data URL, http(s), wi_ web-item id, or 图片N. Host resolves bound items to pixels. xlsx download may drop pictures. Successful writes return readback — quote the readback A1, not a guess. Trust sheets[].rowCount as used rows.',
+      'Read, write, and snapshot a live Univer spreadsheet. Omit artifactId to target the focused book. act=read returns a used-range sample (truncated/next/sheetRowCount — never the whole table). act=snapshot dumps the used range (omit a1) to /scratch CSV for run; SNAPSHOT_TOO_LARGE → pass a smaller a1, never silent truncate. act=write applies commands[] in place (host pulses + Undo). Commands: setRange {a1,value,sheet?} (a1 may be B:B); setFormula {a1,formula}; setValues2d/applyGrid {a1,values[][] or path|valuesPath|from to /scratch|/artifacts JSON — after run writes the grid, pass the path, do not retype cells; missing op or missing both values and path → BAD_INPUT, never ok with applied:0}; insertRow/insertCol/deleteRow/deleteCol {index,count?}; sort {a1,column,direction,hasHeader}; numberFormat {a1,pattern} e.g. 0%; createSheet/renameSheet (createSheet materializes before later writes in the same or next apply); named sheet must exist or NO_SUCH_SHEET — omit sheet to target the active one. reshapeSplit {a1|column,itemDelim,fieldDelim?,mode?,headers?} splits one column into a draft sheet. insertCellImage/insertFloatImage/insertImage {a1,src} — omit src to pin the selection; src may be a data URL, http(s), wi_ web-item id, or 图片N. Host resolves bound items to pixels. xlsx download may drop pictures. Successful writes return readback — quote the readback A1, not a guess. Trust sheets[].rowCount as used rows.',
     parameters: {
       type: 'object',
       properties: {
@@ -136,8 +146,25 @@ export function createOfficeTools(env) {
           available: sheetNamesFrom(store, sessionId, fs, artifactId)
         };
       }
+      const malformed = malformedSheetWriteError(rawCommands);
+      if (malformed) {
+        return {
+          ...malformed,
+          available: sheetNamesFrom(store, sessionId, fs, artifactId)
+        };
+      }
+      const hydratedGrids = hydrateSheetGridCommands(fs, rawCommands);
+      if (!hydratedGrids.ok) {
+        return {
+          ok: false,
+          error: hydratedGrids.error,
+          code: hydratedGrids.code,
+          hint: hydratedGrids.hint,
+          available: sheetNamesFrom(store, sessionId, fs, artifactId)
+        };
+      }
       const sel = sess.activeWorkbook?.overview?.selections?.[0] || sess.activeWorkbook?.overview?.selection || {};
-      const expanded = expandOmittedImageCommands(store, sessionId, rawCommands, {
+      const expanded = expandOmittedImageCommands(store, sessionId, hydratedGrids.commands, {
         defaultA1: input.a1 || sel.a1,
         defaultSheet: input.sheet || sel.sheet
       });
@@ -166,7 +193,7 @@ export function createOfficeTools(env) {
         });
         const body = res?.result || res || {};
         const ok = res?.ok !== false && body?.ok !== false;
-        const decorated = decorateSheetResult(ok, artifactId, body, body.error || res?.error);
+        const decorated = decorateSheetResult(ok, artifactId, body, body.error || res?.error, commands);
         if (ok && (readbackLooksLikeUnresolvedImage(decorated.readback) || liveDrawingsMissed(body, drawingCmds))) {
           return {
             ...decorated,
@@ -182,23 +209,28 @@ export function createOfficeTools(env) {
       if (!loaded.ok) return loaded;
       const applied = applyCommandsToWorkbookData(loaded.data, commands, {
         selections: sess.activeWorkbook?.overview?.selections,
-        inPlace: true
+        inPlace: true,
+        fs
       });
       if (applied.ok === false) {
         const overview = overviewFromWorkbookData(applied.data || loaded.data);
-        return {
-          ok: false,
-          error: applied.error,
-          code: applied.code,
-          hint: applied.hint,
-          available: applied.available || overview?.sheets?.map((s) => s.name),
-          sheets: compactSheetList(overview),
-          overview
-        };
+        return speakOfficeApplyResult(
+          {
+            ok: false,
+            error: applied.error,
+            code: applied.code,
+            hint: applied.hint,
+            available: applied.available || overview?.sheets?.map((s) => s.name),
+            sheets: compactSheetList(overview),
+            overview,
+            applied: applied.applied
+          },
+          commands
+        );
       }
       persistWorkbook(store, fs, sessionId, artifactId, gate.record, applied, loaded.kind);
       const overview = overviewFromSheets(applied.sheets);
-      const decorated = decorateSheetResult(true, artifactId, { ...applied, overview }, null);
+      const decorated = decorateSheetResult(true, artifactId, { ...applied, overview }, null, commands);
       if (readbackLooksLikeUnresolvedImage(decorated.readback)) {
         return {
           ...decorated,
@@ -215,7 +247,7 @@ export function createOfficeTools(env) {
   const deck = {
     name: 'deck',
     description:
-      'Read, write, and export the open Design/Slides canvas (tldraw). Omit artifactId to target the focused file. act=read returns nodes plus the full catalogs (themes, variants, slide/poster layouts, motifs, charts, shape presets); catalog="icons" query=… searches the icon pack; catalog="image-brief" (layoutId, themeId, subject) returns a no-text prompt for acquire action=image. Writes: field edits apply to the clicked node (setSlotText / setSlotSrc — omit nodeId, host pins selection; no pinned node → NEED_SELECTION); semantic replacePlate {plateId|frameId, layoutId, themeId?, variant?, slots} rewrites one frame in place; insertPlate / createFrame add slides to the same file. Shape ops: create, style, arrange, group, z-order, crop. Image src accepts path|artifactId|item|handle (no remote URL as truth). Export: png, svg, pdf, pptx, json — pixel formats need the live Design tab (NEED_TAB). Successful writes return per-frame JPEG previews when the tab is open.',
+      'Read, write, and export the open Design/Slides canvas (tldraw). Omit artifactId to target the focused file. act=read returns nodes plus the full catalogs (themes, variants, slide/poster layouts, motifs, charts, shape presets); catalog="icons" query=… searches the icon pack; catalog="image-brief" (layoutId, themeId, subject) returns a no-text prompt for acquire action=image. Writes: field edits apply to the clicked node (setSlotText / setSlotSrc — omit nodeId, host pins selection; no pinned node → NEED_SELECTION); semantic replacePlate {plateId|frameId, layoutId, themeId?, variant?, slots or path|from to /scratch|/artifacts JSON — after run writes slots/frames, pass the path, do not retype; missing op or empty payload → BAD_INPUT, never ok with applied:0}; insertPlate / createFrame add slides to the same file. Shape ops: create, style, arrange, group, z-order, crop. Image src accepts path|artifactId|item|handle (no remote URL as truth). Export: png, svg, pdf, pptx, json — pixel formats need the live Design tab (NEED_TAB). Successful writes return per-frame JPEG previews when the tab is open.',
     parameters: {
       type: 'object',
       properties: {
@@ -248,6 +280,12 @@ export function createOfficeTools(env) {
         layoutId: { type: 'string', description: 'replacePlate / semantic plate: title | points | poster-hero | …' },
         themeId: { type: 'string', description: 'hanbai | ink-rose | midnight-cyan | forest | studio-amber | editorial | cobalt | mono' },
         variant: { type: 'string', description: 'paper | surface | accent | dark — page variant inside themeId' },
+        path: {
+          type: 'string',
+          description:
+            'Guest /scratch|/artifacts JSON for replacePlate slots/frames/commands after run; image writes still use src|item|handle'
+        },
+        from: { type: 'string', description: 'Alias of path for semantic deck JSON' },
         slots: {
           type: 'object',
           additionalProperties: true,
@@ -369,7 +407,18 @@ export function createOfficeTools(env) {
             selections
           });
         }
-        const expandedPresets = expandPresetCommands(officeDeckCommands(input, sess));
+        const resolvedDeck = resolveOfficeWriteInput(fs, input, 'deck');
+        if (!resolvedDeck.ok) {
+          return {
+            ok: false,
+            error: resolvedDeck.error,
+            code: resolvedDeck.code,
+            hint: resolvedDeck.hint,
+            available,
+            artifactId
+          };
+        }
+        const expandedPresets = expandPresetCommands(officeDeckCommands(resolvedDeck.input, sess));
         if (expandedPresets.unknown.length) {
           return {
             ok: false,
@@ -380,7 +429,22 @@ export function createOfficeTools(env) {
             artifactId
           };
         }
-        const rawDeck = expandedPresets.commands;
+        const hydratedDeck = hydrateDeckCommands(fs, expandedPresets.commands);
+        if (!hydratedDeck.ok) {
+          return {
+            ok: false,
+            error: hydratedDeck.error,
+            code: hydratedDeck.code,
+            hint: hydratedDeck.hint,
+            available,
+            artifactId
+          };
+        }
+        const rawDeck = hydratedDeck.commands;
+        const malformedDeck = malformedDeckWriteError(rawDeck, new Set(DECK_OPS));
+        if (malformedDeck) {
+          return { ...malformedDeck, available, artifactId };
+        }
         const selCheck = canvasSelectionCheck(rawDeck, selections);
         if (!selCheck.ok) {
           return {
@@ -455,17 +519,20 @@ export function createOfficeTools(env) {
               }
               const rb = body.readback || {};
               const liveDoc = body.json ? parsePawCanvas(body.json) : canvasDoc;
-              const written = {
-                ok: true,
-                artifactId,
-                live: true,
-                dirty: body.dirty || rb.nodeId || '',
-                readback: { ...rb, src: summarizeImageSrc(rb.src) },
-                applied: body.applied || [],
-                available,
-                overview: compactCanvasOverview(liveDoc, selections),
-                ...(plateQa.qa ? { qa: plateQa.qa } : {})
-              };
+              const written = speakOfficeApplyResult(
+                {
+                  ok: true,
+                  artifactId,
+                  live: true,
+                  dirty: body.dirty || rb.nodeId || '',
+                  readback: { ...rb, src: summarizeImageSrc(rb.src) },
+                  applied: body.applied || [],
+                  available,
+                  overview: compactCanvasOverview(liveDoc, selections),
+                  ...(plateQa.qa ? { qa: plateQa.qa } : {})
+                },
+                clean
+              );
               if (body.preview) return attachCanvasPreview(written, body.preview);
               const prev = await requestCanvasPreview(hostCanvas, { artifactId });
               return attachCanvasPreview(written, prev);
@@ -476,14 +543,18 @@ export function createOfficeTools(env) {
         }
         const applied = applyEngineCommands(canvasDoc, clean, { selections });
         if (applied.ok === false) {
-          return {
-            ok: false,
-            code: applied.code,
-            error: applied.error,
-            available: applied.available || available,
-            artifactId,
-            ...(applied.qa ? { qa: applied.qa, score: applied.score, issues: applied.issues } : {})
-          };
+          return speakOfficeApplyResult(
+            {
+              ok: false,
+              code: applied.code,
+              error: applied.error,
+              available: applied.available || available,
+              artifactId,
+              applied: applied.applied,
+              ...(applied.qa ? { qa: applied.qa, score: applied.score, issues: applied.issues } : {})
+            },
+            clean
+          );
         }
         if (imgCmds.length && imageSrcNeedsHostPixels(applied.readback?.src)) {
           return {
@@ -498,15 +569,18 @@ export function createOfficeTools(env) {
           ? { ...applied.readback, src: summarizeImageSrc(applied.readback.src) }
           : applied.readback;
         if (applied.json === before) {
-          return {
-            ok: true,
-            artifactId,
-            dirty: '',
-            readback,
-            available,
-            applied: applied.applied,
-            ...(applied.qa || plateQa.qa ? { qa: applied.qa || plateQa.qa } : {})
-          };
+          return speakOfficeApplyResult(
+            {
+              ok: true,
+              artifactId,
+              dirty: '',
+              readback,
+              available,
+              applied: applied.applied,
+              ...(applied.qa || plateQa.qa ? { qa: applied.qa || plateQa.qa } : {})
+            },
+            clean
+          );
         }
         updateArtifactContent(store, fs, sessionId, artifactId, applied.json, { mimeType: 'application/json' });
         if (onEvent) {
@@ -518,16 +592,19 @@ export function createOfficeTools(env) {
         }
         const overview = compactCanvasOverview(applied.doc || parsePawCanvas(applied.json), selections);
         return attachCanvasPreview(
-          {
-            ok: true,
-            artifactId,
-            dirty: applied.dirty || '',
-            readback,
-            applied: applied.applied,
-            available: applied.available || available,
-            overview,
-            ...(applied.qa || plateQa.qa ? { qa: applied.qa || plateQa.qa } : {})
-          },
+          speakOfficeApplyResult(
+            {
+              ok: true,
+              artifactId,
+              dirty: applied.dirty || '',
+              readback,
+              applied: applied.applied,
+              available: applied.available || available,
+              overview,
+              ...(applied.qa || plateQa.qa ? { qa: applied.qa || plateQa.qa } : {})
+            },
+            clean
+          ),
           { skipped: 'NEED_TAB', code: 'NEED_TAB' }
         );
       }
@@ -546,13 +623,15 @@ export function createOfficeTools(env) {
   const doc = {
     name: 'doc',
     description:
-      'Read and write long-form Univer document artifacts: paragraphs, lists, and drawings.',
+      'Read and write long-form Univer document artifacts: paragraphs, lists, and drawings. act=write applies commands[] in place. After run writes blocks/commands JSON, pass path|from — do not retype. Missing op or empty/invalid payload → BAD_INPUT, never ok with applied:0. Missing file → ENOENT.',
     parameters: {
       type: 'object',
       properties: {
         act: { type: 'string', enum: ['read', 'write'], description: 'read | write' },
         artifactId: { type: 'string' },
         text: { type: 'string' },
+        path: { type: 'string', description: 'Guest /scratch|/artifacts JSON of commands[] / blocks[] / {text}' },
+        from: { type: 'string', description: 'Alias of path for doc JSON' },
         commands: { type: 'array', items: { type: 'object' } }
       }
     },
@@ -571,18 +650,41 @@ export function createOfficeTools(env) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
       const univer = parseUniverDoc(raw, { title: rec.name });
-      const act = String(input.act || (input.commands || input.text != null ? 'write' : 'read'));
+      const act = String(input.act || (input.commands || input.text != null || input.path || input.from ? 'write' : 'read'));
       if (act === 'read') {
         const snap = fromUniverDoc(univer);
         return { ok: true, artifactId, overview: overviewFromDocSnapshot(snap, { artifactId }) };
       }
+      const resolvedDoc = resolveOfficeWriteInput(fs, input, 'doc');
+      if (!resolvedDoc.ok) {
+        return {
+          ok: false,
+          error: resolvedDoc.error,
+          code: resolvedDoc.code,
+          hint: resolvedDoc.hint,
+          artifactId
+        };
+      }
+      const seededDoc = resolvedDoc.input;
       const rawDoc =
-        Array.isArray(input.commands) && input.commands.length
-          ? input.commands
-          : input.src || input.item
-            ? [{ op: 'insertImage', src: input.src || input.item }]
-            : [{ op: 'setText', text: input.text != null ? input.text : input.value }];
-      const commands = await hydrateOfficeImageCommands(store, sessionId, rawDoc, {
+        Array.isArray(seededDoc.commands) && seededDoc.commands.length
+          ? seededDoc.commands
+          : seededDoc.src || seededDoc.item
+            ? [{ op: 'insertImage', src: seededDoc.src || seededDoc.item }]
+            : [{ op: 'setText', text: seededDoc.text != null ? seededDoc.text : seededDoc.value }];
+      const hydratedDoc = hydrateDocCommands(fs, rawDoc);
+      if (!hydratedDoc.ok) {
+        return {
+          ok: false,
+          error: hydratedDoc.error,
+          code: hydratedDoc.code,
+          hint: hydratedDoc.hint,
+          artifactId
+        };
+      }
+      const malformedDoc = malformedDocWriteError(hydratedDoc.commands);
+      if (malformedDoc) return { ...malformedDoc, artifactId };
+      const commands = await hydrateOfficeImageCommands(store, sessionId, hydratedDoc.commands, {
         fetchImpl: env.fetchImpl,
         onEvent: env.onEvent,
         signal: env.signal || env.execution?.abortSignal,
@@ -600,27 +702,39 @@ export function createOfficeTools(env) {
         commands.filter((c) => !c.srcError)
       );
       if (applied.ok === false) {
-        return { ok: false, error: applied.error, available: (fromUniverDoc(univer).blocks || []).map((b) => b.id) };
+        return speakOfficeApplyResult(
+          {
+            ok: false,
+            error: applied.error,
+            available: (fromUniverDoc(univer).blocks || []).map((b) => b.id),
+            applied: applied.applied
+          },
+          commands
+        );
       }
       const payload = serializeUniverDoc(applied.univer);
       updateArtifactContent(store, fs, sessionId, artifactId, payload, { mimeType: 'application/json' });
-      return {
-        ok: true,
-        artifactId,
-        dirty: applied.dirty,
-        readback: {
-          title: applied.snapshot.title,
-          blocks: applied.snapshot.blocks
+      return speakOfficeApplyResult(
+        {
+          ok: true,
+          artifactId,
+          dirty: applied.dirty,
+          applied: applied.applied,
+          readback: {
+            title: applied.snapshot.title,
+            blocks: applied.snapshot.blocks
+          },
+          univer: applied.univer
         },
-        univer: applied.univer
-      };
+        commands
+      );
     }
   };
 
   const web = {
     name: 'web',
     description:
-      'Website page (data-paw-kind=site). Acts: read, write, undo, clone, capture. After create, mutate in place — never a second site HTML. ' +
+      'Website page (data-paw-kind=site). Acts: read, write, undo, clone, capture. After create, mutate in place — never a second site HTML. Writes: setText/setHref/setSrc on a pinned node, commands[], or path|from to /scratch|/artifacts JSON (commands) or HTML (replaceHtml on the same file) — after run writes the payload, pass the path, do not retype. Missing op or empty payload → BAD_INPUT; missing file → ENOENT. ' +
       WEB_CLONE_DESCRIPTION,
     parameters: {
       type: 'object',
@@ -634,7 +748,12 @@ export function createOfficeTools(env) {
         commands: { type: 'array', items: { type: 'object' } },
         source: { type: 'string', description: 'clone/capture: active | url | path' },
         url: { type: 'string', description: 'clone/capture: public page URL' },
-        path: { type: 'string', description: 'clone/capture: guest HTML or blueprint path' },
+        path: {
+          type: 'string',
+          description:
+            'write: guest /scratch|/artifacts JSON commands or HTML; clone/capture: guest HTML or blueprint path; image writes still use src|item'
+        },
+        from: { type: 'string', description: 'Alias of path for site patch JSON or HTML' },
         viewport: { type: 'object', description: 'clone: { width, height }' },
         assets: { type: 'string', description: 'clone: bundle (default)' },
         motion: { type: 'string', description: 'clone: declarative (retain CSS keyframes/transitions)' }
@@ -696,7 +815,7 @@ export function createOfficeTools(env) {
       const selected = pinnedSiteIds(selections);
       const act = String(
         input.act ||
-          (input.commands || input.text != null || input.src || input.path || input.item || input.href
+          (input.commands || input.text != null || input.src || input.path || input.from || input.item || input.href
             ? 'write'
             : 'read')
       );
@@ -711,30 +830,43 @@ export function createOfficeTools(env) {
           motion: SITE_MOTION_CAPABILITY
         };
       }
+      const resolvedWeb = resolveOfficeWriteInput(fs, input, 'web');
+      if (!resolvedWeb.ok) {
+        return {
+          ok: false,
+          artifactId,
+          error: resolvedWeb.error,
+          code: resolvedWeb.code,
+          hint: resolvedWeb.hint
+        };
+      }
+      const seededWeb = resolvedWeb.input;
       const pinnedList = Array.isArray(selections) ? selections : [];
       const pinnedIsImg =
         pinnedList.length > 0 &&
         pinnedList.every((p) => p && (p.tag === 'img' || p.kind === 'image' || p.type === 'image'));
-      const explicitSrc = webImageRef(input);
+      const explicitSrc = webImageRef(seededWeb);
       const latestImage = latestSessionImagePath(store, sessionId);
       const rawWeb =
-        Array.isArray(input.commands) && input.commands.length
-          ? input.commands.map((c) => attachLatestSiteImage(c, latestImage))
+        Array.isArray(seededWeb.commands) && seededWeb.commands.length
+          ? seededWeb.commands.map((c) => attachLatestSiteImage(c, latestImage))
           : [
               {
                 op:
-                  explicitSrc || input.src || input.path || input.item || pinnedIsImg
+                  explicitSrc || seededWeb.src || seededWeb.path || seededWeb.item || pinnedIsImg
                     ? 'setSrc'
-                    : input.href
+                    : seededWeb.href
                       ? 'setHref'
                       : 'setText',
-                nodeId: input.nodeId,
-                text: input.text,
-                value: input.value,
-                src: explicitSrc || input.src || (pinnedIsImg ? latestImage : ''),
-                href: input.href
+                nodeId: seededWeb.nodeId,
+                text: seededWeb.text,
+                value: seededWeb.value,
+                src: explicitSrc || seededWeb.src || (pinnedIsImg ? latestImage : ''),
+                href: seededWeb.href
               }
             ];
+      const malformedWeb = malformedWebWriteError(rawWeb);
+      if (malformedWeb) return { ...malformedWeb, artifactId };
       const commands = await hydrateOfficeImageCommands(store, sessionId, rawWeb, {
         fetchImpl: env.fetchImpl,
         onEvent: env.onEvent,
@@ -755,7 +887,7 @@ export function createOfficeTools(env) {
       }
       const applied = applySiteCommands(html, commands.filter((c) => !c?.srcError), { selections });
       if (applied.ok === false) {
-        return { ...applied, artifactId };
+        return speakOfficeApplyResult({ ...applied, artifactId }, commands);
       }
       updateArtifactContent(store, fs, sessionId, artifactId, applied.html, { mimeType: 'text/html' });
       if (onEvent) {
@@ -765,17 +897,20 @@ export function createOfficeTools(env) {
           /* ignore */
         }
       }
-      return {
-        ok: true,
-        artifactId,
-        dirty: applied.dirty,
-        readback: applied.readback,
-        applied: applied.applied,
-        available: applied.available,
-        selected: applied.selected || selected,
-        nodeIds: applied.nodeIds || selected,
-        canUndo: true
-      };
+      return speakOfficeApplyResult(
+        {
+          ok: true,
+          artifactId,
+          dirty: applied.dirty,
+          readback: applied.readback,
+          applied: applied.applied,
+          available: applied.available,
+          selected: applied.selected || selected,
+          nodeIds: applied.nodeIds || selected,
+          canUndo: true
+        },
+        commands
+      );
     }
   };
 
@@ -965,6 +1100,7 @@ function inferDeckAct(input) {
     input.src ||
     input.item ||
     input.path ||
+    input.from ||
     input.handle ||
     input.box ||
     input.shapeType ||
@@ -1124,22 +1260,107 @@ function persistWorkbook(store, fs, sessionId, artifactId, rec, applied, kind) {
   });
 }
 
-function decorateSheetResult(ok, artifactId, body, error) {
+function appliedCount(applied) {
+  if (typeof applied === 'number') return applied;
+  if (Array.isArray(applied)) return applied.length;
+  if (applied && typeof applied === 'object') return 1;
+  return 0;
+}
+
+function hasExplicitApplied(applied) {
+  return typeof applied === 'number' || Array.isArray(applied);
+}
+
+function classifyOfficeSkipped(commands) {
+  const list = Array.isArray(commands) ? commands : commands && typeof commands === 'object' ? [commands] : [];
+  const reasons = [];
+  if (!list.length) reasons.push('missing-op');
+  for (const c of list) {
+    if (!c || typeof c !== 'object') {
+      reasons.push('missing-op');
+      continue;
+    }
+    const op = String(c.op || c.type || '').trim();
+    if (!op) {
+      reasons.push('missing-op');
+      continue;
+    }
+    const path = String(c.path || c.from || c.valuesPath || c.scratchPath || '').trim();
+    if (op === 'setValues2d' || op === 'applyGrid') {
+      const empty = !Array.isArray(c.values) || !c.values.length;
+      if (empty && path) reasons.push('no-hydrate');
+      else if (empty) reasons.push('empty-grid');
+    } else if (op === 'replacePlate') {
+      const emptySlots = c.slots == null || (typeof c.slots === 'object' && !Object.keys(c.slots).length);
+      if (emptySlots && path) reasons.push('no-hydrate');
+      else if (emptySlots) reasons.push('empty-grid');
+    } else if (op === 'createDocument') {
+      const emptyBlocks = !Array.isArray(c.blocks) || !c.blocks.length;
+      if (emptyBlocks && path) reasons.push('no-hydrate');
+      else if (emptyBlocks) reasons.push('empty-grid');
+    }
+  }
+  return reasons.length ? [...new Set(reasons)] : ['empty-grid'];
+}
+
+function speakHint(skipped) {
+  const s = Array.isArray(skipped) ? skipped[0] : skipped;
+  if (s === 'missing-op') return 'each commands[] item needs op';
+  if (s === 'no-hydrate') return 'path was not resolved to a payload — write JSON via run, then pass that path';
+  if (s === 'empty-grid') return 'write applied 0 cells/slots/blocks — pass values or a guest path';
+  return 'write applied 0 commands';
+}
+
+/** ok && applied===0 must not look like success — emit hint + skipped[]. */
+export function speakOfficeApplyResult(result, commands) {
+  if (!result || typeof result !== 'object') return result;
+  const n = appliedCount(result.applied);
+  const zero = hasExplicitApplied(result.applied) && n === 0;
+  const skipped = Array.isArray(result.skipped) && result.skipped.length
+    ? result.skipped
+    : zero
+      ? classifyOfficeSkipped(commands)
+      : undefined;
+  if (result.ok === true && zero) {
+    return {
+      ...result,
+      ok: false,
+      code: result.code || 'BAD_INPUT',
+      error: result.error || 'write applied 0 commands',
+      hint: result.hint || speakHint(skipped),
+      skipped
+    };
+  }
+  if (zero && (!result.hint || !result.skipped)) {
+    return {
+      ...result,
+      hint: result.hint || speakHint(skipped),
+      skipped: result.skipped || skipped
+    };
+  }
+  return result;
+}
+
+function decorateSheetResult(ok, artifactId, body, error, commands) {
   const rb = body?.readback || {};
   const overview = body?.overview || (body?.sheets ? overviewFromSheets(body.sheets) : undefined);
-  return {
-    ok,
-    artifactId,
-    dirty: rb.a1 || '',
-    readback: rb,
-    applied: body?.applied,
-    overview,
-    sheets: compactSheetList(overview || body?.sheets),
-    error: error || undefined,
-    code: body?.code,
-    hint: body?.hint,
-    available: body?.available
-  };
+  return speakOfficeApplyResult(
+    {
+      ok,
+      artifactId,
+      dirty: rb.a1 || '',
+      readback: rb,
+      applied: body?.applied,
+      overview,
+      sheets: compactSheetList(overview || body?.sheets),
+      error: error || undefined,
+      code: body?.code,
+      hint: body?.hint,
+      available: body?.available,
+      skipped: body?.skipped
+    },
+    commands
+  );
 }
 
 async function snapshotArtifact(env, { fs, hostSheet, gate, artifactId, a1, sheet }) {

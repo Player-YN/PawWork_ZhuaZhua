@@ -49,7 +49,7 @@ One dominant visual per slide.
 
 `CANVAS_QA_FAILED` lists per-frame issues — fix slots/layout/theme and resubmit the same
 `artifactId`. One-frame rework: `replacePlate {plateId|frameId, layoutId, themeId?, slots}`
-keeps frame identity. Clicked-node edits: `deck` `setSlotText`/`setSlotSrc`, omit nodeId (host
+keeps frame identity. After `run` writes slots/frames JSON, `deck` write with that `path` — do not retype. Clicked-node edits: `deck` `setSlotText`/`setSlotSrc`, omit nodeId (host
 pins the selection). Slide motion is host-owned: default `stagger-fade`; set
 `animation:{preset:"none"}` on dense slides only. Deliver after QA passes; report the single artifact.
 

@@ -257,7 +257,9 @@ export function normalizeComposerMentions(raw) {
             ? 'page'
             : m.kind === 'skill'
               ? 'skill'
-              : 'group';
+              : m.kind === 'command'
+                ? 'command'
+                : 'group';
     const id = String(m.id || '').slice(0, 96);
     if (!id) continue;
     const key = `${kind}:${id}`;

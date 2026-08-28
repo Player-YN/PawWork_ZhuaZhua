@@ -8,7 +8,8 @@
 import { truncateText, MAX_OBSERVATION_CHARS } from './state.js';
 import {
   BEHAVIOR_TRAJECTORY_SCHEMA,
-  serializeBehaviorTrajectory
+  serializeBehaviorTrajectory,
+  MAX_TURN_THOUGHT_CHARS
 } from './vnext/sessionWorkspace/behaviorPath.js';
 
 /** Schema id for exported JSON — behavior path (tools + host), not a chat dump. */
@@ -106,6 +107,7 @@ export function truncateForTrajectory(text, maxChars = TRAJECTORY_OBS_MAX_CHARS)
 export function redactSecrets(value, opts = {}) {
   const maxString = opts.maxString ?? TRAJECTORY_OBS_MAX_CHARS;
   const depth = opts.depth ?? 0;
+  const skipClip = opts.skipClip === true;
   if (depth > 12) return '[max depth]';
   if (value == null) return value;
   if (typeof value === 'string') {
@@ -113,15 +115,17 @@ export function redactSecrets(value, opts = {}) {
     if (/sk-[a-zA-Z0-9]{16,}/.test(value) || /Bearer\s+[A-Za-z0-9._-]{20,}/i.test(value)) {
       return '[REDACTED]';
     }
+    if (skipClip) return value;
     return truncateForTrajectory(value, maxString);
   }
   if (typeof value === 'number' || typeof value === 'boolean') return value;
   if (Array.isArray(value)) {
-    return value.slice(0, 100).map((v) => redactSecrets(v, { maxString, depth: depth + 1 }));
+    return value.slice(0, 100).map((v) => redactSecrets(v, { maxString, depth: depth + 1, skipClip }));
   }
   if (typeof value === 'object') {
     /** @type {Record<string, unknown>} */
     const out = {};
+    const eventSkip = value.type === 'thought' || value.type === 'text';
     for (const [k, v] of Object.entries(value)) {
       if (SECRET_KEY_RE.test(k)) {
         out[k] = '[REDACTED]';
@@ -132,7 +136,8 @@ export function redactSecrets(value, opts = {}) {
         out[k] = '[REDACTED]';
         continue;
       }
-      out[k] = redactSecrets(v, { maxString, depth: depth + 1 });
+      const childSkip = skipClip || k === 'thought' || k === 'text' || eventSkip;
+      out[k] = redactSecrets(v, { maxString, depth: depth + 1, skipClip: childSkip });
     }
     return out;
   }
@@ -625,9 +630,10 @@ export function serializeConversationTrajectory(opts = {}) {
  * @returns {string}
  */
 export function trajectoryToDownloadJson(doc) {
-  // maxString must be ≥ reasoning cap so download does not re-kill long CoT
-  // after trajectoryEndStep already preserved it (obs cap alone is too small).
+  // First-class thought/text events are the CoT source of truth (up to 256k).
+  // Do not re-clip them to the 48k reasoning / 12k bubble caps.
   const maxString = Math.max(
+    MAX_TURN_THOUGHT_CHARS,
     TRAJECTORY_REASONING_MAX_CHARS,
     TRAJECTORY_OBS_MAX_CHARS + 2000,
     MAX_EXPORT_MESSAGE_CHARS

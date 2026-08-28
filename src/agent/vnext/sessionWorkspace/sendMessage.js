@@ -12,13 +12,14 @@ import { getArtifactIndexCompact, listArtifacts } from './artifacts.js';
 import { compactShelfSnapshot } from './artifactShelf.js';
 import { compactCanvasOverview, isPawCanvasDoc } from './engineCanvas.js';
 import { buildSessionAgentInstructions, buildWorldStateBlock } from './prompt.js';
+import { userRequestedPlan } from './planContract.js';
 import { createSessionTools } from './tools.js';
 import { inventoryFromSession } from './canvasInventory.js';
 import { makeOfficePrepareStep, scheduleActiveToolNames } from './toolSchedule.js';
 import { formatSkillsForSystemPrompt, listPackagedSkillCatalog } from '../skills/registry.js';
 import { getDurableSkillStore, mergeSkillCatalog } from './skillStore.js';
 import { formatRpcError } from '../host/rpcError.js';
-import { isAbortLike, toAbortError } from '../host/userStop.js';
+import { isAbortLike, toAbortError, USER_STOP } from '../host/userStop.js';
 import {
   buildWireFromTurn,
   replayWireMessages,
@@ -180,7 +181,8 @@ export async function sendMessage(store, input) {
     canvases: canvasInv,
     activeTab: pages.activeTab,
     focusPage: pages.focusPage,
-    shelf: compactShelfSnapshot(listArtifacts(store, sessionId), sessionNow.shelf)
+    shelf: compactShelfSnapshot(listArtifacts(store, sessionId), sessionNow.shelf),
+    userRequestedPlan: userRequestedPlan({ content, mentions: input.mentions })
   });
 
   let thoughtBuf = '';
@@ -395,7 +397,14 @@ export async function sendMessage(store, input) {
         system,
         messages: history,
         tools,
-        prepareStep: makeOfficePrepareStep({ store, sessionId, fs, tools }),
+        prepareStep: makeOfficePrepareStep({
+          store,
+          sessionId,
+          fs,
+          tools,
+          execution,
+          instructions: system
+        }),
         signal: execution.abortSignal,
         onEvent
       });
@@ -549,6 +558,18 @@ export async function sendMessage(store, input) {
     const endedAt = Date.now();
     const startedAt = Number(message.createdAt) || endedAt;
     try {
+      recordBehaviorEvent(pathLog, {
+        type: 'error',
+        name: aborted ? 'AbortError' : err?.name ? String(err.name) : 'Error',
+        message: formatRpcError(err).slice(0, 400),
+        code: aborted ? USER_STOP : String(err?.code || 'ERROR')
+      });
+      recordBehaviorEvent(pathLog, {
+        type: 'execution-end',
+        sessionId,
+        executionId: execution.executionId,
+        status: aborted ? 'aborted' : 'failed'
+      });
       const sessFail = store.get('sessions', sessionId);
       const path = mergeBehaviorPath({ path: pathLog });
       const failTiming = splitTurnTiming(path, Math.max(0, endedAt - startedAt));
@@ -559,7 +580,7 @@ export async function sendMessage(store, input) {
         thought: String(thoughtBuf || '').trim(),
         status: aborted ? 'aborted' : 'failed',
         error: {
-          code: String(err?.code || (aborted ? 'ABORTED' : 'ERROR')),
+          code: aborted ? USER_STOP : String(err?.code || 'ERROR'),
           message: formatRpcError(err).slice(0, 500)
         },
         toolCalls: [],

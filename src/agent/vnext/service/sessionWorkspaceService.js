@@ -35,6 +35,7 @@ import {
   findOrCreateNamedGroup
 } from '../sessionWorkspace/groups.js';
 import { createPageWandLanguageModel } from '../../provider.js';
+import { runSelectionSuggest } from '../sessionWorkspace/selectionSuggest.js';
 import {
   findCatalogModel,
   loadCachedModelsForBase,
@@ -1213,6 +1214,22 @@ export class SessionWorkspaceService {
     });
     await this._persist();
     return { ok: true, artifact: rec };
+  }
+
+  /**
+   * Welcome chips after selection settles. One generateText, no tools, not sendMessage.
+   */
+  async suggestSelectionActions({ sessionId = 'default', selection = {}, lang = 'zh' } = {}) {
+    this.ensureSession(sessionId);
+    if (this._activeBySession.has(sessionId)) {
+      return { chips: [], skipped: 'busy' };
+    }
+    const model = await this.resolveLanguageModel();
+    const chips = await runSelectionSuggest({
+      model,
+      selection: { ...selection, lang: selection.lang || lang }
+    });
+    return { chips };
   }
 
   /** @deprecated — use artifacts */

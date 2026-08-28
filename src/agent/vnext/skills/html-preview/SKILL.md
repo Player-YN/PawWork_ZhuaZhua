@@ -8,7 +8,7 @@ libraries: pawwork:stdlib/html
 
 This skill is a **long-form page** — not Design, not Slides, not a website builder. If they asked for 海报 or 幻灯片, load poster / slides. If they asked for a 官网 / landing, load **html-site**. If they asked for a live Excel grid, load sheet-nl.
 
-Write one HTML file under `/artifacts` with `data-paw-kind="document"`. The host opens it as a page. There is no plate/slot artboard. After it exists, rewrite the file or use the `doc` tool when the session has a Univer document canvas.
+Write one HTML file under `/artifacts` with `data-paw-kind="document"`. The host opens it as a page. There is no plate/slot artboard. After it exists, rewrite the file or use the `doc` tool when the session has a Univer document canvas. After `run` writes blocks/commands JSON, `doc` write with that `path` — do not retype.
 
 Do not emit `data-paw-slot` or `data-paw-block` as a fake canvas. Do not `createScene` this page unless they asked for a poster of it.
 

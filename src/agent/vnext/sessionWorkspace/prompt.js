@@ -30,6 +30,16 @@ export function buildSessionAgentInstructions(ctx = {}) {
     'Do not create persistent state merely to demonstrate work.',
     'When you write artifacts, do not paste long /artifacts paths or image bytes into the chat reply. Name the deliverable briefly; the host lists files under 交付物.',
     '',
+    'Judge complexity before you move.',
+    'Act when the outcome is one destination you can reach without later local repairs erasing the point of the work.',
+    'Plan when the work has a destination that a long chain of writes, a structural rewrite, or an expensive-to-undo first move could lose. Then the plan is the contract: the destination, the order of irreversible moves, and what must not be lost. It is not an essay and not a mode.',
+    'Each plan step is a short title plus optional detail (what and why) for the approval panel — not a paragraph.',
+    'When you judge the work complex, present the plan itself through clarify (pass plan). Do not ask whether to enter plan mode. Do not mutate until the user approves, refuses, or sends revision notes.',
+    'Refusal is a complete answer: stop and wait. Approval pins the contract on the host; every later step must serve it. Do not replace the destination because a local repair got noisy.',
+    'If the user required changes (decision=revise + notes), do not execute the old plan. Revise the contract from their notes and yield a new plan card this turn.',
+    'If the user invoked /plan, present a plan this turn before mutating.',
+    'Do not plan to look diligent. Small asks stay in the loop.',
+    '',
     'Inspect ambient Web context only when needed for evidence.',
     'Bound page context outranks public web search.',
     AUTH_BOUNDARY,
@@ -40,7 +50,7 @@ export function buildSessionAgentInstructions(ctx = {}) {
     'Continue naturally across turns using conversation, bound Web context, and existing artifacts.',
     '',
     'Tools are provided by the API (function calling / toolChoice=auto). Do not invent tools.',
-    'This session\'s tools are always present: inspect, acquire, run, clarify, sheet, deck, doc, web. The world snapshot lists current canvas targets; an empty list means no artifact of that kind yet.',
+    'This session\'s tools are always present: inspect, acquire, run, clarify, sheet, deck, doc, web. Clarify can yield questions or a plan. The world snapshot lists current canvas targets; an empty list means no artifact of that kind yet.',
     'Visual canvases are Paw Work Design or Paw Work Slides. A Design file is never a single cover PNG. If a Design or Slides canvas is already open (activeHtml), compile onto that artifact — do not emit a second slides.json or design.json for the same request. One task = one visual artifact unless the user explicitly asks for another (createScene artifactMode:"new"; at most one extra same-kind file per turn). Whole-file rewrite of an existing canvas is last-resort only.',
     'A 海报 / comic / slides visual is a Design or Slides canvas (tldraw). Never pretty HTML as a layout engine. Deck and poster normal path is semantic themeId + layoutId + slots; the runtime owns geometry. Do not author x/y/w/h on that path. If compile returns CANVAS_QA_FAILED, repair slots/layout/theme on the same artifact — never bypass QA and never divert into a new file.',
     'A real website is a data-paw-kind=site HTML page. To 复刻/clone the current site, call web act=clone (host captures complete DOM+CSS+assets). Do not reconstruct the page from truncated inspect snippets, and do not route a website through fromPage / Design. Model-authored HTML is for new original sites only. After create, mutate in place.',
@@ -66,7 +76,8 @@ export function buildSessionAgentInstructions(ctx = {}) {
  *   focusedMentions?: Array<{kind:string,id:string,groupId?:string,label?:string,handle?:string,url?:string}>,
  *   activeWorkbook?: { artifactId?: string, overview?: object }|null,
  *   activeTab?: { url?: string, title?: string, origin?: string }|null,
- *   focusPage?: { url?: string, title?: string, origin?: string }|null
+ *   focusPage?: { url?: string, title?: string, origin?: string }|null,
+ *   userRequestedPlan?: boolean
  * }} ctx
  */
 export function buildWorldStateBlock(ctx = {}) {
@@ -96,7 +107,9 @@ export function buildWorldStateBlock(ctx = {}) {
                   ? 'page'
                   : m.kind === 'skill'
                     ? 'skill'
-                    : 'group',
+                    : m.kind === 'command'
+                      ? 'command'
+                      : 'group',
           id: m.id,
           ...(m.groupId && m.groupId !== '__workspace__' && m.groupId !== '__pages__'
             ? { groupId: m.groupId }
@@ -114,6 +127,12 @@ export function buildWorldStateBlock(ctx = {}) {
     `boundItemCount=${n}`,
     `artifactCount=${Number(ctx.artifactCount) || 0}`
   ];
+  if (ctx.userRequestedPlan === true) {
+    core.push(
+      'userRequestedPlan=true',
+      'The user invoked /plan. Present the plan itself via clarify (pass plan) this turn before mutating. Do not ask whether to enter plan mode.'
+    );
+  }
 
   /** @type {Array<{ key: string, lines: string[] }>} */
   const optional = [];
@@ -202,7 +221,7 @@ export function buildWorldStateBlock(ctx = {}) {
       key: 'focusedMentions',
       lines: [
         `focusedMentions=${JSON.stringify(focused)}`,
-        'This turn @ / tokens map to focusedMentions ids. kind=artifact is a workspace file. kind=page is a document URL (focusPage). kind=skill is a playbook (inspect view=skill). Mentioning is focus, not Bind and not an inspect order.'
+        'This turn @ / tokens map to focusedMentions ids. kind=artifact is a workspace file. kind=page is a document URL (focusPage). kind=skill is a playbook (inspect view=skill). kind=command is a host slash (e.g. /plan). Mentioning is focus, not Bind and not an inspect order.'
       ]
     });
   }

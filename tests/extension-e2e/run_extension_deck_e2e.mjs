@@ -278,7 +278,7 @@ async function main() {
 
     let blankVia = 'ui';
     try {
-      await panel.locator('#artifactEdgeFab').click({ force: true });
+      await panel.locator('#sessionArtifactBtn').click({ force: true });
       await panel.locator('#artifactRail').waitFor({ state: 'visible', timeout: 8000 });
       await panel.locator('[data-blank-kind="slides"]').click();
       await panel.waitForTimeout(800);

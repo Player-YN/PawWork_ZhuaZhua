@@ -2,6 +2,8 @@
  * Website page mutate — node-safe. SoT is HTML with data-paw-node.
  */
 
+import { htmlWritePolicy } from './htmlWritePolicy.js';
+
 const TEXT_TAGS = 'h1|h2|h3|h4|h5|h6|p|a|button|li|label|span|figcaption|td|th|blockquote';
 
 export function stampSiteHtml(html) {
@@ -151,6 +153,30 @@ export function applySiteCommands(html, commands, opts = {}) {
   for (const cmd of list) {
     if (!cmd || typeof cmd !== 'object') continue;
     const op = String(cmd.op || cmd.type || '').trim();
+    if (op === 'replaceHtml' || op === 'setHtml') {
+      const raw = String(cmd.html || cmd.content || cmd.value || '').trim();
+      if (!raw) {
+        return {
+          ok: false,
+          code: 'BAD_INPUT',
+          error: 'replaceHtml needs html or a guest path',
+          hint: 'pass html, or path / from to /scratch or /artifacts HTML — do not retype'
+        };
+      }
+      const policy = htmlWritePolicy(raw);
+      if (!policy.allow || policy.kind !== 'site') {
+        return {
+          ok: false,
+          code: policy.code || 'USE_CANVAS',
+          error: policy.error || 'replaceHtml needs data-paw-kind=site',
+          hint: 'in-place site replace stays on the same marked HTML file'
+        };
+      }
+      next = stampSiteHtml(raw);
+      applied.push(op);
+      lastId = listSiteNodes(next)[0]?.nodeId || lastId;
+      continue;
+    }
     const ids = commandSiteIds(cmd);
     const targets = ids.length ? ids : pinned;
     if (WRITE_OPS.has(op) && !targets.length) {

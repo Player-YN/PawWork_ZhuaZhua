@@ -288,6 +288,28 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
       /deleteSession/.test(side),
     ''
   );
+  record(
+    'text-picks-go-to-clipboard-not-chips',
+    /function isSelectionChipKind/.test(side) &&
+      /kind !== 'text'/.test(side) &&
+      /if \(!isSelectionChipKind\(kind\)\) return;/.test(side) &&
+      /pinTextsToClipboard\(fresh, \{ openDrawer: true, toast: false \}\)/.test(side),
+    ''
+  );
+  record(
+    'selection-hints-infer-via-rpc',
+    /workspaceRpc\(\s*['"]suggestSelectionActions['"]/.test(side) &&
+      /function inferSelectionHintChips/.test(side) &&
+      /正在根据选区推断/.test(side),
+    ''
+  );
+  record(
+    'restore-highlights-skips-page-items-with-loop-var',
+    /function pageItemsForActiveGroup/.test(side) &&
+      /if \(it\.labelKind === 'page' \|\| it\.kindHint === 'page'/.test(side) &&
+      !/if \(item\.labelKind === 'page'/.test(side),
+    ''
+  );
 }
 
 console.log(`\nwave7 summary: breaches=${failed}`);

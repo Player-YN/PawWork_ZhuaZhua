@@ -4,6 +4,7 @@
  */
 
 import { SESSION_TOOL_NAMES } from './canvasInventory.js';
+import { formatFrozenPlanInstructions } from './planContract.js';
 
 /**
  * @param {{ sheet?: string[], deck?: string[], poster?: string[], doc?: string[], web?: string[] }} [inventory]
@@ -33,11 +34,17 @@ export function scheduleSessionTools(tools, inventory, runtime = {}) {
 
 /**
  * prepareStep keeps the same always-on list each hop (no mid-turn hide/reveal).
- * @param {{ store: object, sessionId: string, fs?: object, tools: Record<string, any> }} env
+ * After the user approves a plan, re-inject the pinned contract every step.
+ * @param {{ store?: object, sessionId?: string, fs?: object, tools?: Record<string, any>, execution?: object, instructions?: string }} env
  */
-export function makeOfficePrepareStep(env) {
-  void env;
+export function makeOfficePrepareStep(env = {}) {
   return async function prepareStep() {
-    return { activeTools: [...SESSION_TOOL_NAMES] };
+    const out = { activeTools: [...SESSION_TOOL_NAMES] };
+    const pinned = formatFrozenPlanInstructions(env.execution?.frozenPlan);
+    if (pinned) {
+      const base = String(env.instructions || '').trim();
+      out.instructions = base ? `${base}\n\n${pinned}` : pinned;
+    }
+    return out;
   };
 }

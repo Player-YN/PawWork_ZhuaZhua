@@ -53,6 +53,12 @@ import {
   waitForClarifyAnswer
 } from './clarifyGate.js';
 import {
+  classifyPlanDecision,
+  normalizePlan,
+  pinFrozenPlan,
+  unpinFrozenPlan
+} from './planContract.js';
+import {
   applyCommandsToWorkbookData,
   capRangeRead,
   inspectSheetSelection,
@@ -60,11 +66,13 @@ import {
   sheetsToWorkbookData,
   workbookDataToSheets,
   normalizeCommands,
-  classifySheetImageSrc
+  classifySheetImageSrc,
+  hydrateSheetGridCommands
 } from './sheetApply.js';
 import { extractWorkbookSnapshot } from '../../../preview/sheetModel.js';
 import { inspectHtml } from './htmlApply.js';
 import { createScene, isSceneCreateCommand, unwrapSceneCreateInput } from './sceneCompile.js';
+import { hydrateDocCommands, hydrateSceneCreateInput } from './officePathHydrate.js';
 import { gateCompiledScene, qaFailurePayload } from './canvasQaGate.js';
 import { htmlWritePolicy } from './htmlWritePolicy.js';
 import {
@@ -868,7 +876,7 @@ export function createSessionTools(env) {
   const run = {
     name: 'run',
     description:
-      'Execute sandboxed JS/TS and create durable session artifacts: files, workbooks, Design/Slides canvases, documents, sites, and PDF ingest. Guest code reads session files with await fs.readFile(path) (/context ro, /artifacts, /scratch). createScene / fromPage / fromRaster compile a canvas. Default is fail-closed reuse: an open/selected/explicit deck is updated; with no deck the first createScene may create one; further same-kind creates in this turn bind to that artifact. Two or more matching canvases and no target returns AMBIGUOUS_CANVAS — pass artifactId. createWorkbook reuses the open or only workbook (artifactMode:"new" is the only way to create a second book; two books and no target returns AMBIGUOUS_WORKBOOK). artifactMode:"new" is the only way to create a second same-kind visual (at most one extra per kind per turn). write_artifact cannot create pawCanvas. Empty createScene is rejected. Visual scenes prefer themeId + frames[{layoutId,slots}] (host compiles geometry); slots.visual accepts {kind:icon|motif|chart|image} without x/y/w/h. Search icons via deck act=read catalog="icons". Image brief via deck act=read catalog="image-brief" layoutId themeId subject — then acquire action=image; compile does not generate images. raw frames[].nodes remains a freeform escape hatch. Daily field edits use deck. op=shelf sets deliverable-rail folders the user sees.',
+      'Execute sandboxed JS/TS and create durable session artifacts: files, workbooks, Design/Slides canvases, documents, sites, and PDF ingest. Guest code reads session files with await fs.readFile(path) (/context ro, /artifacts, /scratch). createScene / fromPage / fromRaster compile a canvas. createScene may pass path|from to /scratch|/artifacts frames JSON instead of inline frames. Default is fail-closed reuse: an open/selected/explicit deck is updated; with no deck the first createScene may create one; further same-kind creates in this turn bind to that artifact. Two or more matching canvases and no target returns AMBIGUOUS_CANVAS — pass artifactId. createWorkbook reuses the open or only workbook (artifactMode:"new" is the only way to create a second book; two books and no target returns AMBIGUOUS_WORKBOOK). artifactMode:"new" is the only way to create a second same-kind visual (at most one extra per kind per turn). write_artifact cannot create pawCanvas. Empty createScene is rejected. Visual scenes prefer themeId + frames[{layoutId,slots}] (host compiles geometry); slots.visual accepts {kind:icon|motif|chart|image} without x/y/w/h. Search icons via deck act=read catalog="icons". Image brief via deck act=read catalog="image-brief" layoutId themeId subject — then acquire action=image; compile does not generate images. raw frames[].nodes remains a freeform escape hatch. Daily field edits use deck. op=shelf sets deliverable-rail folders the user sees.',
     parameters: {
       type: 'object',
       properties: {
@@ -1005,21 +1013,6 @@ export function createSessionTools(env) {
       if (op === 'createDocument') op = 'doc';
       if (op === 'sheet') {
         if (signal?.aborted) return { ok: false, op, error: 'aborted' };
-        const resolveApplyGrid = (list) =>
-          list.map((cmd) => {
-            if (cmd.op !== 'applyGrid' || Array.isArray(cmd.values)) return cmd;
-            const p = String(cmd.scratchPath || cmd.path || '');
-            if (!p) return cmd;
-            try {
-              const text = bytesToUtf8(fs.readFileBytes(p));
-              const parsed = JSON.parse(text);
-              const values = Array.isArray(parsed) ? parsed : parsed?.values;
-              if (!Array.isArray(values)) return cmd;
-              return { ...cmd, values };
-            } catch {
-              return cmd;
-            }
-          });
         const emitSheetThought = (body, creating) => {
           if (!onEvent) return;
           const mark = body?.readback;
@@ -1035,10 +1028,21 @@ export function createSessionTools(env) {
             /* ignore */
           }
         };
+        const rawSheetCmds = Array.isArray(input.commands || input.ops) ? input.commands || input.ops : [];
+        const hydratedGrids = hydrateSheetGridCommands(fs, rawSheetCmds);
+        if (!hydratedGrids.ok) {
+          return {
+            ok: false,
+            op,
+            code: hydratedGrids.code,
+            error: hydratedGrids.error,
+            hint: hydratedGrids.hint
+          };
+        }
         let commands = await hydrateSheetImageCommands(
           store,
           sessionId,
-          resolveApplyGrid(normalizeCommands(input.commands || input.ops)),
+          normalizeCommands(hydratedGrids.commands),
           { fetchImpl, onEvent }
         );
         if (!commands.length && (opEarly === 'createWorkbook' || Array.isArray(input.sheets))) {
@@ -1121,7 +1125,8 @@ export function createSessionTools(env) {
           const loaded = loadWorkbookFromArtifact(artifactId);
           if (!loaded.ok) return { ok: false, op, ...loaded };
           const applied = applyCommandsToWorkbookData(loaded.data, cmds, {
-            selections: sess.activeWorkbook?.overview?.selections
+            selections: sess.activeWorkbook?.overview?.selections,
+            fs
           });
           if (applied.ok === false) return { ok: false, op, error: applied.error, code: applied.code };
           const delim = loaded.kind === 'tsv' ? '\t' : ',';
@@ -1238,6 +1243,18 @@ export function createSessionTools(env) {
         }
         const sceneReady = sceneCmd && isSceneCreateCommand(sceneCmd);
         if (sceneReady) {
+          const sceneFromPath = hydrateSceneCreateInput(fs, sceneCmd);
+          if (!sceneFromPath.ok) {
+            return {
+              ok: false,
+              op,
+              code: sceneFromPath.code,
+              error: sceneFromPath.error,
+              hint: sceneFromPath.hint,
+              ...(applyId ? { artifactId: applyId } : {})
+            };
+          }
+          sceneCmd = sceneFromPath.input;
           if (!hasSceneCompilePayload(sceneCmd)) {
             return {
               ok: false,
@@ -1413,6 +1430,17 @@ export function createSessionTools(env) {
             commands.push({ op: 'setText', text: String(input.html || input.content) });
           }
         }
+        const hydratedDoc = hydrateDocCommands(fs, commands);
+        if (!hydratedDoc.ok) {
+          return {
+            ok: false,
+            op,
+            code: hydratedDoc.code,
+            error: hydratedDoc.error,
+            hint: hydratedDoc.hint
+          };
+        }
+        commands = hydratedDoc.commands;
         if (!commands.length) return { ok: false, op, error: 'doc requires commands[]' };
         const applied = applyDocCommands(emptyDocSnapshot(input.name || 'Document'), commands);
         if (applied.ok === false) {
@@ -1588,7 +1616,7 @@ export function createSessionTools(env) {
   const clarify = {
     name: 'clarify',
     description:
-      'Present 1–4 multiple-choice questions to the user and pause the turn until they answer. The host always adds Other.',
+      'Yield to the user and pause the turn. Use questions (1–4, host adds Other) when intent is actually unclear. Use plan when the work is complex or the user invoked /plan: pass title, summary, and irreversible steps. Present the plan itself — do not ask whether to enter plan mode. Do not mutate until they approve, refuse, or send revision notes. If they require changes, revise the plan and yield a new plan card this turn — do not execute the old contract.',
     parameters: {
       type: 'object',
       properties: {
@@ -1619,17 +1647,47 @@ export function createSessionTools(env) {
               }
             }
           }
+        },
+        plan: {
+          type: 'object',
+          description: 'Execution contract to pin after approval. steps[] items are { title, detail }.',
+          properties: {
+            title: { type: 'string' },
+            summary: { type: 'string' },
+            steps: {
+              type: 'array',
+              description: 'Irreversible moves. Prefer { title, detail }; a string is a title only.',
+              items: {
+                anyOf: [
+                  { type: 'string' },
+                  {
+                    type: 'object',
+                    properties: {
+                      title: { type: 'string', description: 'Short irreversible move' },
+                      detail: {
+                        type: 'string',
+                        description: 'What and why; shown when the user expands the step'
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
         }
       }
     },
     async execute(input = {}, opts = {}) {
-      const questions = normalizeClarifyQuestions(input);
-      if (!questions.length) {
+      const plan = normalizePlan(input.plan);
+      const questions = plan
+        ? []
+        : normalizeClarifyQuestions(input);
+      if (!plan && !questions.length) {
         return {
           ok: false,
-          error: 'clarify requires a question',
+          error: 'clarify requires a question or a plan',
           code: 'BAD_INPUT',
-          hint: 'pass question or questions[]'
+          hint: 'pass question, questions[], or plan { title, steps }'
         };
       }
       const clarifyId = newClarifyId();
@@ -1637,26 +1695,88 @@ export function createSessionTools(env) {
       const waiting = waitClarify({ clarifyId, sessionId, questions, signal: sig });
       if (onEvent) {
         try {
-          onEvent({ type: 'clarify', sessionId, clarifyId, questions });
+          onEvent({
+            type: 'clarify',
+            sessionId,
+            clarifyId,
+            questions,
+            ...(plan ? { kind: 'plan', plan } : {})
+          });
         } catch {
           /* UI listener must not fail the yield */
         }
       }
       try {
         const answers = await waiting;
+        const classified = plan ? classifyPlanDecision(answers) : { kind: 'unknown', notes: '' };
+        if (plan && classified.kind === 'revise' && !classified.notes) {
+          unpinFrozenPlan(execution);
+          return {
+            ok: false,
+            approved: false,
+            decision: 'revise',
+            plan,
+            error: 'revise requires notes',
+            code: 'BAD_INPUT',
+            hint: 'decision=revise needs a non-empty notes string'
+          };
+        }
+        if (plan && classified.kind === 'approved') {
+          const pinned = pinFrozenPlan(execution, plan) || plan;
+          if (pinned && onEvent) {
+            try {
+              onEvent({ type: 'plan-pinned', sessionId, plan: pinned });
+            } catch {
+              /* path recorder must not fail the yield */
+            }
+          }
+        } else if (plan) {
+          unpinFrozenPlan(execution);
+        }
         if (onEvent) {
           try {
-            onEvent({ type: 'clarify-done', sessionId, clarifyId, answers });
+            onEvent({
+              type: 'clarify-done',
+              sessionId,
+              clarifyId,
+              answers,
+              ...(plan
+                ? {
+                    kind: 'plan',
+                    approved: classified.kind === 'approved',
+                    decision: classified.kind,
+                    ...(classified.kind === 'revise' && classified.notes
+                      ? { notes: classified.notes }
+                      : {})
+                  }
+                : {})
+            });
           } catch {
             /* ignore */
           }
+        }
+        if (plan) {
+          return {
+            ok: true,
+            approved: classified.kind === 'approved',
+            decision: classified.kind,
+            plan,
+            ...(classified.kind === 'revise' && classified.notes ? { notes: classified.notes } : {}),
+            answers: answers && typeof answers === 'object' ? answers : {}
+          };
         }
         return { ok: true, answers: answers && typeof answers === 'object' ? answers : {}, questions };
       } catch (e) {
         const aborted = e?.name === 'AbortError' || sig?.aborted;
         if (onEvent) {
           try {
-            onEvent({ type: 'clarify-done', sessionId, clarifyId, aborted: true });
+            onEvent({
+              type: 'clarify-done',
+              sessionId,
+              clarifyId,
+              aborted: true,
+              ...(plan ? { kind: 'plan' } : {})
+            });
           } catch {
             /* ignore */
           }

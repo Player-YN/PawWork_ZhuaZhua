@@ -1,6 +1,7 @@
 /**
  * Session trajectory: causal audit of the **agent run** (chat + model + tools + host).
  * Events are occurrence order. tool-result is never written back onto tool-call.
+ * Thought / visible text are first-class path events (not an 8k smear).
  * User edits in live office canvases (preview `updateArtifact`) never enter this log.
  */
 
@@ -36,15 +37,25 @@ const RESULT_KEEP = [
   'code',
   'error',
   'hint',
+  'skipped',
   'path',
   'name',
   'guestRoot',
   'kind',
   'shell'
 ];
+const GRID_WRITE_OPS = new Set(['setValues2d', 'applyGrid']);
+const SLOT_WRITE_OPS = new Set(['replacePlate', 'createScene']);
+const BLOCK_WRITE_OPS = new Set(['createDocument']);
+const HTML_WRITE_OPS = new Set(['replaceHtml', 'setHtml']);
+const PAYLOAD_MARKERS = new Set(['[omitted]', '[stripped]', '[path-hydrate]']);
+const PREVIEW_CELLS = 12;
 
 const MAX_BUBBLE_CHARS = 12000;
-const MAX_THOUGHT_CHARS = 8000;
+/** Per thought / mid-loop text event (and per-step model attachment). Tens of KB, not 8k. */
+export const MAX_THOUGHT_CHARS = 48_000;
+/** Concatenated assistant-bubble thought across a whole turn. */
+export const MAX_TURN_THOUGHT_CHARS = 256_000;
 const MAX_COMPACT_PREVIEW = 2000;
 
 function slim(value) {
@@ -143,6 +154,169 @@ export function compactTurnContext(input = {}) {
   return ctx;
 }
 
+function commandGuestPath(cmd) {
+  if (!cmd || typeof cmd !== 'object') return '';
+  return String(cmd.path || cmd.from || cmd.valuesPath || cmd.scratchPath || '').trim();
+}
+
+function shortHash(value) {
+  const s = typeof value === 'string' ? value : JSON.stringify(value);
+  let h = 2166136261;
+  const n = Math.min(s.length, 8000);
+  for (let i = 0; i < n; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16);
+}
+
+function previewCells(values, max = PREVIEW_CELLS) {
+  const out = [];
+  if (!Array.isArray(values)) return out;
+  for (const row of values) {
+    const cells = Array.isArray(row) ? row : [row];
+    for (const cell of cells) {
+      if (out.length >= max) return out;
+      if (cell == null) out.push('');
+      else if (typeof cell === 'string' || typeof cell === 'number' || typeof cell === 'boolean') {
+        out.push(typeof cell === 'string' ? clipStr(cell, 40) : cell);
+      } else {
+        out.push(clipStr(JSON.stringify(cell), 40));
+      }
+    }
+  }
+  return out;
+}
+
+function gridShape(values) {
+  if (!Array.isArray(values)) return { rows: 0, cols: 0 };
+  const rows = values.length;
+  let cols = 0;
+  for (const row of values) {
+    cols = Math.max(cols, Array.isArray(row) ? row.length : row == null ? 0 : 1);
+  }
+  return { rows, cols };
+}
+
+function keepPayloadMarker(out, raw, key, rowsKey, colsKey) {
+  if (!PAYLOAD_MARKERS.has(raw[key])) return false;
+  out[key] = raw[key];
+  if (raw[rowsKey] != null) out[rowsKey] = Number(raw[rowsKey]) || 0;
+  if (raw[colsKey] != null) out[colsKey] = Number(raw[colsKey]) || 0;
+  const countKey = `${key}Count`;
+  if (raw[countKey] != null) out[countKey] = Number(raw[countKey]) || 0;
+  const previewKey = `${key}Preview`;
+  const hashKey = `${key}Hash`;
+  if (Array.isArray(raw[previewKey])) out[previewKey] = raw[previewKey].slice(0, PREVIEW_CELLS);
+  if (raw[hashKey]) out[hashKey] = String(raw[hashKey]).slice(0, 16);
+  return true;
+}
+
+function annotateWritePayload(out, cmd) {
+  const op = String(out.op || cmd.op || cmd.type || '');
+  const path = commandGuestPath(cmd);
+  if (path) out.path = clipStr(path, 80);
+
+  const hasValues = Object.prototype.hasOwnProperty.call(cmd, 'values');
+  const hasSlots = Object.prototype.hasOwnProperty.call(cmd, 'slots');
+  const hasBlocks = Object.prototype.hasOwnProperty.call(cmd, 'blocks');
+  const html = cmd.html ?? cmd.content;
+  const hasHtml = html != null && String(html) !== '';
+  const gridOp = GRID_WRITE_OPS.has(op);
+  const slotOp = SLOT_WRITE_OPS.has(op);
+  const blockOp = BLOCK_WRITE_OPS.has(op);
+  const htmlOp = HTML_WRITE_OPS.has(op);
+  const writeLike = gridOp || slotOp || blockOp || htmlOp || hasValues || hasSlots || hasBlocks || hasHtml;
+
+  if (writeLike) {
+    if (path) out.source = 'path';
+    else if (hasValues || hasSlots || hasBlocks || hasHtml) out.source = 'inline';
+  }
+
+  if (hasValues || gridOp) {
+    if (!keepPayloadMarker(out, cmd, 'values', 'valuesRows', 'valuesCols')) {
+      if (Array.isArray(cmd.values)) {
+        const { rows, cols } = gridShape(cmd.values);
+        out.valuesRows = rows;
+        out.valuesCols = cols;
+        out.valuesPreview = previewCells(cmd.values);
+        out.valuesHash = shortHash(cmd.values);
+        out.values = '[stripped]';
+        if (!path) out.source = 'inline';
+      } else if (path) {
+        out.values = '[path-hydrate]';
+        out.source = 'path';
+      } else {
+        out.values = '[omitted]';
+      }
+    } else if (!out.source) {
+      out.source = path ? 'path' : 'inline';
+    }
+  }
+
+  if (hasSlots || slotOp) {
+    if (!keepPayloadMarker(out, cmd, 'slots', 'slotsRows', 'slotsCols')) {
+      const slots = cmd.slots;
+      if (slots && typeof slots === 'object') {
+        const keys = Array.isArray(slots) ? slots.length : Object.keys(slots).length;
+        out.slotsCount = keys;
+        const sample = Array.isArray(slots)
+          ? slots.slice(0, PREVIEW_CELLS).map((s) => clipStr(typeof s === 'string' ? s : JSON.stringify(s), 40))
+          : Object.keys(slots).slice(0, PREVIEW_CELLS);
+        out.slotsPreview = sample;
+        out.slotsHash = shortHash(slots);
+        out.slots = '[stripped]';
+        if (!path) out.source = 'inline';
+      } else if (path) {
+        out.slots = '[path-hydrate]';
+        out.source = 'path';
+      } else if (slotOp) {
+        out.slots = '[omitted]';
+      }
+    }
+  }
+
+  if (hasBlocks || blockOp) {
+    if (!keepPayloadMarker(out, cmd, 'blocks', 'blocksRows', 'blocksCols')) {
+      if (Array.isArray(cmd.blocks)) {
+        out.blocksCount = cmd.blocks.length;
+        out.blocksPreview = cmd.blocks.slice(0, PREVIEW_CELLS).map((b) =>
+          clipStr(typeof b === 'string' ? b : String(b?.type || b?.text || JSON.stringify(b)), 40)
+        );
+        out.blocksHash = shortHash(cmd.blocks);
+        out.blocks = '[stripped]';
+        if (!path) out.source = 'inline';
+      } else if (path) {
+        out.blocks = '[path-hydrate]';
+        out.source = 'path';
+      } else if (blockOp) {
+        out.blocks = '[omitted]';
+      }
+    }
+  }
+
+  if (hasHtml || htmlOp) {
+    if (typeof html === 'string' && PAYLOAD_MARKERS.has(html)) {
+      out.html = html;
+      if (cmd.htmlChars != null) out.htmlChars = Number(cmd.htmlChars) || 0;
+      if (cmd.htmlHash) out.htmlHash = String(cmd.htmlHash).slice(0, 16);
+    } else if (hasHtml) {
+      const s = String(html);
+      out.htmlChars = s.length;
+      out.htmlHash = shortHash(s);
+      out.html = '[stripped]';
+      if (!path) out.source = 'inline';
+    } else if (path) {
+      out.html = '[path-hydrate]';
+      out.source = 'path';
+    } else if (htmlOp) {
+      out.html = '[omitted]';
+    }
+  }
+
+  if (cmd.source === 'inline' || cmd.source === 'path') out.source = cmd.source;
+}
+
 function compactCommands(commands) {
   if (!Array.isArray(commands)) return undefined;
   return commands.slice(0, 40).map((c) => {
@@ -159,6 +333,7 @@ function compactCommands(commands) {
       out.value = '[omitted]';
     }
     if (c.src) out.src = clipStr(c.src, 80);
+    annotateWritePayload(out, c);
     return out;
   });
 }
@@ -189,6 +364,28 @@ function slimToolArgs(tool, raw) {
     if (v == null) continue;
     if (k === 'commands') {
       out.commands = compactCommands(v);
+      continue;
+    }
+    if (k === 'values' || k === 'slots' || k === 'blocks') {
+      const fake = compactCommands([{ op: k === 'values' ? 'setValues2d' : k === 'slots' ? 'replacePlate' : 'createDocument', [k]: v }]);
+      const one = fake && fake[0];
+      if (one) {
+        if (k === 'values') {
+          if (one.values != null) out.values = one.values;
+          if (one.valuesRows != null) out.valuesRows = one.valuesRows;
+          if (one.valuesCols != null) out.valuesCols = one.valuesCols;
+          if (one.valuesPreview) out.valuesPreview = one.valuesPreview;
+          if (one.valuesHash) out.valuesHash = one.valuesHash;
+        } else if (k === 'slots') {
+          if (one.slots != null) out.slots = one.slots;
+          if (one.slotsCount != null) out.slotsCount = one.slotsCount;
+          if (one.slotsPreview) out.slotsPreview = one.slotsPreview;
+        } else if (one.blocks != null) {
+          out.blocks = one.blocks;
+          if (one.blocksCount != null) out.blocksCount = one.blocksCount;
+        }
+        if (one.source) out.source = one.source;
+      }
       continue;
     }
     if (k === 'code' || k === 'content' || k === 'instructions' || k === 'markdown' || k === 'html') {
@@ -494,6 +691,20 @@ function slimEvent(step) {
       step
     );
   }
+  if (type === 'thought') {
+    const text = String(step.text || step.thought || '').trim();
+    if (!text) return null;
+    return copyTiming({ type: 'thought', text: clipBubble(text, MAX_TURN_THOUGHT_CHARS) }, step);
+  }
+  if (type === 'text') {
+    const text = String(step.text || step.content || step.chunk || '').trim();
+    if (!text) return null;
+    return copyTiming({ type: 'text', text: clipBubble(text, MAX_TURN_THOUGHT_CHARS) }, step);
+  }
+  if (type === 'plan-pinned') {
+    const plan = step.plan && typeof step.plan === 'object' ? slim(step.plan) : undefined;
+    return copyTiming({ type: 'plan-pinned', ...(plan ? { plan } : {}) }, step);
+  }
   if (type === 'model') {
     const out = copyTiming(
       {
@@ -505,8 +716,6 @@ function slimEvent(step) {
     );
     const fr = finishReasonOf(step.finishReason);
     if (fr) out.finishReason = fr;
-    const thought = String(step.thought || '').trim();
-    if (thought) out.thought = clipBubble(thought, MAX_THOUGHT_CHARS);
     return out;
   }
   if (type === 'host') {
@@ -565,6 +774,24 @@ function findOpenModel(pathLog) {
   return null;
 }
 
+function streamPiece(ev) {
+  const piece = ev?.text != null ? ev.text : ev?.chunk;
+  if (typeof piece !== 'string' || !piece || piece === '[object Object]') return '';
+  return piece;
+}
+
+function appendNarrativeEvent(pathLog, type, piece, ts) {
+  const last = pathLog[pathLog.length - 1];
+  if (last && last.type === type) {
+    last.text = `${last.text || ''}${piece}`;
+    last.ts = ts;
+    return last;
+  }
+  const row = { type, text: piece, ts };
+  pathLog.push(row);
+  return row;
+}
+
 /**
  * Reconstruct tool-call then tool-result from stored toolCalls (old sessions).
  * @param {Array<object>} [toolCalls]
@@ -611,6 +838,16 @@ export function pathFromWire(wire) {
         : [];
     for (const part of parts) {
       if (!part || typeof part !== 'object') continue;
+      if (part.type === 'reasoning') {
+        const text = String(part.text || '').trim();
+        if (text) path.push({ type: 'thought', text });
+        continue;
+      }
+      if (part.type === 'text' && Array.isArray(msg.content)) {
+        const text = String(part.text || '').trim();
+        if (text) path.push({ type: 'text', text });
+        continue;
+      }
       if (part.type === 'tool-call') {
         path.push({
           type: 'tool-call',
@@ -645,12 +882,12 @@ export function pathFromWire(wire) {
  */
 export function mergeBehaviorPath(input = {}) {
   const live = Array.isArray(input.path) ? input.path.filter(Boolean) : [];
-  if (live.length) return live.map(slimEvent);
+  if (live.length) return live.map(slimEvent).filter(Boolean);
   // Wire is paired by toolCallId. toolCalls may have been stored with a
   // same-name fallback (two inspects → first result duplicated).
-  const fromWire = pathFromWire(input.wire).map(slimEvent);
+  const fromWire = pathFromWire(input.wire).map(slimEvent).filter(Boolean);
   if (fromWire.length) return fromWire;
-  return pathFromToolCalls(input.toolCalls || input.traces).map(slimEvent);
+  return pathFromToolCalls(input.toolCalls || input.traces).map(slimEvent).filter(Boolean);
 }
 
 /**
@@ -664,10 +901,25 @@ export function recordBehaviorEvent(pathLog, ev) {
   const ts = nowTs(ev);
 
   if (type === 'thought') {
-    const piece = ev.text != null ? ev.text : ev.chunk;
-    if (typeof piece !== 'string' || !piece || piece === '[object Object]') return;
-    const model = findOpenModel(pathLog);
-    if (model) model.thought = `${model.thought || ''}${piece}`;
+    const piece = streamPiece(ev);
+    if (!piece) return;
+    appendNarrativeEvent(pathLog, 'thought', piece, ts);
+    return;
+  }
+
+  if (type === 'text') {
+    const piece = streamPiece(ev);
+    if (!piece) return;
+    appendNarrativeEvent(pathLog, 'text', piece, ts);
+    return;
+  }
+
+  if (type === 'plan-pinned') {
+    pathLog.push({
+      type: 'plan-pinned',
+      plan: slim(ev.plan || {}),
+      ts
+    });
     return;
   }
 
@@ -676,6 +928,9 @@ export function recordBehaviorEvent(pathLog, ev) {
       type: 'clarify',
       clarifyId: String(ev.clarifyId || ''),
       questions: Array.isArray(ev.questions) ? slim(ev.questions) : [],
+      ...(ev.kind === 'plan' || ev.plan
+        ? { kind: 'plan', plan: slim(ev.plan || {}) }
+        : {}),
       ts,
       startedAt: ts
     });
@@ -692,11 +947,21 @@ export function recordBehaviorEvent(pathLog, ev) {
       }
     }
     const latencyMs = open?.startedAt ? Math.max(0, ts - Number(open.startedAt)) : undefined;
+    const decision = String(ev.decision || '').trim().slice(0, 24);
+    const notes = String(ev.notes || ev.answers?.notes || '').trim();
     pathLog.push({
       type: 'clarify-done',
       clarifyId: id || open?.clarifyId || '',
       answers: ev.aborted ? undefined : slim(ev.answers || {}),
       aborted: ev.aborted === true,
+      ...(ev.kind === 'plan' || open?.kind === 'plan'
+        ? {
+            kind: 'plan',
+            approved: ev.approved === true,
+            ...(decision ? { decision } : ev.approved === true ? { decision: 'approved' } : {}),
+            ...(notes ? { notes: clipStr(notes, 400) } : {})
+          }
+        : {}),
       ts,
       endedAt: ts,
       latencyMs
@@ -707,11 +972,12 @@ export function recordBehaviorEvent(pathLog, ev) {
   if (type === 'tool-call') {
     const model = findOpenModel(pathLog);
     if (model && model.generatedAt == null) model.generatedAt = ts;
+    const tool = String(ev.name || ev.toolName || ev.tool || 'tool');
     pathLog.push({
       type: 'tool-call',
-      tool: String(ev.name || ev.toolName || ev.tool || 'tool'),
+      tool,
       toolCallId: String(ev.toolCallId || ev.id || ''),
-      args: asArgs(ev.args ?? ev.input ?? {}),
+      args: slimToolArgs(tool, ev.args ?? ev.input ?? {}),
       ts,
       startedAt: ts
     });
@@ -721,7 +987,7 @@ export function recordBehaviorEvent(pathLog, ev) {
   if (type === 'tool-result') {
     const tool = String(ev.name || ev.toolName || ev.tool || 'tool');
     const id = String(ev.toolCallId || ev.id || '');
-    const result = unwrapToolResult(ev.result ?? ev.output ?? null);
+    const result = slimToolResult(tool, ev.result ?? ev.output ?? null);
     const call = findOpenCall(pathLog, tool, id);
     const given = Number(ev.latencyMs ?? ev.toolExecutionMs);
     const latencyMs =
@@ -763,7 +1029,6 @@ export function recordBehaviorEvent(pathLog, ev) {
       name: 'llm',
       index: ev.index != null ? Number(ev.index) : pathLog.filter((p) => p.type === 'model').length,
       model: ev.modelId || ev.model || '',
-      thought: '',
       ts,
       startedAt: ts
     });
@@ -1057,8 +1322,6 @@ function exportBubble(m, events) {
   };
   if (m.messageId) out.messageId = String(m.messageId);
   if (role === 'assistant') {
-    const thought = String(m.thought || '').trim();
-    if (thought) out.thought = clipBubble(thought, MAX_THOUGHT_CHARS);
     const model = exportModelRef(events || m.path, m.model);
     if (model) out.model = model;
     if (m.usage) out.usage = harvestModelUsage(m.usage);
@@ -1136,6 +1399,8 @@ function countEvents(turns) {
   let toolCount = 0;
   let hostCount = 0;
   let modelCount = 0;
+  let thoughtCount = 0;
+  let textCount = 0;
   let latencyMs = 0;
   let inferenceMs = 0;
   let toolMs = 0;
@@ -1165,6 +1430,10 @@ function countEvents(turns) {
         modelCount += 1;
         const n = step.model || step.name || 'llm';
         byModel[n] = (byModel[n] || 0) + 1;
+      } else if (step?.type === 'thought') {
+        thoughtCount += 1;
+      } else if (step?.type === 'text') {
+        textCount += 1;
       }
     }
   }
@@ -1172,6 +1441,8 @@ function countEvents(turns) {
     tools: toolCount,
     host: hostCount,
     modelCalls: modelCount,
+    thoughts: thoughtCount,
+    replies: textCount,
     latencyMs,
     timing: { inferenceMs, toolMs, totalMs: latencyMs },
     usage: { source: usageSource, promptTokens, completionTokens },

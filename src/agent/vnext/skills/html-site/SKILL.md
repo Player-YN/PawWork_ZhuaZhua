@@ -30,7 +30,7 @@ If they asked for 海报 / 漫画 as a visual / 幻灯片, load html-poster or h
 
 ## Mutate
 
-After the page exists, **web write only**. Never `write_artifact` a second site for a typo, image swap, or field edit — the host patches the same HTML. `acquire action=image` returns `/artifacts/….png`; set that path on the pinned `img` (`src` / `setSrc`). The preview resolves guest paths. `web act=undo` reverts the last in-place save.
+After the page exists, **web write only**. Never `write_artifact` a second site for a typo, image swap, or field edit — the host patches the same HTML. After `run` writes commands JSON or HTML, `web` write with that `path` — do not retype. `acquire action=image` returns `/artifacts/….png`; set that path on the pinned `img` (`src` / `setSrc`). The preview resolves guest paths. `web act=undo` reverts the last in-place save.
 
 The user points; you drive it with the `web` tool (`act=read|write`). `read` lists nodes. Then `write` with `text` / `href` / `src` or `commands[]` (`setText` / `setHref` / `setSrc`). Omit nodeId — the host pins the clicked node. Text/src/href edits need exactly one pinned node. If nothing is clicked, ask. Do not guess the first heading. A chat sentence is not an edit.
 

@@ -91,7 +91,9 @@ export {
   splitTurnTiming,
   recordBehaviorEvent,
   compactTurnContext,
-  BEHAVIOR_TRAJECTORY_SCHEMA
+  BEHAVIOR_TRAJECTORY_SCHEMA,
+  MAX_THOUGHT_CHARS,
+  MAX_TURN_THOUGHT_CHARS
 } from './behaviorPath.js';
 export { createSession, getSession, deleteSession, ensureSession } from './sessionApi.js';
 export {
@@ -398,6 +400,17 @@ export {
   newClarifyId,
   pendingClarifyCount
 } from './clarifyGate.js';
+export {
+  normalizePlan,
+  normalizePlanStep,
+  isPlanApproved,
+  classifyPlanDecision,
+  planRevisionNotes,
+  userRequestedPlan,
+  formatFrozenPlanInstructions,
+  pinFrozenPlan,
+  unpinFrozenPlan
+} from './planContract.js';
 export { ensureItemPixels, itemBlobKey } from './itemPixels.js';
 export {
   classifyLabelKind,

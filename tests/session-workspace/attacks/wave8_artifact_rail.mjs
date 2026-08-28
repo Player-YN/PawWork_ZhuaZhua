@@ -30,7 +30,8 @@ record(
     /artifact-rail-scrim/.test(html) &&
     /id="artifactShelfList"/.test(html) &&
     /id="artifactRailNav"/.test(html) &&
-    /id="artifactEdgeFab"/.test(html) &&
+    /id="sessionArtifactBtn"/.test(html) &&
+    !/id="artifactEdgeFab"/.test(html) &&
     /id="artifactRailNew"/.test(html) &&
     /data-blank-kind="design"/.test(html) &&
     /data-blank-kind="slides"/.test(html) &&
@@ -49,7 +50,7 @@ record(
   'artifact-rail-blurs-before-aria-hidden',
   /function restoreFocusOutside/.test(side) &&
     /function setAriaRegionOpen/.test(side) &&
-    /setAriaRegionOpen\(rail, next, btn \|\| edgeFab\)/.test(side),
+    /setAriaRegionOpen\(rail, next, btn\)/.test(side),
   ''
 );
 

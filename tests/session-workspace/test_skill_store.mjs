@@ -113,12 +113,19 @@ assert.equal(denied.ok, false);
 
 const cands = buildSkillCandidates(merged, 'demo');
 assert.ok(cands.some((c) => c.id === 'my-demo' && c.kind === 'skill'));
+assert.equal(cands.some((c) => c.id === 'plan'), false);
 assert.equal(buildSkillCandidates(merged, 'zzzz-nope-skill').length, 0);
+const slash = buildSkillCandidates(merged, 'plan');
+assert.ok(slash.some((c) => c.kind === 'command' && c.id === 'plan'));
+assert.equal(buildSkillCandidates(merged, 'a').some((c) => c.id === 'plan'), false);
 const mentionNorm = normalizeComposerMentions([
-  { kind: 'skill', id: 'my-demo', label: 'My Demo', handle: 'my-demo', groupId: '__skills__' }
+  { kind: 'skill', id: 'my-demo', label: 'My Demo', handle: 'my-demo', groupId: '__skills__' },
+  { kind: 'command', id: 'plan', label: 'plan', handle: 'plan', groupId: '__commands__' }
 ]);
 assert.equal(mentionNorm[0].kind, 'skill');
 assert.equal(mentionNorm[0].id, 'my-demo');
+assert.equal(mentionNorm[1].kind, 'command');
+assert.equal(mentionNorm[1].id, 'plan');
 
 const tree = githubSkillUrls('https://github.com/acme/demo-skill/tree/main/skills/foo');
 assert.equal(tree.ok, true);

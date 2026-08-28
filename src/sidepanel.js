@@ -434,7 +434,9 @@ function stashLiveToSession(sid) {
     u.pendingClarify = {
       type: 'clarify',
       clarifyId: clarifyLiveState.clarifyId,
-      questions: clarifyLiveState.questions
+      questions: clarifyLiveState.questions,
+      ...(clarifyLiveState.kind ? { kind: clarifyLiveState.kind } : {}),
+      ...(clarifyLiveState.plan ? { plan: clarifyLiveState.plan } : {})
     };
   }
 }
@@ -1467,7 +1469,7 @@ async function renderSkillPalette(query, range) {
   if (seq !== skillPaletteSeq) return;
   const ctx = getAtQueryContext();
   if (!ctx || ctx.trigger !== '/') return;
-  const items = buildSkillCandidates(catalog, ctx.query);
+  const items = buildSkillCandidates(catalog, ctx.query, currentLang);
   pal.innerHTML = '';
   pal.setAttribute('aria-label', t('skillPickerAria'));
   const list = document.createElement('div');
@@ -1538,7 +1540,10 @@ function createMentionToken(candidate) {
   chip.setAttribute('data-handle', candidate.handle || '');
   if (candidate.itemKind) chip.setAttribute('data-item-kind', candidate.itemKind);
   if (candidate.kind === 'page' && candidate.url) chip.setAttribute('data-url', candidate.url);
-  chip.textContent = candidate.kind === 'skill' ? `/${candidate.label}` : `@${candidate.label}`;
+  chip.textContent =
+    candidate.kind === 'skill' || candidate.kind === 'command'
+      ? `/${candidate.label}`
+      : `@${candidate.label}`;
   if (candidate.kind === 'artifact' && candidate.id) {
     chip.title = currentLang === 'en' ? 'Open workspace file' : '打开工作区文件';
     chip.addEventListener('click', (e) => {
@@ -1562,6 +1567,7 @@ async function bindMentionGroups(mentions) {
             m.kind !== 'page' &&
             m.kind !== 'pages' &&
             m.kind !== 'skill' &&
+            m.kind !== 'command' &&
             m.groupId !== PAGES_MENTION_ID
         )
         .map((m) => String(m.groupId || ''))
@@ -2411,10 +2417,14 @@ function captureGroupsFromState(state = workspaceGroupState) {
   return groups.filter((g) => !isClipboardGroup(g) && g.kind !== CLIPBOARD_GROUP_KIND);
 }
 
+function isSelectionChipKind(kind) {
+  return kind !== 'text';
+}
+
 function getClipboardPins() {
   const g = clipboardGroupFromState();
-  if (g && Array.isArray(g.items)) {
-    return g.items
+  if (g && Array.isArray(g.items) && g.items.length) {
+    const fromGroup = g.items
       .map((it) => ({
         id: String(it.webItemId || it.id || ''),
         text: String(it.text || it.preview?.textSnippet || ''),
@@ -2422,11 +2432,12 @@ function getClipboardPins() {
         pinned: true
       }))
       .filter((p) => p.id && p.text);
+    if (fromGroup.length) return fromGroup;
   }
   return listClipboardItemsFromStore();
 }
 
-function pinTextsToClipboard(texts, { openDrawer = true } = {}) {
+function pinTextsToClipboard(texts, { openDrawer = true, toast = true } = {}) {
   const toPin = (Array.isArray(texts) ? texts : [texts])
     .map((x) => (typeof x === 'string' ? { text: x } : x))
     .filter((x) => x && String(x.text || '').trim())
@@ -2435,7 +2446,7 @@ function pinTextsToClipboard(texts, { openDrawer = true } = {}) {
   const existing = new Set(getClipboardPins().map((p) => p.text));
   const fresh = toPin.filter((x) => !existing.has(String(x.text).trim()));
   if (!fresh.length) {
-    showQuickToast(t('toastClipDup'));
+    if (toast) showQuickToast(t('toastClipDup'));
     if (openDrawer && getClipboardPins().length) {
       clipDrawerOpen = true;
       const bar = $('selectionBar');
@@ -2479,7 +2490,7 @@ function pinTextsToClipboard(texts, { openDrawer = true } = {}) {
     .catch(() => {
       /* local pins remain until workspace wakes */
     });
-  showQuickToast(t('toastClipAdd'));
+  if (toast) showQuickToast(t('toastClipAdd'));
   if (openDrawer) {
     clipDrawerOpen = true;
     const bar = $('selectionBar');
@@ -2727,32 +2738,23 @@ function renderQuickTools() {
 }
 
 function autoPinSelectionTexts(elements) {
-  const texts = (elements || [])
-    .filter((el) => classifyElementKind(el) === 'text')
-    .map((el) => String(el.text || '').trim())
-    .filter(Boolean);
-  let added = false;
-  texts.forEach((text) => {
+  const fresh = [];
+  (elements || []).forEach((el) => {
+    if (classifyElementKind(el) !== 'text') return;
+    const text = String(el.text || '').trim();
+    if (!text) return;
     const key = text.slice(0, 200);
     if (autoPinnedTextKeys.has(key)) return;
-    const existing = getClipboardPins().some((p) => p.text === text);
+    const existing = getClipboardPins().some((p) => String(p.text || '').trim() === text);
     if (existing) {
       autoPinnedTextKeys.add(key);
       return;
     }
-    pinClipboardItemsToStore([{ text, kind: 'text' }]);
     autoPinnedTextKeys.add(key);
-    added = true;
+    fresh.push({ text, kind: 'text' });
   });
-  if (added && getClipboardPins().length > 0) {
-    // Brief peek: expand selection so clipboard section is visible with chips
-    clipDrawerOpen = true;
-    const bar = $('selectionBar');
-    if (bar) {
-      bar.classList.add('is-drawer-open');
-      bar.setAttribute('aria-expanded', 'true');
-    }
-  }
+  if (!fresh.length) return;
+  pinTextsToClipboard(fresh, { openDrawer: true, toast: false });
 }
 
 function selectedClipboardItems() {
@@ -2831,23 +2833,23 @@ function exportClipboard(fmt) {
 function renderSelectionUI() {
   const skipChipRebuild = !!skipSelectionChipRebuild;
   const elements = selectedElementsSummary || [];
-  const { text: nText, images: nImg, tables: nTable, links: nLink, vectors: nVec, videos: nVid, pages: nPage, total } =
+  const { text: nText, images: nImg, tables: nTable, links: nLink, vectors: nVec, videos: nVid, pages: nPage } =
     selectionCountsFrom(elements);
-  const empty = total === 0;
+  const chipEmpty = elements.every((el) => !isSelectionChipKind(classifyElementKind(el)));
   const selectionBar = $('selectionBar');
   const selSummary = $('selSummary');
   const clearSelBtn = $('clearSelBtn');
   const selChips = $('selChips');
   const hasClip = getClipboardPins().length > 0;
-  // Only the truly barren state (no selection AND no clipboard) collapses to pick-only chrome.
-  // Clearing elements must not hide leftover clipboard.
-  const barren = empty && !hasClip;
+  // Text goes to the clipboard drawer, not the chip row. Collapse only when
+  // there are no visual chips and no clipboard pins.
+  const barren = chipEmpty && !hasClip;
   if (selectionBar) {
     selectionBar.classList.toggle('is-empty', barren);
-    selectionBar.classList.toggle('is-sel-empty', empty);
+    selectionBar.classList.toggle('is-sel-empty', chipEmpty);
   }
-  if (selSummary) selSummary.hidden = empty;
-  if (clearSelBtn) clearSelBtn.hidden = empty;
+  if (selSummary) selSummary.hidden = chipEmpty;
+  if (clearSelBtn) clearSelBtn.hidden = chipEmpty;
   // Nothing to show → force-collapse expand (no empty giant panel)
   if (barren && selectionBar?.classList.contains('is-drawer-open')) {
     const pin = $('pinSelBtn');
@@ -2877,15 +2879,15 @@ function renderSelectionUI() {
   try {
     syncHomeWorkSurfaceLayout();
   } catch (_) {}
-  // Any page pick with content: keep full selection panel awake for 2s after last click
-  if (!empty) {
+  // Visual chips or a clipboard pin: keep the panel awake after the last click
+  if (!chipEmpty || hasClip || nText > 0) {
     try {
       holdDrawerOpen('selection', 2000);
     } catch (_) {}
   }
 
   [
-    ['text', nText, 'countText'],
+    ['text', 0, 'countText'],
     ['image', nImg, 'countImage'],
     ['table', nTable, 'countTable'],
     ['link', nLink, 'countLink'],
@@ -2907,9 +2909,9 @@ function renderSelectionUI() {
     return;
   }
   if (!skipChipRebuild) selChips.innerHTML = '';
-  selChips.hidden = empty;
-  if (empty) {
-    // Selection chips gone; clipboard / 下图 may still live in the expand body
+  selChips.hidden = chipEmpty;
+  if (chipEmpty) {
+    // No visual chips; clipboard / 下图 may still live in the expand body
     renderQuickTools();
     updateSelChipsOverflow();
     return;
@@ -2922,6 +2924,7 @@ function renderSelectionUI() {
   }
   elements.forEach((item, index) => {
     const kind = classifyElementKind(item);
+    if (!isSelectionChipKind(kind)) return;
     const chip = document.createElement('span');
     chip.className = 'sel-chip has-remove';
     chip.dataset.kind = kind === 'other' ? 'text' : kind;
@@ -2930,9 +2933,6 @@ function renderSelectionUI() {
     let main = '';
     if (kind === 'image') {
       main = `<span class="thumb" aria-hidden="true"></span><span class="label">${escapeHtml(label)}</span>`;
-    } else if (kind === 'text') {
-      chip.classList.add('is-text');
-      main = `<span class="kind-mark">${escapeHtml(t('kindText'))}</span><span class="label">${escapeHtml(label)}</span>`;
     } else if (kind === 'table') {
       main = `<span class="kind-mark">${escapeHtml(t('kindTable'))}</span><span class="label">${escapeHtml(label)}</span>`;
     } else if (kind === 'video') {
@@ -2986,9 +2986,6 @@ function renderSelectionUI() {
     });
     chip.addEventListener('click', async (e) => {
       if (e.target.closest('.chip-x')) return;
-      if (kind === 'text') {
-        pinTextsToClipboard([String(item.text || '').trim()]);
-      }
       await revealCapturedElement(item);
     });
     if (item.webItemId && item.webItemId === focusedPageItemId) {
@@ -3747,8 +3744,44 @@ function getGuideOnlyHints() {
   ];
 }
 
+function summarizeSelectionForSuggest(elements) {
+  const list = Array.isArray(elements) ? elements : [];
+  const counts = selectionCountsFrom(list);
+  const clips = getClipboardPins()
+    .slice(0, 4)
+    .map((p) => String(p.text || '').replace(/\s+/g, ' ').trim().slice(0, 80))
+    .filter(Boolean);
+  const pageUrl = String(list.find((el) => el.pageUrl || el.url)?.pageUrl || list.find((el) => el.url)?.url || '').slice(
+    0,
+    180
+  );
+  const items = list.slice(0, 10).map((el, i) => {
+    const kind = classifyElementKind(el);
+    return {
+      kind,
+      label: String(elementLabel(el, i) || '').slice(0, 40),
+      text: String(el.text || '').replace(/\s+/g, ' ').trim().slice(0, 80),
+      src: String(el.src || '').slice(0, 120)
+    };
+  });
+  return {
+    lang: currentLang,
+    pageUrl,
+    counts: {
+      text: counts.text,
+      images: counts.images,
+      tables: counts.tables,
+      links: counts.links,
+      pages: counts.pages,
+      total: counts.total
+    },
+    items,
+    clipboard: clips
+  };
+}
+
 /**
- * Build selection-aware suggestion chips (rule-based; no extra LLM call).
+ * Fallback chips when the model is unavailable. Prefer suggestSelectionActions.
  * @param {any[]} elements
  * @returns {{ label: string, prompt: string }[]}
  */
@@ -3860,7 +3893,7 @@ function scheduleSelectionSuggestions() {
     renderHintChips(getGuideOnlyHints());
     return;
   }
-  // Show loading placeholder while waiting for idle
+  // Show loading placeholder while waiting for idle + model infer
   const host = document.getElementById('hintChips');
   if (host) {
     host.innerHTML = `<span class="hint-chips-pending">${
@@ -3870,14 +3903,44 @@ function scheduleSelectionSuggestions() {
   suggestionDebounceTimer = setTimeout(() => {
     suggestionDebounceTimer = null;
     if (token !== suggestionGenToken) return;
-    // Re-read selection at fire time
-    const now = selectedElementsSummary || [];
-    if (!now.length) {
-      renderHintChips(getGuideOnlyHints());
+    void inferSelectionHintChips(token);
+  }, 3000);
+}
+
+async function inferSelectionHintChips(token) {
+  if (token !== suggestionGenToken) return;
+  const now = selectedElementsSummary || [];
+  if (!now.length) {
+    renderHintChips(getGuideOnlyHints());
+    return;
+  }
+  const host = document.getElementById('hintChips');
+  if (host) {
+    host.innerHTML = `<span class="hint-chips-pending">${
+      currentLang === 'en' ? 'Inferring from your selection…' : '正在根据选区推断…'
+    }</span>`;
+  }
+  if (isCurrentSessionRunning()) {
+    renderHintChips(buildSelectionHints(now));
+    return;
+  }
+  try {
+    const res = await workspaceRpc('suggestSelectionActions', {
+      sessionId: getWorkspaceSessionId(),
+      lang: currentLang,
+      selection: summarizeSelectionForSuggest(now)
+    });
+    if (token !== suggestionGenToken) return;
+    const chips = Array.isArray(res?.chips) ? res.chips : [];
+    if (chips.length) {
+      renderHintChips(chips);
       return;
     }
-    renderHintChips(buildSelectionHints(now));
-  }, 3000);
+  } catch (_) {
+    /* no key / timeout / offscreen — rule chips */
+  }
+  if (token !== suggestionGenToken) return;
+  renderHintChips(buildSelectionHints(now));
 }
 
 function snapshotTask(task) {
@@ -5719,9 +5782,7 @@ function hideClarifyLive() {
   const host = document.getElementById('clarifyLive');
   if (host) host.remove();
   clarifyLiveState = null;
-  document.querySelector('.session-thread.is-active')?.classList.remove('is-clarifying');
-  document.querySelector('footer.composer')?.classList.remove('is-clarifying');
-  $('panel')?.classList.remove('is-clarifying');
+  clearClarifyingChrome();
 }
 
 function submitClarifyAnswers(answers) {
@@ -5737,7 +5798,221 @@ function submitClarifyAnswers(answers) {
   });
 }
 
+function submitPlanDecision(approved) {
+  const answers = {
+    approved: approved === true,
+    decision: approved === true ? 'approve' : 'decline'
+  };
+  const id = clarifyLiveState?.clarifyId;
+  sealPlanPanel(approved === true ? 'approved' : 'declined');
+  if (!id) return;
+  void workspaceRpc('answerClarify', {
+    sessionId: getWorkspaceSessionId(),
+    clarifyId: id,
+    answers
+  }).catch((err) => {
+    console.warn('[plan] answer failed', err);
+  });
+}
+
+function submitPlanRevise(rawNotes) {
+  const notes = String(rawNotes || '').trim();
+  if (!notes) return;
+  const answers = {
+    approved: false,
+    decision: 'revise',
+    notes
+  };
+  const id = clarifyLiveState?.clarifyId;
+  sealPlanPanel('revise', notes);
+  if (!id) return;
+  void workspaceRpc('answerClarify', {
+    sessionId: getWorkspaceSessionId(),
+    clarifyId: id,
+    answers
+  }).catch((err) => {
+    console.warn('[plan] revise failed', err);
+  });
+}
+
+function openPlanReviseCompose(host) {
+  if (!host) return;
+  const actions = host.querySelector('.plan-panel-actions');
+  if (actions) actions.hidden = true;
+  let compose = host.querySelector('.plan-revise-compose');
+  if (compose) {
+    compose.hidden = false;
+    compose.querySelector('.plan-revise-notes')?.focus();
+    return;
+  }
+  compose = document.createElement('div');
+  compose.className = 'plan-revise-compose';
+  compose.innerHTML = `
+    <label class="plan-revise-label" for="planReviseNotes">${escapeHtml(t('planReviseNotesLabel'))}</label>
+    <textarea id="planReviseNotes" class="plan-revise-notes" rows="3" maxlength="2000" placeholder="${escapeHtml(t('planReviseNotesPh'))}"></textarea>
+    <div class="plan-panel-actions is-revise">
+      <button type="button" class="plan-decline-btn plan-revise-cancel">${escapeHtml(t('planReviseCancel'))}</button>
+      <button type="button" class="plan-approve-btn plan-revise-submit" disabled>${escapeHtml(t('planReviseSubmit'))}</button>
+    </div>
+  `;
+  host.querySelector('.plan-panel')?.appendChild(compose);
+  const ta = compose.querySelector('.plan-revise-notes');
+  const submit = compose.querySelector('.plan-revise-submit');
+  const sync = () => {
+    if (submit) submit.disabled = !String(ta?.value || '').trim();
+  };
+  ta?.addEventListener('input', sync);
+  compose.querySelector('.plan-revise-cancel')?.addEventListener('click', () => {
+    compose.hidden = true;
+    if (actions) actions.hidden = false;
+  });
+  submit?.addEventListener('click', () => submitPlanRevise(ta?.value));
+  sync();
+  ta?.focus();
+}
+
+function normalizePlanStepForUi(raw) {
+  if (typeof raw === 'string') {
+    const title = raw.trim();
+    return title ? { title, detail: '' } : null;
+  }
+  if (!raw || typeof raw !== 'object') return null;
+  const title = String(raw.title || raw.text || raw.step || '').trim();
+  const detail = String(raw.detail || raw.why || raw.description || '').trim();
+  if (!title) return null;
+  return { title, detail };
+}
+
+function planStepRowHtml(step, index) {
+  const n = index + 1;
+  const title = escapeHtml(step.title);
+  const detail = String(step.detail || '').trim();
+  if (!detail) {
+    return `<div class="plan-step is-plain">
+      <span class="plan-step-n">${n}</span>
+      <span class="plan-step-title">${title}</span>
+    </div>`;
+  }
+  return `<details class="plan-step">
+    <summary class="plan-step-summary">
+      <span class="plan-step-n">${n}</span>
+      <span class="plan-step-title">${title}</span>
+      <span class="plan-step-chevron" aria-hidden="true"><svg viewBox="0 0 16 16" width="12" height="12"><path fill="currentColor" d="M6 4l4 4-4 4" /></svg></span>
+    </summary>
+    <div class="plan-step-detail">${escapeHtml(detail)}</div>
+  </details>`;
+}
+
+function clearClarifyingChrome() {
+  document.querySelector('.session-thread.is-active')?.classList.remove('is-clarifying');
+  document.querySelector('footer.composer')?.classList.remove('is-clarifying');
+  $('panel')?.classList.remove('is-clarifying');
+}
+
+function sealPlanPanel(decision, notes = '') {
+  const host = document.getElementById('clarifyLive');
+  if (!host?.classList.contains('is-plan')) {
+    hideClarifyLive();
+    return;
+  }
+  const kind =
+    decision === true || decision === 'approved'
+      ? 'approved'
+      : decision === 'revise'
+        ? 'revise'
+        : 'declined';
+  host.removeAttribute('id');
+  host.classList.add('is-sealed');
+  host.classList.toggle('is-approved', kind === 'approved');
+  host.classList.toggle('is-declined', kind === 'declined');
+  host.classList.toggle('is-revise', kind === 'revise');
+  host.querySelector('.clarify-live-banner')?.remove();
+  host.querySelectorAll('.plan-panel-actions').forEach((el) => el.remove());
+  host.querySelector('.plan-revise-compose')?.remove();
+  const kicker = host.querySelector('.plan-panel-kicker');
+  const label =
+    kind === 'approved' ? t('planApproved') : kind === 'revise' ? t('planRevised') : t('planDeclined');
+  if (kicker) kicker.textContent = label;
+  host.setAttribute('aria-label', label);
+  const trimmed = String(notes || '').trim();
+  if (kind === 'revise' && trimmed) {
+    const receipt = document.createElement('div');
+    receipt.className = 'plan-revise-receipt';
+    receipt.innerHTML = `
+      <div class="plan-revise-receipt-kicker">${escapeHtml(t('planReviseNotesLabel'))}</div>
+      <p class="plan-revise-receipt-notes">${escapeHtml(trimmed)}</p>
+    `;
+    host.querySelector('.plan-panel')?.appendChild(receipt);
+  }
+  clarifyLiveState = null;
+  clearClarifyingChrome();
+}
+
+function showPlanLive(ev) {
+  hideClarifyLive();
+  hideLiveTurnProgress();
+  const raw = ev?.plan && typeof ev.plan === 'object' ? ev.plan : null;
+  const title = String(raw?.title || '').trim();
+  const steps = Array.isArray(raw?.steps)
+    ? raw.steps.map(normalizePlanStepForUi).filter(Boolean)
+    : [];
+  if (!title || !steps.length) return;
+  const task = liveTask;
+  const body = task?.body;
+  if (!body) return;
+
+  const host = document.createElement('div');
+  host.id = 'clarifyLive';
+  host.className = 'clarify-live is-plan';
+  host.setAttribute('role', 'region');
+  host.setAttribute('aria-label', t('planning') || 'Plan');
+
+  const banner = document.createElement('div');
+  banner.className = 'clarify-live-banner';
+  banner.innerHTML = `<span class="clarify-live-orb" aria-hidden="true"></span><span class="clarify-live-banner-text">${escapeHtml(t('planning'))}</span>`;
+  host.appendChild(banner);
+
+  const summary = String(raw.summary || '').trim();
+  const panel = document.createElement('div');
+  panel.className = 'plan-panel';
+  panel.innerHTML = `
+    <div class="plan-panel-head">
+      <div class="plan-panel-kicker">${escapeHtml(t('planAwaiting'))}</div>
+      <div class="plan-panel-title">${escapeHtml(title)}</div>
+      ${summary ? `<p class="plan-panel-summary">${escapeHtml(summary)}</p>` : ''}
+    </div>
+    <div class="plan-panel-steps">${steps.map(planStepRowHtml).join('')}</div>
+    <div class="plan-panel-actions">
+      <button type="button" class="plan-decline-btn">${escapeHtml(t('planDecline'))}</button>
+      <button type="button" class="plan-revise-btn">${escapeHtml(t('planRevise'))}</button>
+      <button type="button" class="plan-approve-btn">${escapeHtml(t('planApprove'))}</button>
+    </div>
+  `;
+  host.appendChild(panel);
+
+  body.appendChild(host);
+  task.el?.classList.add('is-clarifying');
+  document.querySelector('footer.composer')?.classList.add('is-clarifying');
+  $('panel')?.classList.add('is-clarifying');
+  clarifyLiveState = {
+    clarifyId: String(ev.clarifyId || ''),
+    questions: [],
+    picks: [],
+    kind: 'plan',
+    plan: { title, summary, steps }
+  };
+  scrollTaskStream();
+
+  host.querySelector('.plan-approve-btn')?.addEventListener('click', () => submitPlanDecision(true));
+  host.querySelector('.plan-decline-btn')?.addEventListener('click', () => submitPlanDecision(false));
+  host.querySelector('.plan-revise-btn')?.addEventListener('click', () => openPlanReviseCompose(host));
+}
+
 function showClarifyLive(ev) {
+  if (ev?.kind === 'plan' || ev?.plan) {
+    showPlanLive(ev);
+    return;
+  }
   hideClarifyLive();
   hideLiveTurnProgress();
   const questions = Array.isArray(ev?.questions) ? ev.questions : [];
@@ -5952,6 +6227,11 @@ function handleSessionWorkspaceEvent(request) {
     if (ev?.type === 'clarify-done') {
       if (sid !== foreground) {
         uiState(sid).pendingClarify = null;
+        return;
+      }
+      const live = document.getElementById('clarifyLive');
+      if (live?.classList.contains('is-plan')) {
+        // Plan cards seal in place; do not vanish like question clarify.
         return;
       }
       hideClarifyLive();
@@ -7191,6 +7471,8 @@ const selectedArtifactIds = new Set();
 
 /** Live Univer ranges or HTML canvas slots above the composer. Hint only — not a bind gate. */
 let sheetSelState = emptySheetSel('');
+/** Last painted chip fingerprint — skip rebuild when Univer rebroadcasts the same ranges. */
+let lastSheetSelFp = '';
 /** sheet name → expanded (default true) */
 const sheetSelOpen = new Map();
 /** plateId → expanded (default true) */
@@ -7226,6 +7508,31 @@ function sheetSelIsCanvas(state = sheetSelState) {
   if (state?.source === 'html') return true;
   if (state?.source === 'sheet') return false;
   return isHtmlCanvasPayload({}, state?.selections || []);
+}
+
+function sheetSelItemKey(sel, canvas) {
+  return canvas ? canvasSelKey(sel) : sheetSelKey(sel);
+}
+
+function sheetSelItemKeys(state = sheetSelState) {
+  const canvas = sheetSelIsCanvas(state);
+  return (state?.selections || []).map((s) => sheetSelItemKey(s, canvas));
+}
+
+function sheetSelFingerprint(state = sheetSelState) {
+  return [
+    String(state?.sessionId || ''),
+    String(state?.artifactId || ''),
+    sheetSelIsCanvas(state) ? 'html' : 'sheet',
+    String(state?.kind || ''),
+    sheetSelItemKeys(state).join('\n')
+  ].join('\0');
+}
+
+function pulseSheetSelChip(chip, key, pulseKeys) {
+  if (!chip || !key || !pulseKeys?.has?.(key)) return;
+  chip.classList.add('is-flash');
+  chip.addEventListener('animationend', () => chip.classList.remove('is-flash'), { once: true });
 }
 
 function canvasShellLabel(kind) {
@@ -7293,8 +7600,12 @@ function applySheetSelState(payload = {}) {
   };
   if (sid) uiState(sid).sheetSel = next;
   if (!shouldApplySessionBroadcast(sid, getWorkspaceSessionId())) return;
+  const prevKeys = new Set(sheetSelItemKeys(sheetSelState));
+  const nextFp = sheetSelFingerprint(next);
   sheetSelState = next;
-  renderSheetSelRow();
+  if (nextFp === lastSheetSelFp) return;
+  const pulseKeys = new Set(sheetSelItemKeys(next).filter((k) => k && !prevKeys.has(k)));
+  renderSheetSelRow({ pulseKeys });
 }
 
 function sheetSelGroupsFrom(list) {
@@ -7329,9 +7640,10 @@ function hideSheetSelRow() {
   if (host) host.replaceChildren();
 }
 
-function renderSheetSelRow() {
+function renderSheetSelRow(opts = {}) {
+  lastSheetSelFp = sheetSelFingerprint(sheetSelState);
   if (sheetSelIsCanvas()) {
-    renderCanvasSelRow();
+    renderCanvasSelRow(opts);
     return;
   }
   hideCanvasSelRow();
@@ -7417,6 +7729,7 @@ function renderSheetSelRow() {
       x.setAttribute('aria-label', t('sheetSelClear'));
       x.textContent = '×';
       chip.appendChild(x);
+      pulseSheetSelChip(chip, sheetSelKey(sel), opts.pulseKeys);
       chip.addEventListener('click', (e) => {
         if (/** @type {HTMLElement} */ (e.target)?.closest?.('.sheet-sel-chip-x')) {
           e.preventDefault();
@@ -7462,7 +7775,8 @@ function canvasSelGroupsFrom(list) {
   return order.map((plate) => ({ plate, items: byPlate.get(plate) || [] }));
 }
 
-function renderCanvasSelRow() {
+function renderCanvasSelRow(opts = {}) {
+  lastSheetSelFp = sheetSelFingerprint(sheetSelState);
   hideSheetSelRow();
   const row = $('canvasSelRow');
   const host = $('canvasSelGroups');
@@ -7559,6 +7873,7 @@ function renderCanvasSelRow() {
       x.setAttribute('aria-label', t('canvasSelClear'));
       x.textContent = '×';
       chip.appendChild(x);
+      pulseSheetSelChip(chip, canvasSelKey(sel), opts.pulseKeys);
       chip.addEventListener('click', (e) => {
         if (/** @type {HTMLElement} */ (e.target)?.closest?.('.sheet-sel-chip-x')) {
           e.preventDefault();
@@ -8360,14 +8675,12 @@ function setArtifactRailOpen(open) {
   const rail = $('artifactRail');
   const scrim = $('artifactRailScrim');
   const btn = $('sessionArtifactBtn');
-  const edgeFab = $('artifactEdgeFab');
   if (!panel || !rail) return;
   const next = !!open;
   panel.classList.toggle('artifact-rail-open', next);
-  setAriaRegionOpen(rail, next, btn || edgeFab);
+  setAriaRegionOpen(rail, next, btn);
   if (scrim) scrim.hidden = !next;
   if (btn) btn.setAttribute('aria-expanded', next ? 'true' : 'false');
-  if (edgeFab) edgeFab.setAttribute('aria-expanded', next ? 'true' : 'false');
   if (next) {
     setSessionRailOpen(false);
     setGroupSelectOpen(false);
@@ -8397,7 +8710,6 @@ async function createBlankArtifactAndOpen(kind) {
 
 function wireArtifactMenu() {
   const btn = $('sessionArtifactBtn');
-  const edgeFab = $('artifactEdgeFab');
   const scrim = $('artifactRailScrim');
   const closeBtn = $('artifactRailCloseBtn');
   const zipSel = $('artifactRailZipSelected');
@@ -8407,7 +8719,6 @@ function wireArtifactMenu() {
     setArtifactRailOpen(!!rail?.hidden);
   };
   btn?.addEventListener('click', toggle);
-  edgeFab?.addEventListener('click', toggle);
   closeBtn?.addEventListener('click', () => setArtifactRailOpen(false));
   scrim?.addEventListener('click', () => setArtifactRailOpen(false));
   zipSel?.addEventListener('click', () => void zipSelectedArtifacts());
@@ -8744,7 +9055,7 @@ function pageItemsForActiveGroup(tabId, pageUrl, state = workspaceGroupState) {
   for (const it of group?.items || []) {
     const itemUrl = it.url || it.source?.url || '';
     const itemTab = it.tabId ?? it.source?.tabId;
-    if (item.labelKind === 'page' || item.kindHint === 'page' || item.kind === 'page' || item.addedBy) {
+    if (it.labelKind === 'page' || it.kindHint === 'page' || it.kind === 'page' || it.addedBy) {
       continue;
     }
     const sameTab = itemTab != null && String(itemTab) === String(tabId);

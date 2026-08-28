@@ -31,9 +31,9 @@ Every user message → General ToolLoopAgent (toolChoice=auto)
 
 ### Tools
 
-Always on: **inspect**, **acquire**, **run**, **sheet**, **deck**, **doc**, **web**. Clarify is control-plane UI (also always in `tools[]`). Skills = folder playbooks, not tools.
+Always on: **inspect**, **acquire**, **run**, **sheet**, **deck**, **doc**, **web**. Clarify is control-plane UI (also always in `tools[]`): questions, or a plan the model presents when it judges the work complex. `/plan` is a slash command (not a skill) that forces a plan card this turn. Panel: Approve / Decline / 需要修改 (Required to change). Approve pins `execution.frozenPlan`; `prepareStep` re-injects the contract (not a chat bubble). Revise notes do not pin; the model re-yields a new card (old card + notes stay). Decline is a complete stop. Skills = folder playbooks, not tools.
 
-Inventory (`canvasInventory`) lists office artifact ids as targets, not a progressive-disclosure gate. Missing canvas → host `NO_CANVAS`. `run` creates canvases (`createScene` / `write_artifact` with site|document markers / `createWorkbook` / `ingestPdf`); daily mutate is not `run.op`. Unmarked pretty HTML is `USE_CANVAS`. Writes omit target using session focus and return `{ dirty, readback }`. World → Act → Verify.
+Inventory (`canvasInventory`) lists office artifact ids as targets, not a progressive-disclosure gate. Missing canvas → host `NO_CANVAS`. `run` creates canvases (`createScene` / `write_artifact` with site|document markers / `createWorkbook` / `ingestPdf`); daily mutate is not `run.op`. Unmarked pretty HTML is `USE_CANVAS`. Writes omit target using session focus and return `{ dirty, readback }`. Guest `path`/`from` on sheet/deck/doc/web writes loads `/scratch` or `/artifacts` JSON/HTML (`ENOENT` / `BAD_INPUT`); `run` computes, official tools apply — do not retype. No 9th tool. World → Act → Verify.
 
 `acquire` actions (vendor-agnostic): `search` | `fetch` | `map` | `crawl` | `image` | `note`. Host routes provider keys and rejects missing query/url/prompt before HTTP. Model cannot mutate SelectionGroups. External MCP is a capability catalog (empty this wave), not extra model tools.
 
@@ -148,6 +148,8 @@ sendMessage(sessionId, message)
 ```
 
 There is **no** user-visible Chat vs Run product split. Every user message is `sendMessage`.
+
+Trajectory is UI support, not workspace truth: fat command payloads slim to `[stripped]` / `[path-hydrate]` / `[omitted]`; empty official writes fail-speak (`BAD_INPUT`, never `ok` with `applied:0`); `user_stop` is a first-class abort on the path; thought/text are first-class events; `plan-pinned` fires once on approve, not on every `prepareStep` hop.
 
 ---
 

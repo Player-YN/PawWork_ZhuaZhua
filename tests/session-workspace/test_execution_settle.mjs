@@ -93,6 +93,12 @@ function collectTypes(events) {
   const end = [...events].reverse().find((e) => e?.type === 'execution-end');
   assert.ok(end, 'abort still emits execution-end');
   assert.equal(end.status, 'aborted');
+  const sessAfter = await svc.getSession({ sessionId: 's-abort' });
+  const asst = [...(sessAfter.messages || [])].reverse().find((m) => m.role === 'assistant');
+  assert.ok(
+    (asst?.path || []).some((e) => e?.type === 'error' && e.code === 'user_stop'),
+    'abort is a path event before persist (not a green last run)'
+  );
 }
 
 {
