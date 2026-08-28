@@ -1,0 +1,47 @@
+{
+  "capturedAt": "2026-08-25",
+  "sheet": {
+    "job": "Analyst copies Fortune Global 500 revenue table into a live workbook, then tweaks one cell.",
+    "url": "https://en.wikipedia.org/wiki/List_of_largest_companies_by_revenue",
+    "title": "List of largest companies by revenue",
+    "sheetName": "Fortune500",
+    "headers": ["Rank", "Name", "Industry", "RevenueUSDBn"],
+    "rows": [
+      [1, "Amazon", "Retail", 716],
+      [2, "Walmart", "Retail", 713],
+      [3, "State Grid Corporation of China", "Electricity", 545],
+      [4, "Saudi Aramco", "Oil and gas", 480],
+      [5, "Apple", "Information technology", 416],
+      [6, "Alphabet", "Information technology", 402],
+      [7, "UnitedHealth Group", "Healthcare", 400],
+      [8, "Berkshire Hathaway", "Financials", 371]
+    ],
+    "distinctive": ["Amazon", "Walmart", "Saudi Aramco"]
+  },
+  "document": {
+    "job": "PM turns the Wikipedia OKR article into a multi-plate briefing, then rewrites the title.",
+    "url": "https://en.wikipedia.org/wiki/Objectives_and_key_results",
+    "title": "Objectives and key results",
+    "lead": "Framework used to define measurable goals and their outcomes. OKR is a goal-setting framework used by individuals, teams, and organizations to define measurable goals and track their outcomes.",
+    "aboutHeading": "Origin",
+    "about": "The development of OKR is generally attributed to Andrew Grove who introduced the approach to Intel in the 1970s and documented the framework in his 1983 book High Output Management.",
+    "skillsHeading": "Adoption",
+    "skills": "<li>John Doerr introduced OKRs to Google in 1999 after learning iMBOs at Intel.</li><li>Doerr published Measure What Matters in 2018.</li><li>Larry Page credited OKRs with 10× growth at Alphabet.</li>",
+    "principlesHeading": "Best practices",
+    "principles": "<li>Target about 70% success on aspirational key results.</li><li>Score on a 0.0 to 1.0 scale; 1.0 is expected for committed results.</li><li>Avoid business-as-usual wording such as help or consult.</li>",
+    "distinctive": ["Andrew Grove", "High Output Management", "Measure What Matters"]
+  },
+  "deck": {
+    "job": "BD turns the public Starship page into a 16:9 QBR deck, then tweaks the title slide.",
+    "url": "https://en.wikipedia.org/wiki/Starship_(SpaceX)",
+    "kicker": "SpaceX · QBR brief",
+    "title": "Starship launch vehicle",
+    "subtitle": "Fully reusable superheavy-lift vehicle in development at Starbase, Texas",
+    "visualTitle": "Super Heavy + Starship",
+    "visualBody": "Two stages, both powered by Raptor engines burning liquid methane and liquid oxygen. As of July 24, 2026, Starship has launched 13 times, with 8 successful flights.",
+    "pointsTitle": "Program facts",
+    "bullets": "<li>Successor to Falcon 9 and Falcon Heavy</li><li>Starship Human Landing System under NASA Artemis</li><li>First full stack launched April 20, 2023</li>",
+    "footer": "Source: Wikipedia · SpaceX Starship",
+    "distinctive": ["Super Heavy", "Raptor", "Starbase"]
+  }
+}

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>IdeaShell clone lab</title>
+    <style>
+      html, body { margin:0; height:100%; background:#fff; }
+      #host { width:100%; height:100%; border:0; }
+    </style>
+  </head>
+  <body>
+    <iframe id="host" title="ideashell-clone"></iframe>
+    <script type="module">
+      import { mountSiteMotion } from '../../../src/preview/siteMotion.js';
+
+      const html = await fetch('/artifacts/qa-ideashell-clone/painted.html').then((r) => r.text());
+      const frame = document.getElementById('host');
+      const boot = () => {
+        const doc = frame.contentDocument;
+        const handle = mountSiteMotion(doc, { reducedMotion: false });
+        window.__cloneLab = {
+          ready: true,
+          handle,
+          next() {
+            const hero = doc.querySelector('.hero [data-paw-carousel], [data-paw-carousel]');
+            const scope = hero?.closest?.('section, article, .hero') || hero?.parentElement || doc;
+            const btn = scope.querySelector('[data-paw-carousel-next]');
+            if (btn) {
+              btn.click();
+              return;
+            }
+            const Win = doc.defaultView;
+            if (hero && Win) {
+              hero.dispatchEvent(new Win.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+            }
+          },
+          scrollReveal() {
+            const el = doc.querySelector('[data-paw-motion], .never, #think, .talk');
+            el?.scrollIntoView?.({ block: 'center' });
+            const win = doc.defaultView;
+            win?.dispatchEvent?.(new Event('scroll'));
+            for (const io of win?._observers || []) io.trigger?.(true);
+          },
+          snapshot() {
+            const images = [...doc.images].slice(0, 16).map((img) => ({
+              alt: img.alt || '',
+              complete: img.complete,
+              naturalWidth: img.naturalWidth,
+              naturalHeight: img.naturalHeight,
+              aboveFold: img.getBoundingClientRect().top < 900
+            }));
+            const cards = [...doc.querySelectorAll('.devcard')]
+              .slice(0, 8)
+              .map((el) => {
+                const b = el.getBoundingClientRect();
+                return { x: b.x, y: b.y, w: b.width, h: b.height, active: el.classList.contains('paw-is-active') };
+              });
+            const hero = doc.querySelector('.hero [data-paw-carousel], [data-paw-carousel]');
+            const heroItems = hero
+              ? [...hero.querySelectorAll('[data-paw-carousel-item]')]
+              : [...doc.querySelectorAll('[data-paw-carousel-item]')];
+            const active = heroItems.findIndex((el) => el.classList.contains('paw-is-active'));
+            return {
+              title: doc.title,
+              scrollWidth: doc.documentElement.scrollWidth,
+              scrollHeight: doc.documentElement.scrollHeight,
+              images,
+              cards,
+              active,
+              revealed: [...doc.querySelectorAll('.paw-motion-in')].length
+            };
+          }
+        };
+      };
+      frame.addEventListener('load', boot, { once: true });
+      frame.srcdoc = html;
+    </script>
+  </body>
+</html>

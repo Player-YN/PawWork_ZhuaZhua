@@ -1,0 +1,72 @@
+{
+  "shell": "slides",
+  "themes": [
+    {
+      "id": "dawn",
+      "tokens": {
+        "paper": "#f7f4ef",
+        "ink": "#1a1614",
+        "muted": "#6b645c",
+        "accent": "#d97706"
+      }
+    }
+  ],
+  "frames": [
+    {
+      "id": "slide-ugly",
+      "w": 1920,
+      "h": 1080,
+      "nodes": [
+        {
+          "id": "title",
+          "type": "text",
+          "text": "Q3 Strategy",
+          "box": { "x": 80, "y": 48, "w": 720, "h": 64 },
+          "fontSize": 36,
+          "color": "#111111"
+        },
+        {
+          "id": "box-rose",
+          "type": "geo",
+          "geo": "rectangle",
+          "fillKind": "none",
+          "dash": "solid",
+          "color": "#e11d48",
+          "stroke": "#e11d48",
+          "strokeWidth": 2,
+          "box": { "x": 420, "y": 280, "w": 720, "h": 280 }
+        },
+        {
+          "id": "box-green",
+          "type": "geo",
+          "geo": "rectangle",
+          "fillKind": "none",
+          "dash": "solid",
+          "color": "#16a34a",
+          "stroke": "#16a34a",
+          "strokeWidth": 2,
+          "box": { "x": 500, "y": 320, "w": 700, "h": 260 }
+        },
+        {
+          "id": "box-blue",
+          "type": "geo",
+          "geo": "rectangle",
+          "fillKind": "none",
+          "dash": "solid",
+          "color": "#2563eb",
+          "stroke": "#2563eb",
+          "strokeWidth": 2,
+          "box": { "x": 460, "y": 360, "w": 680, "h": 240 }
+        },
+        {
+          "id": "bullets",
+          "type": "text",
+          "text": "• Point one about the market\n• Point two about the product\n• Point three about the team\n• Point four about the timeline",
+          "box": { "x": 80, "y": 780, "w": 1760, "h": 220 },
+          "fontSize": 20,
+          "color": "#222222"
+        }
+      ]
+    }
+  ]
+}

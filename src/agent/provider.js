@@ -1,0 +1,427 @@
+/**
+ * PageWand — OpenAI-compatible language model via Vercel AI SDK
+ * BYOK from active provider in chrome.storage; HTTPS inference only (no cloud agent orchestrator).
+ */
+
+import { createOpenAICompatible } from './vnext/adapters/vendor/ai-sdk-loader.mjs';
+import { loadLlmSettings, DEFAULT_BASE } from './llm.js';
+import { resolveModelName } from './prompts.js';
+import { isAbortLike, toAbortError } from './vnext/host/userStop.js';
+
+/**
+ * Fields many OpenAI-compatible proxies (Groq, etc.) reject on re-sent history.
+ * AI SDK may re-inject reasoning as reasoning_content during multi-step tool loops.
+ */
+const STRIP_MESSAGE_KEYS = new Set([
+  'reasoning_content',
+  'reasoning',
+  'reasoning_details',
+  'providerMetadata',
+  'provider_metadata',
+  'providerOptions',
+  'provider_options'
+]);
+
+/**
+ * Strip non-standard / rejected fields from an OpenAI-style chat message.
+ * Keeps role, content, name, tool_calls, tool_call_id, function_call.
+ * @param {object} msg
+ * @returns {object}
+ */
+export function sanitizeOpenAiMessage(msg, opts = {}) {
+  if (!msg || typeof msg !== 'object') return msg;
+  const keepReasoning = opts.keepReasoning === true;
+  const out = {};
+  for (const [k, v] of Object.entries(msg)) {
+    if (!keepReasoning && STRIP_MESSAGE_KEYS.has(k)) continue;
+    if (keepReasoning && (k === 'providerMetadata' || k === 'provider_metadata' || k === 'providerOptions' || k === 'provider_options')) {
+      continue;
+    }
+    out[k] = v;
+  }
+  if (Array.isArray(out.content)) {
+    out.content = out.content
+      .filter((part) => {
+        if (!part || typeof part !== 'object') return true;
+        const t = part.type;
+        if (keepReasoning) return t !== 'reasoning-delta';
+        return t !== 'reasoning' && t !== 'reasoning-delta';
+      })
+      .map((part) => {
+        if (!part || typeof part !== 'object') return part;
+        const cleaned = { ...part };
+        delete cleaned.providerMetadata;
+        delete cleaned.providerOptions;
+        delete cleaned.provider_metadata;
+        delete cleaned.provider_options;
+        return cleaned;
+      });
+  }
+  return out;
+}
+
+function filePartToDataUrl(part) {
+  if (!part || typeof part !== 'object') return null;
+  const mediaType = String(part.mediaType || part.mimeType || 'image/jpeg').split(';')[0].trim();
+  if (!mediaType.startsWith('image/')) return null;
+  const raw =
+    (typeof part.data === 'object' && part.data && part.data.data != null
+      ? part.data.data
+      : null) ??
+    part.data ??
+    part.image;
+  if (typeof raw !== 'string' || raw.length < 32) return null;
+  if (raw.startsWith('data:image/')) return raw;
+  return `data:${mediaType};base64,${raw}`;
+}
+
+function extractImagesFromToolContent(content) {
+  const images = [];
+  const texts = [];
+  if (typeof content !== 'string') {
+    return { content, images };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return { content, images };
+  }
+  if (!Array.isArray(parsed)) {
+    return { content, images };
+  }
+  let lifted = false;
+  for (const p of parsed) {
+    if (!p || typeof p !== 'object') continue;
+    if (p.type === 'text' && p.text) {
+      texts.push(String(p.text));
+      continue;
+    }
+    if (p.type === 'file' || p.type === 'file-data' || p.type === 'image') {
+      const url = filePartToDataUrl(p);
+      if (url) {
+        images.push({ type: 'image_url', image_url: { url } });
+        lifted = true;
+      }
+    }
+  }
+  if (!lifted) return { content, images: [] };
+  return {
+    content: texts.join('\n') || '{"ok":true,"hasImage":true}',
+    images
+  };
+}
+
+/**
+ * OpenAI-compatible chat maps tool `content` file parts to JSON.stringify(value).
+ * Gemini/OpenRouter then treat that base64 as *text*, not pixels (~350k tokens/photo
+ * and the model hallucinates). Lift images onto a user message after the tool batch.
+ * @param {object[]} messages
+ * @returns {object[]}
+ */
+export function liftToolResultImages(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return messages;
+  const out = [];
+  let pending = [];
+  const flush = () => {
+    if (!pending.length) return;
+    out.push({
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: 'Bound image pixels from inspect. Describe these pictures, not their URLs.'
+        },
+        ...pending
+      ]
+    });
+    pending = [];
+  };
+  for (const msg of messages) {
+    if (msg && msg.role === 'tool') {
+      const extracted = extractImagesFromToolContent(msg.content);
+      out.push(extracted.images.length ? { ...msg, content: extracted.content } : msg);
+      if (extracted.images.length) pending.push(...extracted.images);
+      continue;
+    }
+    flush();
+    out.push(msg);
+  }
+  flush();
+  return out;
+}
+
+/**
+ * Parse JSON chat body and strip unsupported message fields before HTTPS send.
+ * Safe no-op for non-JSON / non-chat bodies.
+ * @param {RequestInit} [init]
+ * @returns {RequestInit}
+ */
+function decodeRequestBody(raw) {
+  if (raw == null) return null;
+  if (typeof raw === 'string') return raw;
+  try {
+    if (raw instanceof Uint8Array) return new TextDecoder().decode(raw);
+    if (raw instanceof ArrayBuffer) return new TextDecoder().decode(raw);
+    if (ArrayBuffer.isView(raw)) {
+      return new TextDecoder().decode(raw);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export function stripUnsupportedFieldsFromRequestInit(init = {}, reasoning = null, opts = {}) {
+  if (!init || init.body == null) return init;
+
+  const raw = decodeRequestBody(init.body);
+  if (raw == null) return init;
+
+  try {
+    const body = JSON.parse(raw);
+    if (!body || typeof body !== 'object' || !Array.isArray(body.messages)) {
+      return init;
+    }
+    const keepReasoning = opts.keepReasoning === true;
+    body.messages = liftToolResultImages(
+      body.messages.map((m) => sanitizeOpenAiMessage(m, { keepReasoning }))
+    );
+    const cfg = openRouterReasoningBody(reasoning);
+    if (cfg) body.reasoning = cfg;
+    return { ...init, body: JSON.stringify(body) };
+  } catch {
+    return init;
+  }
+}
+
+const REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'none']);
+
+/**
+ * OpenRouter unified thinking body. Switch off → omit (do not send effort:none;
+ * some models reject disable). Switch on → reasoning.effort (default medium).
+ * @param {{ enabled?: boolean, effort?: string }|null|undefined} reasoning
+ * @returns {{ effort: string }|null}
+ */
+export function openRouterReasoningBody(reasoning) {
+  if (!reasoning || reasoning.enabled !== true) return null;
+  const effort = String(reasoning.effort || '').toLowerCase();
+  if (effort && REASONING_EFFORTS.has(effort) && effort !== 'none') return { effort };
+  return { enabled: true };
+}
+
+/**
+ * Inject OpenRouter `reasoning` onto a chat/completions JSON body.
+ * @param {RequestInit} [init]
+ * @param {{ enabled?: boolean, effort?: string }|null} [reasoning]
+ * @returns {RequestInit}
+ */
+export function applyChatReasoningToInit(init = {}, reasoning) {
+  return stripUnsupportedFieldsFromRequestInit(init, reasoning);
+}
+
+/**
+ * Build a LanguageModel for streamText / ToolLoopAgent.
+ * Uses the **active** OpenAI-compatible provider (baseURL + apiKey + model).
+ * @param {{ model?: string, reasoning?: { enabled?: boolean, effort?: string } }} [opts]
+ * @returns {Promise<{ model: import('ai').LanguageModel, settings: object, modelId: string }>}
+ */
+export async function createPageWandLanguageModel(opts = {}) {
+  const settings = await loadLlmSettings();
+  if (!settings.apiKey) {
+    const err = new Error('NO_API_KEY');
+    err.code = 'NO_API_KEY';
+    throw err;
+  }
+
+  const modelId = resolveModelName(opts.model || settings.model);
+  const baseURL = settings.apiBase || DEFAULT_BASE;
+  const providerName =
+    (settings.providerName && String(settings.providerName).trim()) || 'pagewand';
+
+  const provider = createOpenAICompatible({
+    name: providerName,
+    apiKey: settings.apiKey,
+    baseURL,
+    includeUsage: true,
+    fetch: createExtensionFetch({ reasoning: opts.reasoning || null })
+  });
+
+  return {
+    model: provider(modelId),
+    settings,
+    modelId
+  };
+}
+
+/**
+ * Fetch for AI SDK. Side Panel has host_permissions → direct HTTPS works.
+ * Falls back to background non-stream proxy only for non-streaming POSTs when direct fails.
+ * OpenRouter keeps reasoning / reasoning_details; Groq-class hosts strip them.
+ * @param {{ reasoning?: { enabled?: boolean, effort?: string }|null }} [opts]
+ * @returns {typeof fetch}
+ */
+export function createExtensionFetch(opts = {}) {
+  return async function pagewandFetch(input, init = {}) {
+    const url = typeof input === 'string' ? input : input?.url || '';
+    const keepReasoning = /openrouter\.ai/i.test(String(url));
+    const cleanedInit = stripUnsupportedFieldsFromRequestInit(init, opts.reasoning || null, {
+      keepReasoning
+    });
+    try {
+      const res = await fetch(input, cleanedInit);
+      return keepReasoning ? liftOpenRouterReasoningResponse(res) : res;
+    } catch (directErr) {
+      if (isAbortLike(directErr, cleanedInit?.signal)) throw toAbortError(directErr);
+      console.warn('[PageWand] direct fetch failed, trying background proxy:', directErr?.message);
+      return proxyFetchAsResponse(input, cleanedInit, directErr);
+    }
+  };
+}
+
+function detailsPlainText(details) {
+  if (!Array.isArray(details)) return '';
+  return details
+    .map((d) => {
+      if (!d || typeof d !== 'object') return '';
+      if (typeof d.text === 'string') return d.text;
+      if (typeof d.summary === 'string') return d.summary;
+      return '';
+    })
+    .filter(Boolean)
+    .join('');
+}
+
+/**
+ * Gemini/OpenRouter often put plaintext in reasoning_details[].text and leave
+ * delta.reasoning empty. AI SDK only maps reasoning / reasoning_content strings.
+ */
+export function liftOpenRouterReasoningPayload(body) {
+  if (!body || typeof body !== 'object' || !Array.isArray(body.choices)) return body;
+  return {
+    ...body,
+    choices: body.choices.map((choice) => {
+      if (!choice || typeof choice !== 'object') return choice;
+      const next = { ...choice };
+      if (next.delta && typeof next.delta === 'object') {
+        const d = { ...next.delta };
+        const fromDetails = detailsPlainText(d.reasoning_details);
+        if (fromDetails && typeof d.reasoning !== 'string' && typeof d.reasoning_content !== 'string') {
+          d.reasoning = fromDetails;
+        }
+        next.delta = d;
+      }
+      if (next.message && typeof next.message === 'object') {
+        const m = { ...next.message };
+        const fromDetails = detailsPlainText(m.reasoning_details);
+        if (fromDetails && typeof m.reasoning !== 'string' && typeof m.reasoning_content !== 'string') {
+          m.reasoning = fromDetails;
+        }
+        next.message = m;
+      }
+      return next;
+    })
+  };
+}
+
+function liftOpenRouterReasoningResponse(res) {
+  if (!res || typeof res !== 'object') return res;
+  const ct = String(res.headers?.get?.('content-type') || '');
+  if (ct.includes('text/event-stream') && res.body) {
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let pending = '';
+    const stream = res.body.pipeThrough(
+      new TransformStream({
+        transform(chunk, controller) {
+          pending += decoder.decode(chunk, { stream: true });
+          const lines = pending.split('\n');
+          pending = lines.pop() || '';
+          for (const line of lines) {
+            controller.enqueue(encoder.encode(`${liftSseLine(line)}\n`));
+          }
+        },
+        flush(controller) {
+          if (pending) controller.enqueue(encoder.encode(liftSseLine(pending)));
+        }
+      })
+    );
+    return new Response(stream, { status: res.status, statusText: res.statusText, headers: res.headers });
+  }
+  return res;
+}
+
+function liftSseLine(line) {
+  if (!line.startsWith('data:')) return line;
+  const raw = line.slice(5).trim();
+  if (!raw || raw === '[DONE]') return line;
+  try {
+    const parsed = JSON.parse(raw);
+    return `data: ${JSON.stringify(liftOpenRouterReasoningPayload(parsed))}`;
+  } catch {
+    return line;
+  }
+}
+
+/**
+ * Reconstruct a Response via background `llm_proxy_fetch` (JSON body, non-stream).
+ * Used only when side-panel fetch throws (rare with host_permissions).
+ */
+async function proxyFetchAsResponse(input, init, directErr) {
+  const url = typeof input === 'string' ? input : input?.url || String(input);
+  const method = init?.method || 'POST';
+  const headers = {};
+  if (init?.headers) {
+    const h = init.headers;
+    if (h instanceof Headers) {
+      h.forEach((v, k) => {
+        headers[k] = v;
+      });
+    } else if (Array.isArray(h)) {
+      for (const [k, v] of h) headers[k] = v;
+    } else {
+      Object.assign(headers, h);
+    }
+  }
+
+  let body = init?.body ?? null;
+  if (body && typeof body !== 'string') {
+    // AI SDK may pass Uint8Array / ReadableStream — try text decode
+    if (body instanceof Uint8Array) {
+      body = new TextDecoder().decode(body);
+    } else if (typeof body === 'object' && typeof body.toString === 'function') {
+      body = body.toString();
+    }
+  }
+
+  // Streaming body cannot be reconstructed via one-shot proxy
+  if (init?.body && typeof init.body === 'object' && typeof init.body.getReader === 'function') {
+    throw directErr || new Error('Streaming request body not supported by background proxy');
+  }
+
+  try {
+    const res = await chrome.runtime.sendMessage({
+      action: 'llm_proxy_fetch',
+      url,
+      method,
+      headers,
+      body
+    });
+    if (!res) throw new Error(directErr?.message || 'Background proxy returned empty');
+    if (res.error && !res.text && !res.json) {
+      throw new Error(res.error);
+    }
+    const text =
+      res.text != null
+        ? res.text
+        : res.json != null
+          ? JSON.stringify(res.json)
+          : '';
+    return new Response(text, {
+      status: res.status || (res.ok ? 200 : 500),
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (proxyErr) {
+    throw directErr || proxyErr;
+  }
+}

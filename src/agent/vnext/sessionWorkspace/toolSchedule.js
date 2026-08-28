@@ -1,0 +1,43 @@
+/**
+ * Model-visible tool set is always the full session surface.
+ * Inventory is a targeting index, not a progressive-disclosure gate.
+ */
+
+import { SESSION_TOOL_NAMES } from './canvasInventory.js';
+
+/**
+ * @param {{ sheet?: string[], deck?: string[], poster?: string[], doc?: string[], web?: string[] }} [inventory]
+ * @param {{ tabUnfocused?: boolean }} [runtime]
+ * @returns {string[]}
+ */
+export function scheduleActiveToolNames(inventory = {}, runtime = {}) {
+  void inventory;
+  void runtime.tabUnfocused;
+  return [...SESSION_TOOL_NAMES];
+}
+
+/**
+ * @param {Record<string, any>} tools
+ * @param {object} [inventory]
+ * @param {{ tabUnfocused?: boolean }} [runtime]
+ */
+export function scheduleSessionTools(tools, inventory, runtime = {}) {
+  const names = scheduleActiveToolNames(inventory, runtime);
+  /** @type {Record<string, any>} */
+  const out = {};
+  for (const n of names) {
+    if (tools && tools[n]) out[n] = tools[n];
+  }
+  return out;
+}
+
+/**
+ * prepareStep keeps the same always-on list each hop (no mid-turn hide/reveal).
+ * @param {{ store: object, sessionId: string, fs?: object, tools: Record<string, any> }} env
+ */
+export function makeOfficePrepareStep(env) {
+  void env;
+  return async function prepareStep() {
+    return { activeTools: [...SESSION_TOOL_NAMES] };
+  };
+}

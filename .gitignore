@@ -1,0 +1,75 @@
+# Dependencies — never commit (install with npm install)
+node_modules/
+
+# Build / cache
+dist/
+build/
+.cache/
+*.tsbuildinfo
+.vite/
+.turbo/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS / editor
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.swp
+*~
+
+# Logs & coverage
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+coverage/
+.nyc_output/
+
+# Test / temp
+tmp/
+temp/
+*.tmp
+
+# Tauri / Rust (if present)
+src-tauri/target/
+
+# Local agent / session dumps (optional safety)
+*.trajectory.json
+pagewand-trajectory-*.json
+
+# Local Chrome / extension integration profiles
+chrome-profile*/
+playwright-report/
+test-results/
+*.crx
+
+# Imported worktree pointers and platform scratch paths
+.git-worktree-pointer.txt
+C:\Users\*
+
+# pack / CI output
+artifacts/
+
+# Generated Univer + SheetJS bundle (npm run build:sheet)
+src/preview/vendor/sheet-runtime.js
+src/preview/vendor/sheet-runtime.css
+
+# Generated Univer Docs bundle (npm run build:docs)
+src/preview/vendor/docs-runtime.js
+src/preview/vendor/docs-runtime.css
+
+# Generated tldraw Design/Slides bundle (npm run build:design)
+src/preview/vendor/design-runtime.js
+src/preview/vendor/design-runtime.css
+

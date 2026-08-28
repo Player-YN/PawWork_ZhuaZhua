@@ -1,0 +1,19 @@
+{
+  "shell": "design",
+  "frames": [
+    {
+      "id": "legacy-poster",
+      "w": 960,
+      "h": 1440,
+      "nodes": [
+        { "type": "rect", "x": 0, "y": 0, "w": 960, "h": 1440, "fill": "#ffffff" },
+        "plain string node",
+        { "type": "text", "text": "Hello without a box" },
+        { "id": "img1", "type": "image", "src": "https://example.com/a.png", "box": { "x": 40, "y": 200, "w": 400, "h": 300 } },
+        { "type": "geo", "geo": "rectangle", "box": { "x": 40, "y": 540, "w": 200, "h": 80 } },
+        null,
+        { "type": "unknown" }
+      ]
+    }
+  ]
+}

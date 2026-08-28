@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en" data-paw-kind="site">
+<head>
+  <meta charset="utf-8" />
+  <title>IdeaShell motion fixture</title>
+  <style>
+    :root { color-scheme: light; --ink:#141218; --muted:#5c5660; --line:#ece8ee; --accent:#f43f8c; }
+    body { margin:0; font-family:Georgia, "Times New Roman", serif; color:var(--ink); background:#faf7f4; }
+    .hero { padding:48px 24px 24px; max-width:960px; margin:0 auto; }
+    .hero h1 { font-size:2.4rem; letter-spacing:-0.03em; margin:0 0 12px; }
+    .kicker { letter-spacing:0.14em; text-transform:uppercase; font-size:12px; color:var(--muted); }
+    [data-hero-carousel] { position:relative; overflow:hidden; border:1px solid var(--line); border-radius:20px; background:#fff; }
+    [data-hero-track] { display:flex; }
+    [data-hero-item] { flex:0 0 100%; padding:36px 28px 72px; min-height:220px; }
+    [data-hero-item] h2 { margin:0 0 8px; font-size:1.6rem; }
+    [data-hero-prev], [data-hero-next], [data-hero-toggle] {
+      position:absolute; bottom:16px; border:1px solid var(--line); background:#fff; border-radius:999px; padding:8px 14px;
+    }
+    [data-hero-prev] { left:16px; } [data-hero-next] { left:92px; } [data-hero-toggle] { right:16px; }
+    [data-hero-progress] { position:absolute; left:0; right:0; bottom:0; height:4px; background:#f1edf2; }
+    [data-hero-progress] span { display:block; height:100%; width:33%; background:var(--accent); }
+    section { max-width:800px; margin:0 auto; padding:64px 24px; }
+    .cards { display:grid; gap:16px; }
+    .card { padding:20px; border:1px solid var(--line); border-radius:16px; background:#fff; }
+    .marquee { overflow:hidden; border-block:1px solid var(--line); padding:12px 0; }
+    .tabs [role="tab"] { margin-right:8px; }
+    .accordion-item { border-bottom:1px solid var(--line); }
+    .parallax-band { height:160px; background:linear-gradient(120deg,#fde7f1,#fff); display:flex; align-items:center; justify-content:center; }
+    @keyframes drift { from { letter-spacing:0; } to { letter-spacing:0.12em; } }
+    .css-alive { animation: drift 2s ease-in-out infinite alternate; }
+    a.evil { color:var(--accent); }
+  </style>
+  <script>window.__guestScriptRan = true;</script>
+</head>
+<body>
+  <header class="hero">
+    <p class="kicker css-alive">IdeaShell</p>
+    <h1>Three rooms, one quiet carousel</h1>
+    <div data-hero-carousel data-interval="4000">
+      <div data-hero-track>
+        <article data-hero-item><h2>Atlas</h2><p>Maps for the week.</p></article>
+        <article data-hero-item><h2>Harbor</h2><p>Notes that stay put.</p></article>
+        <article data-hero-item><h2>Lantern</h2><p>A smaller light.</p></article>
+      </div>
+      <button type="button" data-hero-prev aria-label="Previous">‹</button>
+      <button type="button" data-hero-next aria-label="Next">›</button>
+      <button type="button" data-hero-toggle aria-label="Pause">toggle</button>
+      <div data-hero-progress role="progressbar"><span></span></div>
+    </div>
+  </header>
+  <section data-stagger="90">
+    <div class="cards">
+      <article class="card reveal">First reveal</article>
+      <article class="card fade-up">Second reveal</article>
+      <article class="card fade-down">Third reveal</article>
+    </div>
+  </section>
+  <div class="marquee" data-marquee data-speed="36">Shipping · Quiet type · No guest JS · </div>
+  <div class="parallax-band" data-parallax data-paw-parallax-amount="10">Parallax band</div>
+  <section class="tabs" role="tablist">
+    <button type="button" role="tab" aria-controls="panel-a" aria-selected="true">Ink</button>
+    <button type="button" role="tab" aria-controls="panel-b">Paper</button>
+    <div id="panel-a" role="tabpanel">Ink panel</div>
+    <div id="panel-b" role="tabpanel" hidden>Paper panel</div>
+  </section>
+  <section class="accordion" data-accordion>
+    <div class="accordion-item" data-accordion-item>
+      <button type="button" data-accordion-trigger aria-expanded="false" aria-controls="acc-1">What runs?</button>
+      <div id="acc-1" data-accordion-panel hidden>Packaged data-paw motion only.</div>
+    </div>
+  </section>
+  <p><a class="evil" href="javascript:window.__jsUrlRan=true" onclick="window.__onclickRan=true">bad link</a></p>
+  <button type="button" onclick="window.__btnRan=true">explode</button>
+  <canvas id="webgl-trap"></canvas>
+  <script type="module">window.__guestModuleRan = true;</script>
+</body>
+</html>

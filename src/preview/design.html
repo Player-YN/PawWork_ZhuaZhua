@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Paw Work Design</title>
+    <link rel="stylesheet" href="../sidepanel/css/tokens.css" />
+    <link rel="stylesheet" href="host-bar.css" />
+    <link rel="stylesheet" href="officeHelp.css" />
+    <link rel="stylesheet" href="workLock.css" />
+    <link rel="stylesheet" href="vendor/design-runtime.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #f5f5f5;
+        color: #1a1a1a;
+        font-family: system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      #bar.host-file-strip {
+        background: #ffffff;
+        color: #1a1a1a;
+        border-bottom-color: #e5e5e5;
+      }
+      #workspace {
+        display: flex;
+        position: relative;
+        flex: 1;
+        min-height: 0;
+      }
+      #toolStrip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 6px 12px;
+        border-bottom: 1px solid #e5e5e5;
+        background: #fff;
+      }
+      #toolStrip[hidden] { display: none; }
+      #toolStrip button {
+        height: 28px;
+        padding: 0 10px;
+        border: 1px solid #d9d9d9;
+        border-radius: 6px;
+        background: #fff;
+        color: #1a1a1a;
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      #toolStrip button:hover { background: #f5f5f5; }
+      #pagesBlock {
+        display: none;
+        flex: 0 0 180px;
+        border-right: 1px solid #e5e5e5;
+        background: #fff;
+        padding: 8px;
+        font-size: 12px;
+      }
+      body[data-shell="design"] #pagesBlock { display: block; }
+      #filmstrip {
+        display: none;
+        flex: 0 0 96px;
+        flex-direction: column;
+        gap: 6px;
+        padding: 8px;
+        overflow: auto;
+        border-right: 1px solid #e5e5e5;
+        background: #fafafa;
+      }
+      body[data-shell="slides"] #filmstrip { display: flex; }
+      #canvasCol {
+        position: relative;
+        flex: 1;
+        min-width: 0;
+        min-height: 0;
+      }
+      #engine {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      #notesDock {
+        display: none;
+        border-top: 1px solid #e5e5e5;
+        background: #fff;
+        padding: 8px;
+      }
+      body[data-shell="slides"] #notesDock { display: block; }
+      #slideNotes { width: 100%; min-height: 48px; }
+      #pagesBlock .layers-title { font-size: 11px; color: #b3b3b3; margin: 0 0 6px; }
+      #pagesBlock { overflow: auto; min-height: 0; }
+      #layerList { list-style: none; margin: 0; padding: 0; }
+      #layerList li {
+        display: flex; align-items: center; gap: 6px;
+        padding: 4px 8px; cursor: pointer; border-radius: 4px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        font-size: 12px;
+      }
+      #layerList li:hover { background: #f0f7ff; }
+      #layerList li.is-on { background: #e5f2ff; }
+      #layerList li .twist {
+        width: 14px; height: 14px; flex: 0 0 14px; padding: 0; border: 0;
+        background: transparent; color: #6b6b6b; cursor: pointer; font-size: 10px; line-height: 1;
+      }
+      #layerList li .lab { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+      #layerList li[data-kind="frame"] .lab::before { content: '# '; color: #6b6b6b; }
+      #layerList li[data-kind="group"] .lab::before { content: '▢ '; color: #6b6b6b; }
+      #layerList li[data-kind="text"] .lab::before { content: 'T '; color: #6b6b6b; }
+      #layerList li[data-kind="image"] .lab::before { content: '▣ '; color: #6b6b6b; }
+      #engine .tl-container,
+      #engine .paw-engine-host { width: 100%; height: 100%; }
+      #engine .tl-loading {
+        display: none !important;
+        pointer-events: none !important;
+        background: transparent !important;
+      }
+      #engine .tl-canvas {
+        content-visibility: visible !important;
+      }
+      #filmstrip .pw-film-tools {
+        display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px;
+      }
+      #filmstrip .pw-film-tools button,
+      #filmstrip .pw-film-item {
+        display: block; width: 100%; text-align: left; font: inherit; font-size: 11px;
+        padding: 6px; margin: 0;
+        border: 1px solid var(--border, #e5e5e5);
+        border-radius: var(--radius-xs, 6px);
+        background: var(--bg-elevated, #fff);
+        cursor: pointer;
+        color: var(--text, #1a1a1a);
+      }
+      #filmstrip .pw-film-tools button { width: calc(50% - 2px); text-align: center; }
+      #filmstrip .pw-film-item {
+        margin: 0 0 6px;
+        cursor: grab;
+        touch-action: none;
+        position: relative;
+        transition: border-color var(--dur-1, 100ms) var(--ease-out, ease), background var(--dur-1, 100ms) var(--ease-out, ease), opacity var(--dur-1, 100ms) var(--ease-out, ease);
+      }
+      #filmstrip .pw-film-item:focus-visible {
+        outline: 2px solid var(--accent, #d97706);
+        outline-offset: 1px;
+        box-shadow: 0 0 0 3px var(--accent-ring, rgba(217, 119, 6, 0.28));
+      }
+      #filmstrip .pw-film-item.is-on,
+      #filmstrip .pw-film-tools button.is-on {
+        border-color: var(--accent, #d97706);
+        background: var(--accent-soft, rgba(217, 119, 6, 0.12));
+      }
+      #filmstrip .pw-film-item.is-dragging {
+        opacity: 0.45;
+        cursor: grabbing;
+        background: var(--accent-soft, rgba(217, 119, 6, 0.12));
+      }
+      #filmstrip .pw-film-item.is-drop-before::before,
+      #filmstrip .pw-film-item.is-drop-after::after {
+        content: '';
+        position: absolute;
+        left: 4px;
+        right: 4px;
+        height: 2px;
+        border-radius: 1px;
+        background: var(--accent, #d97706);
+        pointer-events: none;
+      }
+      #filmstrip .pw-film-item.is-drop-before::before { top: -4px; }
+      #filmstrip .pw-film-item.is-drop-after::after { bottom: -4px; }
+      #filmstrip .pw-film-list { display: flex; flex-direction: column; min-height: 0; }
+      #filmstrip .pw-sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #filmstrip .pw-film-item { transition: none; }
+        #presentFx .pw-present-layer { transition: none !important; animation: none !important; }
+      }
+      #presentFx {
+        position: absolute;
+        inset: 0;
+        z-index: 30;
+        pointer-events: none;
+        overflow: hidden;
+        background: transparent;
+      }
+      body[data-present="1"] #engine { pointer-events: none; }
+      body[data-present="1"] #presentFx { pointer-events: auto; }
+      #presentFx[hidden] { display: none !important; }
+      #presentFx .pw-present-layer {
+        position: absolute;
+        inset: 0;
+        background-position: center;
+        background-repeat: no-repeat;
+        background-size: contain;
+        will-change: opacity, transform;
+      }
+      body[data-present="1"] #bar,
+      body[data-present="1"] #toolStrip,
+      body[data-present="1"] #pagesBlock,
+      body[data-present="1"] #filmstrip,
+      body[data-present="1"] #notesDock { display: none !important; }
+      body[data-present="1"] #workspace { height: 100%; }
+      body[data-present="1"] .tlui-layout { display: none !important; }
+      #insertMenu {
+        position: fixed;
+        inset: unset;
+        top: 48px;
+        right: 12px;
+        left: auto;
+        bottom: auto;
+        width: max-content;
+        min-width: 180px;
+        max-height: min(320px, 70vh);
+        overflow: auto;
+        z-index: 40;
+        background: #fff;
+        color: #1a1a1a;
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        padding: 4px;
+        box-shadow: 0 8px 24px rgba(0,0,0,.12);
+      }
+      #insertMenu button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: 0;
+        background: transparent;
+        color: #1a1a1a;
+        padding: 6px 10px;
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+      }
+      #insertMenu button:hover { background: #f5f5f5; }
+      #insertMenu .pw-insert-empty { padding: 8px 10px; font-size: 12px; color: #6b6b6b; }
+      #bar.host-file-strip {
+        overflow: hidden;
+        max-height: 48px;
+        z-index: 5;
+      }
+      #workspace { z-index: 0; isolation: isolate; min-height: 0; }
+      #exportMenu {
+        position: fixed;
+        inset: unset;
+        top: 48px;
+        right: 12px;
+        left: auto;
+        bottom: auto;
+        width: max-content;
+        min-width: 148px;
+        height: max-content;
+        max-height: min(240px, 70vh);
+        z-index: 40;
+        background: #fff;
+        color: #1a1a1a;
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        padding: 4px;
+        box-shadow: 0 8px 24px rgba(0,0,0,.12);
+      }
+      #exportMenu button {
+        display: block;
+        width: 100%;
+        height: 28px;
+        min-height: 28px;
+        text-align: left;
+        border: 0;
+        background: transparent;
+        color: #1a1a1a;
+        padding: 6px 10px;
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+      }
+      #exportMenu button:hover { background: #f5f5f5; }
+      .host-file-actions { position: relative; }
+    </style>
+  </head>
+  <body data-theme="light">
+    <div id="bar" class="host-file-strip">
+      <span id="title">Paw Work Design</span>
+      <span id="status"></span>
+      <span class="sp"></span>
+      <span class="host-file-actions">
+        <button type="button" class="primary" data-act="save" id="saveBtn">保存</button>
+        <button type="button" data-act="insert" id="insertBtn">插入图片</button>
+        <button type="button" data-act="download" id="downloadBtn">下载</button>
+        <button type="button" class="paw-help-btn" data-act="help" id="helpBtn" aria-label="快捷键" title="快捷键">?</button>
+        <div id="insertMenu" popover="auto"></div>
+        <div id="exportMenu" popover="auto">
+          <button type="button" data-export="png">PNG</button>
+          <button type="button" data-export="svg">SVG</button>
+          <button type="button" data-export="pdf">PDF</button>
+          <button type="button" data-export="pptx">PPTX</button>
+          <button type="button" data-export="json">JSON</button>
+        </div>
+      </span>
+    </div>
+    <div id="toolStrip" hidden></div>
+    <div id="workspace">
+      <aside id="pagesBlock">
+        <div class="layers-title">Layers</div>
+        <ol id="layerList"></ol>
+      </aside>
+      <aside id="filmstrip" hidden role="region" aria-label="幻灯片胶片条"></aside>
+      <div id="canvasCol">
+        <div id="engine"></div>
+        <div id="presentFx" hidden aria-hidden="true"></div>
+        <div id="notesDock" hidden>
+          <textarea id="slideNotes" placeholder="Speaker notes"></textarea>
+        </div>
+      </div>
+    </div>
+    <script src="canvas-readback-hint.js"></script>
+    <script src="workLock.js"></script>
+    <script type="module" src="design.js"></script>
+  </body>
+</html>

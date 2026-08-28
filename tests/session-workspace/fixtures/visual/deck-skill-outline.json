@@ -1,0 +1,8 @@
+{
+  "op": "createScene",
+  "kind": "deck",
+  "themeId": "ink-rose",
+  "artifact": "one",
+  "frames": 2,
+  "forbid": ["box", "nodes", "x", "y", "w", "h"]
+}

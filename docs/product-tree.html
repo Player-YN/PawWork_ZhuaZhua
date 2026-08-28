@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>爪爪 · 产品主线思维导图</title>
+  <style>
+    :root {
+      --void: #070709;
+      --paper: #101014;
+      --card: #18181e;
+      --card-2: #1f1f27;
+      --line: rgba(255,255,255,.1);
+      --ink: #f4f1f3;
+      --mute: #b4abb3;
+      --faint: #7a727a;
+      --rose: #f43f8c;
+      --amber: #fbbf24;
+      --green: #34d399;
+      --violet: #c4b5fd;
+      --font: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+      --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--void); color: var(--ink); font-family: var(--font); overflow: hidden; }
+
+    .bar {
+      position: fixed; inset: 0 0 auto 0; z-index: 20;
+      display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+      padding: 10px 16px 18px;
+      background: linear-gradient(to bottom, #070709 0%, rgba(7,7,9,.86) 62%, transparent);
+    }
+    .kicker { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--mute); font-weight: 700; }
+    .kicker i { display: inline-block; width: 7px; height: 7px; border-radius: 99px; background: var(--rose); margin-right: 8px; }
+    h1 { font-size: 16px; margin: 0; font-weight: 700; }
+    .north { font-family: var(--mono); font-size: 11px; color: var(--rose); }
+    .grow { flex: 1; }
+    .hint { color: var(--faint); font-size: 12px; }
+    button.tool {
+      background: var(--card); color: var(--ink); border: 1px solid var(--line);
+      border-radius: 9px; height: 30px; padding: 0 12px; cursor: pointer; font-size: 12px;
+    }
+    button.tool:hover { border-color: rgba(244,63,140,.45); }
+
+    #viewport {
+      position: absolute; inset: 0;
+      cursor: grab;
+      background-image:
+        linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+      background-size: 32px 32px;
+      touch-action: none;
+    }
+    #viewport.grabbing { cursor: grabbing; }
+    #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+    #links { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+    #links path { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: .85; }
+
+    .node {
+      position: absolute;
+      width: 228px;
+      transform: translate(-50%, -50%);
+      padding: 11px 14px 12px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 10px 28px rgba(0,0,0,.38);
+      cursor: grab;
+      user-select: none;
+      white-space: normal;
+      word-break: normal;
+      overflow-wrap: anywhere;
+    }
+    .node::before {
+      content: "";
+      position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px;
+      border-radius: 3px; background: rgba(255,255,255,.16);
+    }
+    .node.root { width: 280px; padding: 18px 16px; text-align: center; background: #1b1419; border-color: rgba(244,63,140,.5); box-shadow: 0 0 0 5px rgba(244,63,140,.12), 0 18px 40px rgba(0,0,0,.5); }
+    .node.root::before { display: none; }
+    .node.judge::before { background: var(--amber); }
+    .node.bind::before, .node.root { }
+    .node.bind::before { background: var(--rose); }
+    .node.out::before { background: var(--green); }
+    .node.left-over::before { background: var(--violet); }
+    .node.leaf { background: var(--card-2); width: 216px; }
+    .node:hover { border-color: rgba(244,63,140,.42); }
+    .node.active { border-color: var(--rose); box-shadow: 0 0 0 3px rgba(244,63,140,.22), 0 12px 28px rgba(0,0,0,.4); }
+    .node .t { font-size: 13.5px; font-weight: 700; line-height: 1.35; color: var(--ink); }
+    .node.root .t { font-size: 20px; letter-spacing: -.03em; }
+    .node .s { margin-top: 5px; font-size: 12px; color: var(--mute); line-height: 1.45; }
+    .node.root .s { color: var(--rose); font-family: var(--mono); font-size: 11.5px; }
+    .node .kids {
+      position: absolute; top: 50%; width: 18px; height: 18px; margin-top: -9px;
+      border-radius: 99px; background: #0d0d10; border: 1px solid var(--line);
+      font-size: 12px; display: grid; place-items: center; color: var(--mute);
+    }
+    .node .kids.r { right: -9px; }
+    .node .kids.l { left: -9px; }
+
+    .legend {
+      position: fixed; left: 16px; bottom: 14px; z-index: 20;
+      display: flex; gap: 12px; font-size: 11px; color: var(--mute);
+    }
+    .legend i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+
+    #drawer {
+      position: fixed; top: 52px; right: 12px; bottom: 12px; width: min(420px, calc(100vw - 24px));
+      z-index: 24; display: none; flex-direction: column;
+      background: rgba(16,16,20,.94); border: 1px solid var(--line); border-radius: 16px;
+      box-shadow: -16px 0 48px rgba(0,0,0,.4); backdrop-filter: blur(16px);
+    }
+    #drawer.open { display: flex; }
+    #drawer header {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 16px 16px 12px; border-bottom: 1px solid var(--line);
+    }
+    #drawer header h2 { margin: 0; font-size: 18px; letter-spacing: -.02em; flex: 1; }
+    #drawer header p { margin: 4px 0 0; color: var(--mute); font-size: 12px; }
+    #x {
+      background: transparent; border: 1px solid var(--line); color: var(--mute);
+      width: 28px; height: 28px; border-radius: 8px; cursor: pointer;
+    }
+    #drawer .body { overflow: auto; padding: 14px 16px 24px; }
+    #drawer h3 { margin: 16px 0 8px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+    #drawer ul { margin: 0; padding-left: 18px; color: var(--mute); font-size: 13.5px; line-height: 1.55; }
+    #drawer p { color: var(--mute); font-size: 13.5px; line-height: 1.6; margin: 0 0 8px; }
+    #drawer .chip {
+      display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 99px;
+      background: rgba(244,63,140,.14); color: var(--rose); margin-right: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <span class="kicker"><i></i>现状思维导图</span>
+    <h1>爪爪 · 产品主线</h1>
+    <span class="north">SELECT + DESCRIBE OUTCOME → DELIVER</span>
+    <span class="grow"></span>
+    <span class="hint">拖节点整理 · 拖空白平移 · 滚轮缩放 · 单击看详情</span>
+    <button class="tool" id="fit" type="button">适配</button>
+    <button class="tool" id="reset" type="button">复位布局</button>
+    <button class="tool" id="expand" type="button">全部展开</button>
+  </div>
+  <div id="viewport"><div id="world"><svg id="links"></svg></div></div>
+  <div class="legend">
+    <span><i style="background:#f43f8c"></i>绑定 / 主线</span>
+    <span><i style="background:#fbbf24"></i>判断</span>
+    <span><i style="background:#34d399"></i>交付</span>
+    <span><i style="background:#c4b5fd"></i>残留</span>
+  </div>
+  <aside id="drawer">
+    <header>
+      <div>
+        <h2 id="dt"></h2>
+        <p id="ds"></p>
+      </div>
+      <button id="x" type="button" aria-label="关闭">×</button>
+    </header>
+    <div class="body" id="db"></div>
+  </aside>
+
+  <script>
+    const W = 228, ROOT_W = 280, DX = 320, GAP = 18, BRANCH_H = 72, LEAF_H = 70;
+    const TREE = {
+      id: "root", t: "爪爪 · Paw Work", s: "选中 + 说出结果 → 真文件", kind: "root", open: true,
+      left: [
+        { id: "cap", t: "1 捕获", s: "Paw 开才进选择通道", open: true, children: [
+          { id: "paw", t: "Paw Mode", s: "关 = 上网 · 开 = 点选进任务", leaf: true },
+          { id: "pick", t: "点选 / 穿刺 / 截图", s: "文字 · 图 · 表 · 容器 · 链接", leaf: true },
+          { id: "groups", t: "SelectionGroups", s: "积木托盘。模型不能改", leaf: true },
+          { id: "page", t: "focusPage / @ 页", s: "活标签是文档身份，不是 Group", leaf: true }
+        ]},
+        { id: "sess", t: "2 会话工作区", s: "对话 + 网页上下文 + 交付物", open: true, children: [
+          { id: "conv", t: "Conversation", s: "每一句 → sendMessage", leaf: true },
+          { id: "web", t: "Web Context", s: "绑定 Groups = 环境索引", leaf: true },
+          { id: "art", t: "Artifacts", s: "IDB 元数据 + OPFS 字节", leaf: true },
+          { id: "fs", t: "Guest FS", s: "/context · /artifacts · /scratch", leaf: true }
+        ]},
+        { id: "host", t: "宿主房子", s: "Chrome MV3", open: true, children: [
+          { id: "sp", t: "Sidepanel", s: "任务 / 芯片 / 货架 / 作曲栏", leaf: true },
+          { id: "bg", t: "Background", s: "RPC 中转 · 开预览页", leaf: true },
+          { id: "off", t: "Offscreen", s: "SessionWorkspaceService", leaf: true },
+          { id: "box", t: "Sandbox", s: "QuickJS。没有 chrome.*", leaf: true }
+        ]},
+        { id: "left", t: "非主线残留", s: "还连着，但不是编辑器", kind: "left-over", open: false, children: [
+          { id: "ha", t: "htmlApply parse", s: "喂 createScene / PDF 复刻", leaf: true },
+          { id: "st", t: "artifactStage / printHtml", s: "旧板块导出", leaf: true },
+          { id: "dr", t: "preview.html / documentRender", s: "旧草稿打印轨", leaf: true }
+        ]}
+      ],
+      right: [
+        { id: "judge", t: "3 判断", s: "模型想 · 食谱不是工具", kind: "judge", open: true, children: [
+          { id: "ans", t: "答还是交付", s: "最小足够动作", leaf: true },
+          { id: "sk", t: "Skills 食谱", s: "catalog 在 system，正文按需加载", leaf: true },
+          { id: "cl", t: "Clarify 一次", s: "海报 vs 网站 vs 长文，然后停", leaf: true },
+          { id: "kr", t: "内核三件", s: "inspect · acquire · run", leaf: true }
+        ]},
+        { id: "bind", t: "4 绑定", s: "房子上锁 · 失败即停", kind: "bind", open: true, children: [
+          { id: "uc", t: "USE_CANVAS", s: "无标记漂亮视觉 HTML 进不了画布", leaf: true },
+          { id: "ns", t: "NEED_SELECTION", s: "没点中不发明第一个节点", leaf: true },
+          { id: "iso", t: "隔离 / abort / GC", s: "模型不能改 Group", leaf: true },
+          { id: "mag", t: "魔术字节", s: "声称格式必须对上容器", leaf: true }
+        ]},
+        { id: "create", t: "5 创建", s: "run 只落地一次", open: true, children: [
+          { id: "cs", t: "createScene / fromPage", s: "编译成 pawCanvas JSON", leaf: true },
+          { id: "wa", t: "write_artifact", s: "site 或 document 标记", leaf: true },
+          { id: "cw", t: "createWorkbook", s: "表的第一次落地", leaf: true },
+          { id: "pdf", t: "ingestPdf / op=doc", s: "PDF 复刻或长文快照", leaf: true }
+        ]},
+        { id: "open", t: "6 打开", s: "文件类型开门", open: true, children: [
+          { id: "dsgn", t: "design.html", s: "pawCanvas → tldraw 无限布", leaf: true },
+          { id: "site", t: "site.html", s: "真网页，不是建站画板", leaf: true },
+          { id: "sh", t: "sheet.html", s: "xlsx/csv → Univer 活格子", leaf: true },
+          { id: "dc", t: "docs / preview", s: "长文或通用 HTML/PDF 预览", leaf: true }
+        ]},
+        { id: "inv", t: "7 画布库存", s: "有宝物才给专用笔", open: true, children: [
+          { id: "tsheet", t: "sheet", s: "有工作簿才出现", leaf: true },
+          { id: "tdeck", t: "deck", s: "有 pawCanvas 才出现", leaf: true },
+          { id: "tweb", t: "web", s: "有 site HTML 才出现", leaf: true },
+          { id: "tdoc", t: "doc", s: "有 Univer 文档才出现", leaf: true }
+        ]},
+        { id: "refine", t: "8 精细化", s: "点中 → 写 → 读回", open: true, children: [
+          { id: "wld", t: "World", s: "库存 · 焦点 · nodeId / A1", leaf: true },
+          { id: "act", t: "Act", s: "省略 target 用焦点", leaf: true },
+          { id: "ver", t: "Verify", s: "dirty + readback", leaf: true }
+        ]},
+        { id: "out", t: "9 交付", s: "货架上的真字节", kind: "out", open: true, children: [
+          { id: "art2", t: "/artifacts", s: "持久。口头不算", leaf: true },
+          { id: "scr", t: "/scratch", s: "回合结束扔掉", leaf: true },
+          { id: "ex", t: "导出", s: "PNG / PDF / PPTX / xlsx", leaf: true }
+        ]}
+      ]
+    };
+
+    const INFO = {
+      root: {
+        chip: "主线",
+        p: "爪爪不是聊天窗，也不是编辑器商店。用户在活网页上伸爪选中，在侧栏描述想要的结果。每一句话进入同一个会话工作区循环。",
+        items: ["SELECT + DESCRIBE OUTCOME → DELIVER", "模型判断答还是交付", "宿主绑定隔离、写策略、打开路由、工具库存", "交付物是 /artifacts 里对得上格式的真字节"]
+      },
+      cap: { chip: "输入", p: "Paw 关闭时是正常浏览。打开后，点击才进入选择通道。选中先当积木收下，这一步不做语义解释。", items: ["点选 / 多选 / 截图", "芯片标签：图片N · 截图N · 容器N · 表格N · 文字N", "「这页」指向 focusPage，不是 SelectionGroup", "@ 某一页会覆盖本轮焦点"] },
+      paw: { chip: "输入", p: "产品开关。关 = 普通上网；开 = 页面点选进入爪爪。", items: ["不打开 Paw，点击不会进任务", "打开后才有选择托盘"] },
+      pick: { chip: "输入", p: "伸爪穿刺覆盖层，按内容类型收获，而不是只抓 DOM 容器。", items: ["文字 / 图片 / 表格 / 视频 / 链接 / 矢量 / 截图", "截图进入剪贴板 Group"] },
+      groups: { chip: "输入", p: "用户的积木托盘。模型没有写 Group 的 API，不能偷偷改选区。", items: ["粘性编号：空 kind 从 1 重计", "清空选中只丢页面捕获，剪贴板另清"] },
+      page: { chip: "输入", p: "活标签是文档身份。空选加「这页」会去 fetch 该 URL 当证据。", items: ["activeTab / focusPage 不是 Group", "@ 页只覆盖这一轮"] },
+      sess: { chip: "世界", p: "Session 才是工作区：对话、网页上下文、交付物三者绑在同一会话。空 sessionId 不画前景。", items: ["可并行一个 Agent per Session", "切任务不中止另一个会话的循环"] },
+      conv: { chip: "世界", p: "没有 chat/run 双模式，没有 Task 对象。用户每句话都进 sendMessage。", items: ["ToolLoopAgent · toolChoice=auto", "侧栏 → workspaceRpc → offscreen"] },
+      web: { chip: "世界", p: "绑定的 Groups 是环境索引。inspect 按需展开，不把全文塞进第一轮提示。", items: ["Capture ≠ 解释", "晚绑定：先选后说 / 边选边说都合法"] },
+      art: { chip: "世界", p: "工作区货架。IndexedDB 元数据 + OPFS 字节。新开服务用同名库能找回。", items: ["只因用户删除或删 Session 才消失", "不按年龄/大小自动 GC"] },
+      fs: { chip: "世界", p: "模型看见的三棵树。跨会话路径由宿主 jail 拒绝，不靠提示词。", items: ["/context 只读", "/artifacts 持久", "/scratch 回合结束扔掉"] },
+      host: { chip: "宿主", p: "Chrome MV3 四间房：书桌、网页、后厨、围栏。机器人在后厨，不能乱跑。", items: ["Sidepanel / Background / Offscreen / Sandbox", "Preview tabs 会话作用域"] },
+      sp: { chip: "宿主", p: "人看到的桌面：任务、芯片、工作区货架、作曲栏。", items: ["workspaceRpc 客户端", "Clarify 是控制面卡片，不是世界工具"] },
+      bg: { chip: "宿主", p: "中转 RPC、登记标签、打开对应预览页。", items: ["sheet_host", "design / site / sheet / docs 路由"] },
+      off: { chip: "宿主", p: "SessionWorkspaceService。Durable store 和 sendMessage 住在这里。", items: ["每一句用户消息的唯一产品入口"] },
+      box: { chip: "宿主", p: "模型生成的代码只在 QuickJS 围栏里跑。", items: ["没有 chrome.*", "没有活页面 DOM", "没有生 fetch 钥匙"] },
+      left: { chip: "残留", p: "还接在编译或旧草稿轨上，但不是产品编辑器。不要把新工作路由过来。", items: ["htmlApply 的 parse/serialize 仍喂 createScene 和 PDF 复刻", "applyHtmlCommands 生产路径已不走"] },
+      ha: { chip: "残留", p: "标记 HTML 的解析/序列化。供 fromPage 编译和 PDF 复刻使用。", items: ["不是 Design 编辑器", "不要当槽位画板"] },
+      st: { chip: "残留", p: "旧板块导出路径。Design 导出走 engineCanvas。", items: ["S-Q / wave8 仍覆盖 exportPlates"] },
+      dr: { chip: "残留", p: "旧草稿预览和打印。不是 Session Workspace 真相。", items: ["preview.html / print.html / documentRender.js"] },
+      judge: { chip: "判断", p: "前沿模型负责想。宿主不设关键词表替模型选编辑器。", items: ["答还是交付", "哪张 skill description 合适", "不清就问一次"] },
+      ans: { chip: "判断", p: "最小足够动作。有工具不等于必须用。", items: ["可以直接回答", "需要证据再 inspect / acquire", "要交付才 run"] },
+      sk: { chip: "判断", p: "食谱不是模式，也不是额外内核工具。", items: ["html-poster / html-deck / html-site / html-preview", "visual-compile / sheet-nl / listing-sheet / briefing-deck / remake-poster / compose-image"] },
+      cl: { chip: "判断", p: "只有海报 vs 网站 vs 长文真不清楚时问一次，然后停。", items: ["Clarify 是控制面 UI", "不进世界工具列表"] },
+      kr: { chip: "判断", p: "永远在桌上的三件玩具。", items: ["inspect：看世界、看文件、看 skill", "acquire：search / fetch / map / crawl / image / note", "run：沙盒计算 + 第一次落地"] },
+      bind: { chip: "绑定", p: "房子上锁。模型再聪明也改不了隔离和写策略。", items: ["失败即停", "不靠 prompt 执法"] },
+      uc: { chip: "绑定", p: "无标记的漂亮视觉 HTML 不能当 Design 文件落地。", items: ["海报 / 幻灯片走 createScene → pawCanvas", "网站必须带 data-paw-kind=site"] },
+      ns: { chip: "绑定", p: "字段写入需要钉住的节点。空着手先问，不发明第一个节点。", items: ["NEED_SELECTION", "Design 导出 PNG/SVG/PDF 没有活标签 → NEED_TAB"] },
+      iso: { chip: "绑定", p: "会话狱、所有权、中止、GC。", items: ["模型没有 Group 写 API", "跨会话路径拒绝"] },
+      mag: { chip: "绑定", p: "声称的格式必须对上容器魔术字节。", items: ["交付物 = 真文件，不是口头"] },
+      create: { chip: "创建", p: "run 只负责第一次写出画布。日常改字段不再走 run。", items: ["createScene / fromPage / fromSelection / fromRaster", "write_artifact site|document", "createWorkbook", "ingestPdf / op=doc"] },
+      cs: { chip: "创建", p: "页面或选区编译成 tldraw 快照。fromPage 抽叶子，不是 CSS 保真。", items: ["产出 pawCanvas JSON", "打开 design.html"] },
+      wa: { chip: "创建", p: "网站和长文档 HTML 走这条。漂亮海报 HTML 会被拒。", items: ["site 盖 data-paw-node", "document 打开通用预览"] },
+      cw: { chip: "创建", p: "表的第一次落地。之后用 sheet 笔。", items: ["csv / xlsx / Univer 快照"] },
+      pdf: { chip: "创建", p: "PDF 复刻成可读页，或长文 Univer 快照。", items: ["复刻页走通用预览，不是 Design"] },
+      open: { chip: "打开", p: "人从不挑编辑器。classifyOpenArtifact 看魔术字节。", items: ["json-canvas → design.html", "html-site → site.html", "xlsx/csv → sheet.html", "docx / document → docs 或 preview"] },
+      dsgn: { chip: "表面", p: "无限画布。Design 自由板；Slides 同一引擎加 16:9 框和胶片条。", items: ["引擎：tldraw", "SoT：pawCanvas"] },
+      site: { chip: "表面", p: "页面就是交付物。可选点选钉节点，不是建站编辑器。", items: ["data-paw-kind=site"] },
+      sh: { chip: "表面", p: "Univer 活格子。Facade/Command，整本 IWorkbookData 持久化。", items: ["公式 / 图 / 选区芯片是提示不是锁"] },
+      dc: { chip: "表面", p: "Univer 长文，或通用 HTML/PDF 预览。预览不是版式画板。", items: ["html-plates 不再当 Design"] },
+      inv: { chip: "库存", p: "办公短工具跟会话库存走，不跟 Chrome 标签焦点走。删画布则收笔。", items: ["prepareStep 每步重读库存"] },
+      tsheet: { chip: "库存", p: "会话里有工作簿才注册 sheet。", items: ["省略 A1 用焦点", "写完 dirty + readback"] },
+      tdeck: { chip: "库存", p: "有 pawCanvas（海报或幻灯）才注册 deck。", items: ["点贴纸再改", "NEED_SELECTION"] },
+      tweb: { chip: "库存", p: "有 site HTML 才注册 web。", items: ["改钉住的节点或整页重写"] },
+      tdoc: { chip: "库存", p: "有 Univer 文档才注册 doc。", items: ["HTML document 预览不是这支笔的画布"] },
+      refine: { chip: "精细化", p: "创建之后主路径不是再写一个文件，而是点中对象、说一句、写回去、读回来。", items: ["World → Act → Verify", "人也可以在画布上直接改"] },
+      wld: { chip: "精细化", p: "世界卡带库存、焦点、点中的 nodeId / A1 / data-paw-node。", items: ["省略 target 用会话焦点"] },
+      act: { chip: "精细化", p: "对应短工具 write。没点中就失败，不猜第一个节点。", items: ["NEED_SELECTION"] },
+      ver: { chip: "精细化", p: "返回 dirty + readback。模型对照读回，不靠聊天里的愿望。", items: ["Verify 是协议，不是口号"] },
+      out: { chip: "交付", p: "货架上的文件才算交付。口头不算。", items: ["导出从引擎文档编译", "删 Session 才级联删除"] },
+      art2: { chip: "交付", p: "持久交付物。", items: ["只因显式删除或删会话而消失"] },
+      scr: { chip: "交付", p: "执行草稿纸。回合 settle / abort 后扔掉。", items: ["不需要模型自己打扫"] },
+      ex: { chip: "交付", p: "从画布引擎导出，不靠截编辑器工具栏。", items: ["Design：PNG / SVG / PDF / PPTX", "Sheet：xlsx", "需要活标签时 NEED_TAB"] }
+    };
+
+    const ORIGIN = { x: 1680, y: 1100 };
+    const world = document.getElementById("world");
+    const links = document.getElementById("links");
+    const viewport = document.getElementById("viewport");
+    const nodesLayer = document.createElement("div");
+    world.appendChild(nodesLayer);
+
+    let cam = { x: 0, y: 0, k: 1 };
+    let pan = null, moving = null, moved = false, active = null;
+
+    function walk(fn) {
+      fn(TREE);
+      function rec(n) { fn(n); (n.children || []).forEach(rec); }
+      TREE.left.forEach(rec);
+      TREE.right.forEach(rec);
+    }
+    function byId(id) { let h = null; walk((n) => { if (n.id === id) h = n; }); return h; }
+    function visKids(n) { return n.open ? (n.children || []) : []; }
+    function hOf(n) {
+      const kids = visKids(n);
+      if (!kids.length) return n.leaf ? LEAF_H : BRANCH_H;
+      return kids.reduce((s, c) => s + hOf(c), 0) + GAP * (kids.length - 1);
+    }
+    function place(n, x, y, dir) {
+      if (n._drag) { x = n.x; y = n.y; }
+      n.x = x; n.y = y; n.side = dir;
+      const kids = visKids(n);
+      if (!kids.length) return;
+      const H = hOf(n);
+      let cy = y - H / 2;
+      kids.forEach((c) => {
+        const ch = hOf(c);
+        place(c, n._drag ? c.x || (x + dir * DX) : x + dir * DX, n._drag && c._drag ? c.y : cy + ch / 2, dir);
+        cy += ch + GAP;
+      });
+    }
+    function layout() {
+      TREE.x = ORIGIN.x; TREE.y = ORIGIN.y; TREE.side = 0;
+      const space = (list) => list.reduce((s, n, i) => s + hOf(n) + (i ? GAP + 12 : 0), 0);
+      let ly = ORIGIN.y - space(TREE.left) / 2;
+      TREE.left.forEach((n) => { const h = hOf(n); place(n, ORIGIN.x - DX, ly + h / 2, -1); ly += h + GAP + 12; });
+      let ry = ORIGIN.y - space(TREE.right) / 2;
+      TREE.right.forEach((n) => { const h = hOf(n); place(n, ORIGIN.x + DX, ry + h / 2, 1); ry += h + GAP + 12; });
+    }
+    function colorOf(n) {
+      if (n.id === "root" || n.kind === "bind" || n.id === "bind") return "#f43f8c";
+      if (n.kind === "judge" || n.id === "judge") return "#fbbf24";
+      if (n.kind === "out" || n.id === "out") return "#34d399";
+      if (n.kind === "left-over" || n.id === "left") return "#c4b5fd";
+      return "rgba(244,241,243,.32)";
+    }
+    function shiftTree(n, dx, dy) {
+      n.x += dx; n.y += dy; n._drag = true;
+      (n.children || []).forEach((c) => shiftTree(c, dx, dy));
+    }
+
+    function render() {
+      layout();
+      nodesLayer.innerHTML = "";
+      const seen = [];
+      function add(n) {
+        const el = document.createElement("div");
+        const side = n.side < 0 ? "left" : n.side > 0 ? "right" : "root";
+        el.className = "node"
+          + (n.id === "root" ? " root" : "")
+          + (n.leaf ? " leaf" : "")
+          + (n.kind ? " " + n.kind : "")
+          + (n.id === active ? " active" : "");
+        el.dataset.id = n.id;
+        el.style.left = n.x + "px";
+        el.style.top = n.y + "px";
+        const toggle = (n.children && n.children.length)
+          ? `<span class="kids ${side === "left" ? "l" : "r"}" data-toggle="1">${n.open ? "–" : "+"}</span>` : "";
+        el.innerHTML = `<div class="t">${n.t}</div>${n.s ? `<div class="s">${n.s}</div>` : ""}${toggle}`;
+        el.addEventListener("pointerdown", onNodeDown);
+        nodesLayer.appendChild(el);
+        n._el = el;
+        seen.push(n);
+      }
+      add(TREE);
+      function rec(n) { add(n); if (n.open) (n.children || []).forEach(rec); }
+      TREE.left.forEach(rec);
+      TREE.right.forEach(rec);
+
+      const paths = [];
+      function edge(a, b) {
+        const aw = a.id === "root" ? ROOT_W : W;
+        const bw = b.id === "root" ? ROOT_W : W;
+        const leftward = b.x < a.x;
+        const x1 = a.x + (leftward ? -aw / 2 : aw / 2);
+        const x2 = b.x + (leftward ? bw / 2 : -bw / 2);
+        const y1 = a.y, y2 = b.y;
+        const m = (x1 + x2) / 2;
+        paths.push(`<path d="M${x1} ${y1} C ${m} ${y1}, ${m} ${y2}, ${x2} ${y2}" stroke="${colorOf(a.id === "root" ? b : a)}"/>`);
+      }
+      TREE.left.forEach((n) => { edge(TREE, n); (function down(p) { if (!p.open) return; (p.children || []).forEach((c) => { edge(p, c); down(c); }); })(n); });
+      TREE.right.forEach((n) => { edge(TREE, n); (function down(p) { if (!p.open) return; (p.children || []).forEach((c) => { edge(p, c); down(c); }); })(n); });
+
+      let maxX = 0, maxY = 0;
+      seen.forEach((n) => { maxX = Math.max(maxX, n.x + 200); maxY = Math.max(maxY, n.y + 120); });
+      links.setAttribute("width", Math.max(3200, maxX));
+      links.setAttribute("height", Math.max(2400, maxY));
+      links.style.width = links.getAttribute("width") + "px";
+      links.style.height = links.getAttribute("height") + "px";
+      links.innerHTML = paths.join("");
+    }
+
+    function applyCam() { world.style.transform = `translate(${cam.x}px,${cam.y}px) scale(${cam.k})`; }
+    function fit() {
+      const vw = viewport.clientWidth, vh = viewport.clientHeight;
+      cam.k = Math.min(vw / 3000, vh / 2100, 1);
+      cam.x = vw / 2 - ORIGIN.x * cam.k;
+      cam.y = vh / 2 - ORIGIN.y * cam.k + 10;
+      applyCam();
+    }
+
+    function openInfo(id) {
+      const n = byId(id);
+      const info = INFO[id] || { p: n.s || "", items: [] };
+      active = id;
+      document.getElementById("dt").textContent = n.t;
+      document.getElementById("ds").innerHTML = info.chip ? `<span class="chip">${info.chip}</span>${n.s || ""}` : (n.s || "");
+      const lis = (info.items || []).map((x) => `<li>${x}</li>`).join("");
+      document.getElementById("db").innerHTML = `<p>${info.p || ""}</p>${lis ? `<h3>要点</h3><ul>${lis}</ul>` : ""}`;
+      document.getElementById("drawer").classList.add("open");
+      render();
+    }
+
+    function onNodeDown(e) {
+      if (e.target.closest("[data-toggle]")) {
+        e.stopPropagation();
+        const n = byId(e.currentTarget.dataset.id);
+        if (n && n.children) { n.open = !n.open; render(); }
+        return;
+      }
+      e.stopPropagation();
+      const id = e.currentTarget.dataset.id;
+      const n = byId(id);
+      moved = false;
+      moving = {
+        id, n,
+        sx: e.clientX, sy: e.clientY,
+        ox: n.x, oy: n.y
+      };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+
+    viewport.addEventListener("pointermove", (e) => {
+      if (moving) {
+        const dx = (e.clientX - moving.sx) / cam.k;
+        const dy = (e.clientY - moving.sy) / cam.k;
+        if (!moved && Math.hypot(e.clientX - moving.sx, e.clientY - moving.sy) < 6) return;
+        moved = true;
+        const nx = moving.ox + dx, ny = moving.oy + dy;
+        shiftTree(moving.n, nx - moving.n.x, ny - moving.n.y);
+        render();
+        return;
+      }
+      if (!pan) return;
+      cam.x = e.clientX - pan.x;
+      cam.y = e.clientY - pan.y;
+      applyCam();
+    });
+    viewport.addEventListener("pointerup", (e) => {
+      if (moving) {
+        const id = moving.id;
+        if (!moved) openInfo(id);
+        moving = null;
+        return;
+      }
+      pan = null;
+      viewport.classList.remove("grabbing");
+    });
+    viewport.addEventListener("pointerdown", (e) => {
+      if (e.target.closest(".node") || e.target.closest("#drawer") || e.target.closest(".bar")) return;
+      pan = { x: e.clientX - cam.x, y: e.clientY - cam.y };
+      viewport.classList.add("grabbing");
+    });
+    viewport.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const prev = cam.k;
+      cam.k = Math.min(2.4, Math.max(0.25, cam.k * (e.deltaY > 0 ? 0.92 : 1.08)));
+      const r = viewport.getBoundingClientRect();
+      const px = e.clientX - r.left, py = e.clientY - r.top;
+      cam.x = px - (px - cam.x) * (cam.k / prev);
+      cam.y = py - (py - cam.y) * (cam.k / prev);
+      applyCam();
+    }, { passive: false });
+
+    document.getElementById("fit").onclick = fit;
+    document.getElementById("expand").onclick = () => { walk((n) => { if (n.children) n.open = true; }); render(); };
+    document.getElementById("reset").onclick = () => { walk((n) => { n._drag = false; }); render(); fit(); };
+    document.getElementById("x").onclick = () => { document.getElementById("drawer").classList.remove("open"); active = null; render(); };
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") document.getElementById("x").click();
+      if (e.key === "0") fit();
+      if (e.key === "+" || e.key === "=") { cam.k = Math.min(2.4, cam.k * 1.1); applyCam(); }
+      if (e.key === "-") { cam.k = Math.max(0.25, cam.k / 1.1); applyCam(); }
+    });
+    window.addEventListener("resize", fit);
+
+    render();
+    fit();
+  </script>
+</body>
+</html>

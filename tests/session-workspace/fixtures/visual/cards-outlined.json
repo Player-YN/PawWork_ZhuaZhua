@@ -1,0 +1,120 @@
+{
+  "shell": "slides",
+  "themes": [
+    {
+      "id": "dawn",
+      "tokens": { "paper": "#f7f4ef", "ink": "#1a1614" }
+    }
+  ],
+  "frames": [
+    {
+      "id": "slide-outlined-cards",
+      "w": 1920,
+      "h": 1080,
+      "meta": { "pawLayout": "cards", "pawTheme": "dawn" },
+      "nodes": [
+        {
+          "id": "paper",
+          "type": "geo",
+          "fillKind": "solid",
+          "fill": "#f7f4ef",
+          "box": { "x": 0, "y": 0, "w": 1920, "h": 1080 },
+          "meta": { "pawRole": "background" }
+        },
+        {
+          "id": "title",
+          "type": "headline",
+          "text": "Three options",
+          "box": { "x": 80, "y": 48, "w": 1760, "h": 64 },
+          "fontSize": 40,
+          "color": "#1a1614",
+          "meta": { "pawRole": "title" }
+        },
+        {
+          "id": "outline-a",
+          "type": "geo",
+          "geo": "rectangle",
+          "fillKind": "none",
+          "dash": "solid",
+          "stroke": "#1a1614",
+          "strokeWidth": 2,
+          "box": { "x": 80, "y": 160, "w": 560, "h": 840 }
+        },
+        {
+          "id": "a-title",
+          "type": "text",
+          "text": "Keep",
+          "box": { "x": 112, "y": 200, "w": 496, "h": 48 },
+          "fontSize": 26,
+          "color": "#1a1614",
+          "meta": { "pawRole": "title" }
+        },
+        {
+          "id": "a-body",
+          "type": "text",
+          "text": "Ship the current catalog and repair in place.",
+          "box": { "x": 112, "y": 268, "w": 496, "h": 140 },
+          "fontSize": 20,
+          "color": "#1a1614",
+          "meta": { "pawRole": "body" }
+        },
+        {
+          "id": "outline-b",
+          "type": "geo",
+          "geo": "rectangle",
+          "fillKind": "none",
+          "dash": "solid",
+          "stroke": "#1a1614",
+          "strokeWidth": 2,
+          "box": { "x": 680, "y": 160, "w": 560, "h": 840 }
+        },
+        {
+          "id": "b-title",
+          "type": "text",
+          "text": "Replace",
+          "box": { "x": 712, "y": 200, "w": 496, "h": 48 },
+          "fontSize": 26,
+          "color": "#1a1614",
+          "meta": { "pawRole": "title" }
+        },
+        {
+          "id": "b-body",
+          "type": "text",
+          "text": "Compile a named layout and drop the wireframe.",
+          "box": { "x": 712, "y": 268, "w": 496, "h": 140 },
+          "fontSize": 20,
+          "color": "#1a1614",
+          "meta": { "pawRole": "body" }
+        },
+        {
+          "id": "outline-c",
+          "type": "geo",
+          "geo": "rectangle",
+          "fillKind": "none",
+          "dash": "solid",
+          "stroke": "#1a1614",
+          "strokeWidth": 2,
+          "box": { "x": 1280, "y": 160, "w": 560, "h": 840 }
+        },
+        {
+          "id": "c-title",
+          "type": "text",
+          "text": "Wait",
+          "box": { "x": 1312, "y": 200, "w": 496, "h": 48 },
+          "fontSize": 26,
+          "color": "#1a1614",
+          "meta": { "pawRole": "title" }
+        },
+        {
+          "id": "c-body",
+          "type": "text",
+          "text": "Hold the catalog until the compiler lands.",
+          "box": { "x": 1312, "y": 268, "w": 496, "h": 140 },
+          "fontSize": 20,
+          "color": "#1a1614",
+          "meta": { "pawRole": "body" }
+        }
+      ]
+    }
+  ]
+}

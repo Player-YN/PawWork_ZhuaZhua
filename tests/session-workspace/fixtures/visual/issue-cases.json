@@ -1,0 +1,261 @@
+{
+  "overflow": {
+    "shell": "slides",
+    "themes": [{ "id": "dawn", "tokens": { "paper": "#f7f4ef", "ink": "#1a1614" } }],
+    "frames": [
+      {
+        "id": "slide-overflow",
+        "w": 1920,
+        "h": 1080,
+        "meta": { "pawTheme": "dawn" },
+        "nodes": [
+          {
+            "id": "paper",
+            "type": "geo",
+            "fillKind": "solid",
+            "fill": "#f7f4ef",
+            "box": { "x": 0, "y": 0, "w": 1920, "h": 1080 },
+            "meta": { "pawRole": "background" }
+          },
+          {
+            "id": "title",
+            "type": "headline",
+            "text": "Overflow",
+            "box": { "x": 80, "y": 48, "w": 800, "h": 64 },
+            "fontSize": 40,
+            "color": "#1a1614",
+            "meta": { "pawRole": "title" }
+          },
+          {
+            "id": "spill",
+            "type": "text",
+            "text": "This block hangs off the paper.",
+            "box": { "x": 1760, "y": 200, "w": 480, "h": 120 },
+            "fontSize": 22,
+            "color": "#1a1614",
+            "meta": { "pawRole": "body" }
+          }
+        ]
+      }
+    ]
+  },
+  "overlap": {
+    "shell": "slides",
+    "themes": [{ "id": "dawn", "tokens": { "paper": "#f7f4ef", "ink": "#1a1614" } }],
+    "frames": [
+      {
+        "id": "slide-overlap",
+        "w": 1920,
+        "h": 1080,
+        "meta": { "pawTheme": "dawn" },
+        "nodes": [
+          {
+            "id": "paper",
+            "type": "geo",
+            "fillKind": "solid",
+            "fill": "#f7f4ef",
+            "box": { "x": 0, "y": 0, "w": 1920, "h": 1080 },
+            "meta": { "pawRole": "background" }
+          },
+          {
+            "id": "a",
+            "type": "text",
+            "text": "First block of colliding copy that should not share a box.",
+            "box": { "x": 200, "y": 240, "w": 900, "h": 280 },
+            "fontSize": 28,
+            "color": "#1a1614",
+            "meta": { "pawRole": "body" }
+          },
+          {
+            "id": "b",
+            "type": "text",
+            "text": "Second block stacked on the same region as the first.",
+            "box": { "x": 260, "y": 280, "w": 860, "h": 260 },
+            "fontSize": 28,
+            "color": "#1a1614",
+            "meta": { "pawRole": "body" }
+          }
+        ]
+      }
+    ]
+  },
+  "contrast": {
+    "shell": "slides",
+    "themes": [{ "id": "dawn", "tokens": { "paper": "#ffffff", "ink": "#eeeeee" } }],
+    "frames": [
+      {
+        "id": "slide-contrast",
+        "w": 1920,
+        "h": 1080,
+        "meta": { "pawTheme": "dawn" },
+        "nodes": [
+          {
+            "id": "paper",
+            "type": "geo",
+            "fillKind": "solid",
+            "fill": "#ffffff",
+            "box": { "x": 0, "y": 0, "w": 1920, "h": 1080 },
+            "meta": { "pawRole": "background" }
+          },
+          {
+            "id": "title",
+            "type": "headline",
+            "text": "Ghost type",
+            "box": { "x": 80, "y": 80, "w": 1200, "h": 72 },
+            "fontSize": 20,
+            "color": "#ededed",
+            "meta": { "pawRole": "title" }
+          },
+          {
+            "id": "body",
+            "type": "text",
+            "text": "This line is almost the same color as the paper.",
+            "box": { "x": 80, "y": 200, "w": 1400, "h": 64 },
+            "fontSize": 18,
+            "color": "#f0f0f0",
+            "meta": { "pawRole": "body" }
+          }
+        ]
+      }
+    ]
+  },
+  "tiny": {
+    "shell": "slides",
+    "themes": [{ "id": "dawn", "tokens": { "paper": "#f7f4ef", "ink": "#1a1614" } }],
+    "frames": [
+      {
+        "id": "slide-tiny",
+        "w": 1920,
+        "h": 1080,
+        "meta": { "pawTheme": "dawn" },
+        "nodes": [
+          {
+            "id": "paper",
+            "type": "geo",
+            "fillKind": "solid",
+            "fill": "#f7f4ef",
+            "box": { "x": 0, "y": 0, "w": 1920, "h": 1080 },
+            "meta": { "pawRole": "background" }
+          },
+          {
+            "id": "title",
+            "type": "headline",
+            "text": "Readable title",
+            "box": { "x": 80, "y": 48, "w": 800, "h": 64 },
+            "fontSize": 40,
+            "color": "#1a1614",
+            "meta": { "pawRole": "title" }
+          },
+          {
+            "id": "fine",
+            "type": "text",
+            "text": "Legal line that no one in the room can read.",
+            "box": { "x": 80, "y": 200, "w": 1200, "h": 32 },
+            "fontSize": 10,
+            "color": "#1a1614",
+            "meta": { "pawRole": "body" }
+          }
+        ]
+      }
+    ]
+  },
+  "dense": {
+    "shell": "slides",
+    "themes": [{ "id": "dawn", "tokens": { "paper": "#f7f4ef", "ink": "#1a1614" } }],
+    "frames": [
+      {
+        "id": "slide-dense",
+        "w": 1920,
+        "h": 1080,
+        "meta": { "pawTheme": "dawn" },
+        "nodes": [
+          {
+            "id": "paper",
+            "type": "geo",
+            "fillKind": "solid",
+            "fill": "#f7f4ef",
+            "box": { "x": 0, "y": 0, "w": 1920, "h": 1080 },
+            "meta": { "pawRole": "background" }
+          },
+          {
+            "id": "title",
+            "type": "headline",
+            "text": "Everything",
+            "box": { "x": 80, "y": 32, "w": 1760, "h": 48 },
+            "fontSize": 28,
+            "color": "#1a1614",
+            "meta": { "pawRole": "title" }
+          },
+          {
+            "id": "dump",
+            "type": "text",
+            "text": "• First item about the market and the adjacent category we already covered in the appendix\n• Second item about the product surface and every remaining open question from last week\n• Third item about hiring, vendors, and the two delayed integrations\n• Fourth item about timeline slip and the weekend work we should not promise\n• Fifth item about pricing experiments and the discount we already refused\n• Sixth item about legal review and the clauses still unsigned\n• Seventh item about customer quotes that belong on another slide\n• Eighth item about metrics we have not instrumented\n• Ninth item about the competitive matrix that needs its own frame\n• Tenth item about risks, owners, and dates crammed into one box\n• Eleventh item repeating the same dump so the character count stays high",
+            "box": { "x": 80, "y": 100, "w": 1760, "h": 920 },
+            "fontSize": 18,
+            "color": "#1a1614",
+            "meta": { "pawRole": "body" }
+          }
+        ]
+      }
+    ]
+  },
+  "themes": {
+    "shell": "slides",
+    "themes": [
+      { "id": "dawn", "tokens": { "paper": "#f7f4ef", "ink": "#1a1614" } },
+      { "id": "dusk", "tokens": { "paper": "#1a1614", "ink": "#f7f4ef" } }
+    ],
+    "frames": [
+      {
+        "id": "slide-dawn",
+        "w": 1920,
+        "h": 1080,
+        "meta": { "pawLayout": "title", "pawTheme": "dawn" },
+        "nodes": [
+          {
+            "id": "paper",
+            "type": "geo",
+            "fillKind": "solid",
+            "fill": "#f7f4ef",
+            "box": { "x": 0, "y": 0, "w": 1920, "h": 1080 },
+            "meta": { "pawRole": "background", "pawTheme": "dawn" }
+          },
+          {
+            "id": "title",
+            "type": "headline",
+            "text": "Dawn",
+            "box": { "x": 160, "y": 400, "w": 1600, "h": 100 },
+            "fontSize": 64,
+            "color": "#1a1614",
+            "meta": { "pawRole": "title" }
+          }
+        ]
+      },
+      {
+        "id": "slide-dusk",
+        "w": 1920,
+        "h": 1080,
+        "meta": { "pawLayout": "title", "pawTheme": "dusk" },
+        "nodes": [
+          {
+            "id": "paper",
+            "type": "geo",
+            "fillKind": "solid",
+            "fill": "#1a1614",
+            "box": { "x": 0, "y": 0, "w": 1920, "h": 1080 },
+            "meta": { "pawRole": "background", "pawTheme": "dusk" }
+          },
+          {
+            "id": "title",
+            "type": "headline",
+            "text": "Dusk",
+            "box": { "x": 160, "y": 400, "w": 1600, "h": 100 },
+            "fontSize": 64,
+            "color": "#f7f4ef",
+            "meta": { "pawRole": "title" }
+          }
+        ]
+      }
+    ]
+  }
+}

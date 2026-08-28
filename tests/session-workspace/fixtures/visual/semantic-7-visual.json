@@ -1,0 +1,83 @@
+{
+  "themeId": "editorial",
+  "kind": "deck",
+  "title": "Visual asset layer",
+  "frames": [
+    {
+      "id": "slide-1",
+      "layoutId": "title-visual",
+      "slots": {
+        "kicker": "Paw Work",
+        "title": "可编辑视觉资产",
+        "subtitle": "图标 · 母题 · 图表 · 工作区图",
+        "visual": { "kind": "icon", "name": "users" }
+      }
+    },
+    {
+      "id": "slide-2",
+      "layoutId": "title-visual",
+      "slots": {
+        "title": "浏览器窗",
+        "subtitle": "原生母题，不是位图",
+        "visual": { "kind": "motif", "id": "browser-window", "data": { "title": "paw.work" } }
+      }
+    },
+    {
+      "id": "slide-3",
+      "layoutId": "image-caption",
+      "slots": {
+        "kicker": "数据",
+        "title": "季度交付",
+        "visual": {
+          "kind": "chart",
+          "type": "bar",
+          "data": [12, 19, 7, 15],
+          "labels": ["Q1", "Q2", "Q3", "Q4"]
+        },
+        "caption": "诚实刻度，标签可编辑"
+      }
+    },
+    {
+      "id": "slide-4",
+      "layoutId": "title-visual",
+      "slots": {
+        "title": "工作区截图",
+        "subtitle": "别名水合，不是远程 URL",
+        "visual": {
+          "kind": "image",
+          "path": "/artifacts/hero.png",
+          "fit": "cover",
+          "alt": "工作区截图"
+        }
+      }
+    },
+    {
+      "id": "slide-5",
+      "layoutId": "points-icons",
+      "slots": {
+        "title": "能力",
+        "items": [
+          { "title": "选区", "body": "圈选即上下文", "icon": "paw-print" },
+          { "title": "协作", "body": "团队一起交付", "icon": "users" },
+          { "title": "图表", "body": "原生柱线环", "icon": "chart-column" }
+        ]
+      }
+    },
+    {
+      "id": "slide-6",
+      "layoutId": "process",
+      "slots": {
+        "title": "路径",
+        "steps": [{ "title": "选中" }, { "title": "描述" }, { "title": "编译" }, { "title": "交付" }]
+      }
+    },
+    {
+      "id": "slide-7",
+      "layoutId": "closing",
+      "slots": {
+        "title": "开始使用",
+        "subtitle": "打开 Paw · 选中 · 说出结果"
+      }
+    }
+  ]
+}

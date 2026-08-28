@@ -1,0 +1,300 @@
+/**
+ * Motion kit — almost subliminal ambient + live send/stop (Page Agent–class craft)
+ */
+
+/* Ambient background layer (panel child, pointer-events none) */
+.ambient-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.ambient-layer::before,
+.ambient-layer::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(48px);
+  opacity: 1;
+  will-change: transform;
+}
+
+.ambient-layer::before {
+  width: 55%;
+  height: 40%;
+  top: -8%;
+  left: -10%;
+  background: radial-gradient(circle, var(--ambient-a) 0%, transparent 70%);
+  animation: pw-ambient-a 16s var(--ease-in-out) infinite alternate;
+}
+
+.ambient-layer::after {
+  width: 50%;
+  height: 45%;
+  bottom: -12%;
+  right: -8%;
+  background: radial-gradient(circle, var(--ambient-b) 0%, transparent 70%);
+  animation: pw-ambient-b 18s var(--ease-in-out) infinite alternate;
+}
+
+@keyframes pw-ambient-a {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(10px, 8px, 0) scale(1.06);
+  }
+}
+
+@keyframes pw-ambient-b {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(-12px, -6px, 0) scale(1.05);
+  }
+}
+
+/*
+ * Keep ambient under content WITHOUT forcing position:relative on every
+ * flex child (that broke Side Panel overflow/scroll in Chrome).
+ * Only stacking context for chrome that needs it.
+ */
+.panel > .topbar,
+.panel > .composer,
+.panel > .attachment-preview-bar,
+.panel > .panel-scroll {
+  position: relative;
+  z-index: 1;
+}
+
+/* Streaming cursor blink */
+@keyframes pw-blink-cursor {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.15;
+  }
+}
+
+.stream-cursor,
+.pw-stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 0.95em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: pw-blink-cursor 900ms step-end infinite;
+}
+
+/* Enter fade-up for task cards */
+@keyframes pw-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.task-card {
+  animation: pw-enter 350ms var(--ease-out) both;
+}
+
+/* Pick pulse when active */
+@keyframes pw-pick-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--accent-ring);
+  }
+  50% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+.pick-btn.is-active,
+.pick-btn[aria-pressed='true'] {
+  animation: pw-pick-pulse 1.4s var(--ease-in-out) infinite;
+}
+
+/* Status running dot */
+@keyframes pw-status-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.85);
+  }
+}
+
+.status-pill[data-state='running'] .status-dot {
+  background: var(--accent);
+  animation: pw-status-dot 1.1s var(--ease-in-out) infinite;
+}
+
+.status-pill[data-state='running'] {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent);
+}
+
+/* Stop button live rings (distinct control — not a recolored send) */
+@keyframes pw-stop-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.45);
+    opacity: 0;
+  }
+}
+
+@keyframes pw-stop-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(0.9);
+  }
+}
+
+.send-btn {
+  position: relative;
+  transition:
+    background var(--dur-2) var(--ease-out),
+    color var(--dur-2),
+    transform var(--dur-1),
+    box-shadow var(--dur-2);
+}
+
+.send-btn.is-send,
+.send-btn:not([hidden]) {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+}
+
+.send-btn.is-send:hover,
+.send-btn:not([hidden]):hover {
+  background: var(--accent-hover);
+  box-shadow: var(--glow-accent);
+}
+
+/* Dedicated stop control pulse */
+.stop-btn.is-live,
+.stop-btn:not([hidden]) {
+  position: relative;
+}
+
+.stop-btn.is-live::before,
+.stop-btn.is-live::after,
+.stop-btn:not([hidden])::before,
+.stop-btn:not([hidden])::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 14px;
+  border: 1.5px solid var(--danger);
+  pointer-events: none;
+  animation: pw-stop-ring 1.15s var(--ease-out) infinite;
+}
+
+.stop-btn.is-live::after,
+.stop-btn:not([hidden])::after {
+  animation-delay: 0.38s;
+}
+
+.stop-btn.is-live .stop-icon,
+.stop-btn:not([hidden]) .stop-icon {
+  animation: pw-stop-breathe 900ms var(--ease-in-out) infinite;
+}
+
+/* Home → task dock: FLIP uses WAAPI; soft opacity assist on selection bar */
+@keyframes pw-sel-settle {
+  from { opacity: 0.72; }
+  to { opacity: 1; }
+}
+
+.selection-bar.is-docking-motion {
+  animation: pw-sel-settle 440ms var(--ease-out, ease) both;
+}
+
+/* Focus ring — interactive controls only (never textarea: composer has its own shell ring) */
+:focus-visible:not(textarea):not(input):not(select) {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--bg-panel),
+    0 0 0 4px var(--accent-ring);
+}
+
+textarea:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Popover enter (clipboard export menu etc.) */
+@keyframes pw-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .ambient-layer::before,
+  .ambient-layer::after,
+  .pick-btn.is-active,
+  .pick-btn[aria-pressed='true'],
+  .status-pill[data-state='running'] .status-dot,
+  .stop-btn.is-live::before,
+  .stop-btn.is-live::after,
+  .stop-btn:not([hidden])::before,
+  .stop-btn:not([hidden])::after,
+  .stop-btn .stop-icon,
+  .stream-cursor,
+  .pw-stream-cursor,
+  .task-card,
+  .clip-export-menu.is-open,
+  .clip-export-menu[popover]:popover-open,
+  .sheet-backdrop,
+  .more-sheet {
+    animation: none !important;
+  }
+
+  .clip-export-item,
+  .history-row,
+  .task-actions .btn,
+  .skill-save-btn,
+  .skill-quick-script-btn,
+  .pick-btn,
+  .send-btn,
+  .stop-btn,
+  .sel-expand-body,
+  .drafts-bar .drafts-list,
+  .clip-drawer,
+  .task-stream {
+    transition: none !important;
+  }
+}

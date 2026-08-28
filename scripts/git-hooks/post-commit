@@ -1,0 +1,40 @@
+#!/bin/sh
+# Auto-push current branch to origin after every successful commit.
+# Install: npm run hooks:install
+# Skip once: SKIP_AUTO_PUSH=1 git commit ...
+
+if [ -n "$SKIP_AUTO_PUSH" ]; then
+  echo "[post-commit] SKIP_AUTO_PUSH set — not pushing"
+  exit 0
+fi
+
+if [ -n "$GIT_REFLOG_ACTION" ]; then
+  case "$GIT_REFLOG_ACTION" in
+    rebase*|pull*|cherry-pick*) exit 0 ;;
+  esac
+fi
+
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
+if [ "$branch" = "HEAD" ]; then
+  echo "[post-commit] detached HEAD — not pushing"
+  exit 0
+fi
+
+if ! git remote get-url origin >/dev/null 2>&1; then
+  echo "[post-commit] no origin remote — skip push"
+  exit 0
+fi
+
+echo "[post-commit] pushing $branch → origin …"
+if git rev-parse --abbrev-ref "@{u}" >/dev/null 2>&1; then
+  git push origin "HEAD"
+else
+  git push -u origin "HEAD"
+fi
+status=$?
+if [ $status -ne 0 ]; then
+  echo "[post-commit] push failed (exit $status). Commit is local; push manually when online."
+  exit 0
+fi
+echo "[post-commit] push ok"
+exit 0

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <title>think-toggle click fixture</title>
+  <link rel="stylesheet" href="../../../src/sidepanel/css/tokens.css" />
+  <link rel="stylesheet" href="../../../src/sidepanel.css" />
+  <style>
+    body { padding: 24px; background: var(--bg-panel, #f7f4ef); }
+  </style>
+</head>
+<body>
+  <article class="session-thread task-card is-active" id="thread">
+    <div class="task-header">
+      <div class="task-header-left">
+        <div class="task-kicker">对话</div>
+        <div class="task-title">fixture</div>
+      </div>
+    </div>
+    <div class="task-body">
+      <div class="msg user">用户问题</div>
+      <div class="think-block is-live is-collapsed" id="think">
+        <button type="button" class="think-toggle" id="toggle" aria-expanded="false">
+          <span class="think-toggle-left">
+            <span class="think-dot"></span>
+            <span class="think-summary">思考中… · 2s</span>
+          </span>
+          <span class="think-chevron">▸</span>
+        </button>
+        <div class="think-body-wrap">
+          <div class="think-body" id="thinkBody">inspect groups → 3 items</div>
+        </div>
+      </div>
+      <div class="msg assistant msg-final">助手回答</div>
+    </div>
+  </article>
+  <p id="result">not-clicked</p>
+  <script>
+    const think = document.getElementById('think');
+    const toggle = document.getElementById('toggle');
+    const thread = document.getElementById('thread');
+    const peThread = getComputedStyle(thread).pointerEvents;
+    const peToggle = getComputedStyle(toggle).pointerEvents;
+    document.getElementById('result').textContent =
+      `thread=${peThread};toggle=${peToggle}`;
+    toggle.addEventListener('click', () => {
+      const expanded = !think.classList.contains('is-expanded');
+      think.classList.toggle('is-expanded', expanded);
+      think.classList.toggle('is-collapsed', !expanded);
+      toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      document.getElementById('result').textContent = expanded
+        ? `opened;thread=${peThread};toggle=${peToggle}`
+        : `closed;thread=${peThread};toggle=${peToggle}`;
+    });
+    toggle.click();
+  </script>
+</body>
+</html>
