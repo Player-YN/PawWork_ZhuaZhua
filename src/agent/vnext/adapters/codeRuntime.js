@@ -1233,15 +1233,6 @@ async function writeBlockLog(err) {
     msg = String(err);
   }
   const line = `[${new Date().toISOString()}] QuickJS blocked/failed:\n${msg}\n`;
-  const candidates = [
-    'C:\\Users\\yyy\\AppData\\Local\\Temp\\grok-goal-38ca94202396\\implementer\\t8-block.log',
-    typeof process !== 'undefined' && process.env?.TEMP
-      ? `${process.env.TEMP}\\grok-goal-38ca94202396\\implementer\\t8-block.log`
-      : null,
-    typeof process !== 'undefined' && process.env?.PAW_SCRATCH
-      ? `${process.env.PAW_SCRATCH}\\t8-block.log`
-      : null
-  ].filter(Boolean);
 
   if (typeof process === 'undefined' || !process.versions?.node) {
     console.error('[codeRuntime]', line);
@@ -1251,6 +1242,11 @@ async function writeBlockLog(err) {
   try {
     const fs = await import('node:fs/promises');
     const path = await import('node:path');
+    const os = await import('node:os');
+    const candidates = [
+      process.env?.PAW_SCRATCH ? path.join(process.env.PAW_SCRATCH, 't8-block.log') : null,
+      path.join(os.tmpdir(), 't8-block.log')
+    ].filter(Boolean);
     for (const p of candidates) {
       try {
         await fs.mkdir(path.dirname(p), { recursive: true });
