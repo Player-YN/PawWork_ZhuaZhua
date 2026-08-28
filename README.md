@@ -91,7 +91,7 @@ npm run ci:local             # npm ci + build + full test matrix + pack
 | `npm run test:visual-deck` | Real tldraw pixel harness | Playwright Chromium |
 | `npm run test:extension-e2e` | Packed MV3 + local mock model | pack + Playwright Chromium |
 
-This repository intentionally ships **no CI workflow**: the full matrix assumes a local toolchain (Playwright Chromium for pixel/E2E tests; optionally .NET for the OpenXML PPTX validator harness). Run the matrix locally before proposing changes.
+CI runs the Node-only matrix plus build and pack on every push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). The pixel and E2E tests (`test:visual-deck`, `test:extension-e2e`) are not in CI — they assume a local toolchain with Playwright Chromium, as does the optional .NET OpenXML PPTX validator harness. Run those locally before proposing canvas or export changes.
 
 ## Limitations
 

@@ -21,7 +21,7 @@ npm run test:session-workspace:attacks  # adversarial waves
 npm run test:workspace                  # MV3 + import gates
 ```
 
-Optional pixel/E2E tests need `npm run playwright:install` first (`test:visual-deck`, `test:extension-e2e`). There is no hosted CI; run the gates locally.
+Optional pixel/E2E tests need `npm run playwright:install` first (`test:visual-deck`, `test:extension-e2e`). CI mirrors `npm run ci:local` (build + Node-only suites + pack); the pixel/E2E tests run locally only.
 
 ## Pull requests
 
