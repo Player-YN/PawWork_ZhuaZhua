@@ -2,11 +2,15 @@
 
 **Selection-first web agent for Chrome.** Select on the live page, describe the outcome, take away a real file.
 
+[![CI](https://github.com/Player-YN/PawWork_ZhuaZhua/actions/workflows/ci.yml/badge.svg)](https://github.com/Player-YN/PawWork_ZhuaZhua/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/Player-YN/PawWork_ZhuaZhua)](LICENSE)
+![Chrome MV3](https://img.shields.io/badge/chrome-manifest%20v3-4285F4?logo=googlechrome&logoColor=white)
+
 ```text
 SELECT + DESCRIBE OUTCOME → DELIVER
 ```
 
-English below · [中文在后](#中文)
+[Install](#install-build-from-source) · [Highlights](#highlights) · [Architecture](#architecture) · [Limitations](#limitations) · [中文](#中文)
 
 ---
 
@@ -26,21 +30,6 @@ It is not an autonomous web-roaming black box, and not a terminal coding agent. 
 - **BYOK, local-only keys.** Bring your own OpenAI-compatible endpoints for chat and image generation, plus optional web-acquire keys. Keys stay in Chrome extension storage on your machine.
 - **Durable session workspace.** Artifacts persist in IndexedDB + OPFS across restarts; deliverable bytes must match their claimed format.
 
-## Architecture
-
-```text
-Sidepanel
-  → workspaceRpc (background service worker)
-  → Offscreen SessionWorkspaceService
-  → every user message: sendMessage
-  → AI SDK ToolLoopAgent (toolChoice=auto)
-  → tools: inspect / acquire / run / clarify / sheet / deck / doc / web
-  → /artifacts (durable) + /scratch (per-execution)
-  → live canvases: Univer sheet & docs · tldraw Design/Slides · HTML site
-```
-
-The split of duties: the **runtime binds** (session isolation, write policy, open routing, tool inventory, fail-closed office writes) while the **prompt and skills judge** (answer vs deliverable, which playbook, when to clarify, how to compose). See [`docs/PROMPT_RUNTIME.md`](docs/PROMPT_RUNTIME.md) and [`docs/SESSION_WORKSPACE_RUNTIME.md`](docs/SESSION_WORKSPACE_RUNTIME.md).
-
 ## Install (build from source)
 
 Prerequisites: Node.js 20+, npm, Chrome 120+.
@@ -56,6 +45,21 @@ npm run pack:extension
 Then open `chrome://extensions`, enable Developer mode, and **Load unpacked** → select `artifacts/unpacked/`. The packed extension is ~44 MB (esbuild.wasm plus locally built Univer and tldraw bundles). Do not load the repository root — it contains `node_modules`.
 
 Rebuild (`npm run build:agent`) and reload the extension after pulling changes.
+
+## Architecture
+
+```text
+Sidepanel
+  → workspaceRpc (background service worker)
+  → Offscreen SessionWorkspaceService
+  → every user message: sendMessage
+  → AI SDK ToolLoopAgent (toolChoice=auto)
+  → tools: inspect / acquire / run / clarify / sheet / deck / doc / web
+  → /artifacts (durable) + /scratch (per-execution)
+  → live canvases: Univer sheet & docs · tldraw Design/Slides · HTML site
+```
+
+The split of duties: the **runtime binds** (session isolation, write policy, open routing, tool inventory, fail-closed office writes) while the **prompt and skills judge** (answer vs deliverable, which playbook, when to clarify, how to compose). See [`docs/PROMPT_RUNTIME.md`](docs/PROMPT_RUNTIME.md) and [`docs/SESSION_WORKSPACE_RUNTIME.md`](docs/SESSION_WORKSPACE_RUNTIME.md).
 
 ## BYOK setup
 

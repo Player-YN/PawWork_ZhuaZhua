@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 640px; overflow: hidden; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: #1a1613;
+    color: #f5efe6;
+    position: relative;
+  }
+  .rim {
+    position: absolute; inset: 14px; border-radius: 22px;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    box-shadow: inset 0 0 90px rgba(245, 158, 11, 0.08), 0 0 40px rgba(245, 158, 11, 0.10);
+  }
+  .wrap { position: absolute; inset: 0; padding: 96px 110px; display: flex; flex-direction: column; justify-content: center; }
+  .brand { display: flex; align-items: baseline; gap: 22px; }
+  .paw { font-size: 64px; }
+  .name { font-size: 76px; font-weight: 700; letter-spacing: 0.5px; }
+  .name .zh { color: #f5efe6; }
+  .name .dot { color: rgba(245,158,11,0.8); margin: 0 10px; }
+  .name .en { color: #f5efe6; }
+  .tag { margin-top: 30px; font-size: 33px; color: #cfc4b4; font-weight: 400; }
+  .flow {
+    margin-top: 44px; font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: 30px; letter-spacing: 1px; color: #e8dfd2;
+  }
+  .flow .arrow { color: #f59e0b; padding: 0 14px; }
+  .foot {
+    position: absolute; left: 110px; bottom: 64px;
+    font-size: 24px; color: #8f8577; letter-spacing: 2px;
+  }
+  .foot span { color: rgba(245,158,11,0.65); padding: 0 14px; }
+</style>
+</head>
+<body>
+  <div class="rim"></div>
+  <div class="wrap">
+    <div class="brand">
+      <div class="paw">🐾</div>
+      <div class="name"><span class="zh">爪爪</span><span class="dot">·</span><span class="en">Paw Work</span></div>
+    </div>
+    <div class="tag">Selection-first web agent for Chrome — point at the page, take away an editable file.</div>
+    <div class="flow">SELECT + DESCRIBE OUTCOME<span class="arrow">→</span>DELIVER</div>
+  </div>
+  <div class="foot">CHROME MV3<span>·</span>BYOK<span>·</span>SANDBOXED<span>·</span>MIT</div>
+</body>
+</html>
