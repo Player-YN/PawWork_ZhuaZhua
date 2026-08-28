@@ -10,7 +10,7 @@
 SELECT + DESCRIBE OUTCOME → DELIVER
 ```
 
-[Install](#install-build-from-source) · [Highlights](#highlights) · [Architecture](#architecture) · [Limitations](#limitations) · [中文](#中文)
+[Install](#install-build-from-source) · [See it](#see-it) · [Highlights](#highlights) · [Architecture](#architecture) · [Limitations](#limitations) · [中文](#中文)
 
 ---
 
@@ -19,6 +19,22 @@ SELECT + DESCRIBE OUTCOME → DELIVER
 Paw Work is a Chrome MV3 extension. Turn Paw Mode on, point at things on the page you already have open — images, tables, text, containers, URLs — then describe the deliverable in the sidepanel. The agent works inside a durable session workspace and returns editable office files, not chat prose.
 
 It is not an autonomous web-roaming black box, and not a terminal coding agent. It sits beside the browser world you are already logged into: you set the scope, it returns checkable results.
+
+## See it
+
+Selecting product cards on a live Apple page. The sidepanel holds the capture; the next line in the composer is the outcome.
+
+![Selecting iPhone product photos on apple.com.cn with Paw Work sidepanel chips](docs/images/select-on-page.png)
+
+A live Univer spreadsheet beside the sidepanel. The agent is editing the open workbook in place — here, splitting a SKU column — not dumping a new file into chat.
+
+![Live Univer sheet with Paw Work sidepanel editing the open workbook](docs/images/sheet-edit.jpg)
+
+<p align="center">
+  <img src="docs/images/sidepanel.png" alt="Paw Work sidepanel: Paw Mode, Bind Group, deliverables, composer" width="360">
+</p>
+
+Empty session chrome: Paw Mode, capture group, Bind Group, deliverables, composer.
 
 ## Highlights
 
@@ -123,6 +139,22 @@ MIT for the code in this repository — see [LICENSE](LICENSE). Third-party engi
 爪爪 · Paw Work 是一个 Chrome MV3 扩展。打开爪爪模式，在已经登录、已经打开的网页上点选图片、表格、文字、容器、链接，然后在侧栏里描述你要的交付物。智能体在持久的会话工作区里干活，交回的是可编辑的办公文件，不是聊天段落。
 
 它不是「替你全自动漫游全网」的黑盒，也不是程序员的终端 Agent。它坐在你已经打开的浏览器世界旁边：你指范围，它交付可核对的结果。
+
+## 演示
+
+在已经打开的苹果官网点选商品图。捕获落在侧栏，下一句输入就是要的结果。
+
+![在 apple.com.cn 点选 iPhone 商品图，侧栏列出选中的图片](docs/images/select-on-page.png)
+
+活表格开在旁边。智能体在改当前这一本工作簿（这里是拆 SKU 列），不是在聊天里另交一份文件。
+
+![Univer 活表格与侧栏：正在原地改打开的工作簿](docs/images/sheet-edit.jpg)
+
+<p align="center">
+  <img src="docs/images/sidepanel.png" alt="爪爪侧栏：伸爪、Bind Group、交付物、输入框" width="360">
+</p>
+
+空会话时的侧栏：伸爪、选择组、Bind Group、交付物、输入框。
 
 ## 亮点
 
