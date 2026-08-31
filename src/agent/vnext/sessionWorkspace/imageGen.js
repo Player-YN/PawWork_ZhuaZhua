@@ -42,19 +42,20 @@ export function stampNoTextPrompt(prompt, allowText = false) {
 export function resolveImageRuntimeConfig(settings) {
   const image = settings?.image && typeof settings.image === 'object' ? settings.image : null;
   const chatBase = String(settings?.apiBase || '').replace(/\/$/, '');
-  const chatLooksOpenRouter = /openrouter\.ai/i.test(chatBase);
+  const imageBaseExplicit =
+    typeof image?.baseURL === 'string' && image.baseURL.trim()
+      ? image.baseURL.trim().replace(/\/$/, '')
+      : '';
+  const imageBase = imageBaseExplicit || chatBase;
+  const looksOpenRouter = /openrouter\.ai/i.test(imageBaseExplicit || chatBase);
   const enabled = !!image?.enabled;
   const protocol =
     (image?.protocol && String(image.protocol).trim()) ||
-    (chatLooksOpenRouter ? 'openrouter-image' : 'minimax-image');
+    (looksOpenRouter ? 'openrouter-image' : 'minimax-image');
   const pathDefault =
     protocol === 'openrouter-image' ? DEFAULT_OPENROUTER_IMAGE_PATH : '/image_generation';
   const modelDefault =
     protocol === 'openrouter-image' ? DEFAULT_OPENROUTER_IMAGE_MODEL : 'image-01';
-  const imageBase =
-    (typeof image?.baseURL === 'string' && image.baseURL.trim()
-      ? image.baseURL.trim().replace(/\/$/, '')
-      : '') || chatBase;
   const imageKey =
     typeof image?.apiKey === 'string' && image.apiKey.trim() ? image.apiKey.trim() : '';
   return {

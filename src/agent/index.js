@@ -13,6 +13,9 @@ export {
   upsertProvider,
   deleteProvider,
   setActiveProviderId,
+  setActiveProviderModel,
+  setActiveProviderImageModel,
+  applyProviderImageModel,
   generateProviderId,
   normalizeProvider,
   normalizeImageConfig,
@@ -21,6 +24,7 @@ export {
   PROVIDERS_STORAGE_KEY,
   ACTIVE_PROVIDER_ID_KEY,
   DEFAULT_BASE,
+  OPENROUTER_API_BASE,
   DEFAULT_IMAGE_PROTOCOL,
   DEFAULT_IMAGE_PATH,
   DEFAULT_IMAGE_MODEL

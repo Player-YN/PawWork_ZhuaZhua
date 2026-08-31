@@ -84,7 +84,7 @@ Nothing works without your own keys. All of them live in Chrome extension local 
 | What | Where | Notes |
 |------|-------|-------|
 | Chat model | Sidepanel settings → providers (`pagewand_providers`) | Any OpenAI-compatible HTTPS endpoint: base URL + API key + model id |
-| Image generation | Optional per-provider `image` config | Separate endpoint/key/model for image output; output modality is detected automatically |
+| Image generation | Optional per-provider `image` config | Own baseUrl / key / model (empty inherits chat); picker switches both; output modality is detected automatically |
 | Web acquire | Sidepanel settings (`pagewand_web_acquire`) | Search: Tavily (default) or Brave; Firecrawl enables fetch scrape, `map`, and `crawl`. Without keys, `fetch` falls back to anonymous GET |
 | tldraw license | Optional (`pagewand_tldraw_license` or build-time `PAW_TLDRAW_LICENSE_KEY`) | Removes the tldraw watermark; see Limitations |
 

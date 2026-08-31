@@ -4,11 +4,13 @@ import {
   loadProvidersState,
   setActiveProviderId,
   setActiveProviderModel,
+  setActiveProviderImageModel,
   upsertProvider,
   deleteProvider,
   generateProviderId,
   PROVIDER_PRESETS,
   DEFAULT_BASE,
+  OPENROUTER_API_BASE,
   DEFAULT_IMAGE_PROTOCOL,
   DEFAULT_IMAGE_PATH,
   DEFAULT_IMAGE_MODEL,
@@ -106,7 +108,12 @@ import {
   resolveContextWindow,
   effortLevelsForReasoning,
   GATEWAY_REASONING_EFFORTS,
-  pushRecentModel
+  pushRecentModel,
+  buildProviderPickerGroups,
+  formatModelChipLabel,
+  filterPickerGroup,
+  shortModelId,
+  applyProviderProbeResult
 } from './agent/modelCatalog.js';
 import {
   pinItems as pinClipboardItemsToStore,
@@ -319,6 +326,8 @@ let isPickerActive = false;
 let selectedElementsSummary = [];
 let userCustomShortcut = 'Alt+S';
 let selectedModel = 'deepseek-v4-flash';
+/** Active image-gen model id on the current provider; empty when image API is off. */
+let selectedImageModel = '';
 /** OpenRouter reasoning.effort; `none` = thinking off */
 let reasoningEffort = 'none';
 /** @type {import('./agent/modelCatalog.js').ModelEntry[]} */
@@ -2230,6 +2239,8 @@ function loadSavedPreferences() {
       loadLlmSettings()
         .then((s) => {
           if (s?.model) ensureModelOption(s.model);
+          selectedImageModel = s?.image?.enabled ? String(s.image.model || '') : '';
+          renderModelSelectMenu();
         })
         .catch(() => {});
       hydrateThemeFromStorage(result);
@@ -10773,12 +10784,17 @@ function renderModelSelectMenu() {
   const menu = $('modelSelectMenu');
   const label = $('modelSelectLabel');
   if (!select || !menu) return;
-  const name = modelSelectLabelText(select);
-  if (label) label.textContent = name;
+  const chatName = modelSelectLabelText(select);
+  const name = formatModelChipLabel(select.value || selectedModel || chatName, selectedImageModel);
+  if (label) label.textContent = name || chatName;
   const current = $('modelSelectCurrentName');
-  if (current) current.textContent = name;
+  if (current) current.textContent = name || chatName;
   const trigger = $('modelSelectTrigger');
-  if (trigger) trigger.title = name;
+  if (trigger) {
+    trigger.title = selectedImageModel
+      ? `${chatName} · ${selectedImageModel}`
+      : chatName;
+  }
   renderReasoningEffortChips();
 }
 
@@ -10808,6 +10824,10 @@ async function pickComposerModel(modelId, providerId) {
     } catch (_) {}
   }
   await persistComposerModel(id, providerId);
+  try {
+    const settings = await loadLlmSettings();
+    selectedImageModel = settings?.image?.enabled ? String(settings.image.model || '') : '';
+  } catch (_) {}
   ensureModelOption(id);
   const select = $('modelSelect');
   if (select && select.value !== id) {
@@ -10824,33 +10844,86 @@ async function pickComposerModel(modelId, providerId) {
   setModelSubmenuOpen(false);
 }
 
+async function persistComposerImageModel(modelId, providerId) {
+  const id = String(modelId || '').trim();
+  if (!id) return;
+  try {
+    await setActiveProviderImageModel(id, { providerId: providerId || undefined });
+  } catch (_) {}
+}
+
+async function pickComposerImageModel(modelId, providerId) {
+  const id = String(modelId || '').trim();
+  if (!id) return;
+  await persistComposerImageModel(id, providerId);
+  let activeId = null;
+  try {
+    const state = await loadProvidersState();
+    activeId = state.activeProviderId || null;
+  } catch (_) {}
+  if (!providerId || providerId === activeId) {
+    selectedImageModel = id;
+  }
+  renderModelSelectMenu();
+  refreshAgentStatusBadge();
+  setModelSubmenuOpen(false);
+}
+
 async function modelsForProvider(provider) {
-  const current = String(provider?.model || '').trim();
-  const cached = provider?.baseURL ? await loadCachedModelsForBase(provider.baseURL) : { models: [] };
-  const remote = chatModelsFromList(Array.isArray(cached.models) ? cached.models : []);
-  const ids = [];
-  const seen = new Set();
-  const push = (id, name) => {
-    const mid = String(id || '').trim();
-    if (!mid || seen.has(mid)) return;
-    seen.add(mid);
-    ids.push({ id: mid, name: name || mid });
+  const chatBase = String(provider?.baseURL || '').replace(/\/$/, '');
+  const imageBaseExplicit =
+    typeof provider?.image?.baseURL === 'string' && provider.image.baseURL.trim()
+      ? provider.image.baseURL.trim().replace(/\/$/, '')
+      : '';
+  const imageBase = imageBaseExplicit || chatBase;
+  const chatCached = chatBase ? await loadCachedModelsForBase(chatBase) : { models: [] };
+  const imageCached =
+    provider?.image?.enabled && imageBase
+      ? imageBase === chatBase
+        ? chatCached
+        : await loadCachedModelsForBase(imageBase)
+      : { models: [] };
+  const groups = buildProviderPickerGroups(provider, {
+    chat: chatModelsFromList(Array.isArray(chatCached.models) ? chatCached.models : []),
+    image: imageModelsFromList(Array.isArray(imageCached.models) ? imageCached.models : [])
+  });
+  return {
+    chat: groups.chat,
+    image: groups.image,
+    chatTotal: groups.chat.length,
+    imageTotal: groups.image.length
   };
-  if (current) push(current, current);
-  for (const m of remote) push(m.id, m.name || m.id);
-  return { items: ids, total: remote.length || ids.length };
 }
 
 /** Accordion: which inference API is expanded in the composer picker. null = active provider. */
 let modelPickerOpenId = null;
+/** In-memory 推理 / 生图 collapse. Default expand when that list exists. */
+const modelPickerPaneOpen = { chat: true, image: true };
+/** Per-list search. Chat query never filters 生图, and vice versa. */
+const modelPickerPaneQuery = { chat: '', image: '' };
+/** In-row picker probe. One provider at a time. */
+const modelPickerProbe = { id: '', busy: false, error: '' };
+
+function wireModelPaneSearch(search) {
+  if (!search || search.dataset.wired) return;
+  search.dataset.wired = '1';
+  search.addEventListener('click', (e) => e.stopPropagation());
+  search.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      setModelSubmenuOpen(false);
+      setModelSelectOpen(true);
+      return;
+    }
+    e.stopPropagation();
+  });
+}
 
 async function renderModelPickerList() {
   const list = $('modelSelectList');
   const select = $('modelSelect');
   if (!list) return;
   list.innerHTML = '';
-  const query = String($('modelSelectSearch')?.value || '').trim();
-  const searching = !!query;
   let providers = [];
   let activeProviderId = null;
   try {
@@ -10858,41 +10931,150 @@ async function renderModelPickerList() {
     providers = Array.isArray(state.providers) ? state.providers : [];
     activeProviderId = state.activeProviderId || null;
   } catch (_) {}
-  const used = new Set();
-  const addItem = (host, id, label, providerId) => {
+  const addItem = (host, id, label, providerId, kind) => {
     const mid = String(id || '').trim();
-    if (!mid || used.has(`${providerId || ''}::${mid}`)) return;
-    used.add(`${providerId || ''}::${mid}`);
+    if (!mid) return;
+    const isImage = kind === 'image';
+    const sameProvider = !providerId || providerId === activeProviderId;
+    const isActive = isImage
+      ? sameProvider && mid === selectedImageModel
+      : sameProvider && mid === (select?.value || selectedModel);
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className =
-      'model-select-item' + (mid === (select?.value || selectedModel) && (!providerId || providerId === activeProviderId) ? ' is-active' : '');
+    btn.className = 'model-select-item' + (isActive ? ' is-active' : '');
     btn.setAttribute('role', 'option');
     btn.dataset.value = mid;
+    btn.dataset.kind = isImage ? 'image' : 'chat';
     btn.textContent = label || mid;
     btn.title = mid;
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      void pickComposerModel(mid, providerId);
+      if (isImage) void pickComposerImageModel(mid, providerId);
+      else void pickComposerModel(mid, providerId);
     });
-    host.appendChild(btn);
+    const li = document.createElement('li');
+    li.appendChild(btn);
+    host.appendChild(li);
+  };
+  const addPane = (host, kind, title, items, providerId, currentId) => {
+    if (!items.length) return;
+    const paneOpen = modelPickerPaneOpen[kind] !== false;
+    const pane = document.createElement('section');
+    pane.className = 'model-select-pane' + (paneOpen ? ' is-open' : '');
+    pane.dataset.kind = kind;
+
+    const head = document.createElement('button');
+    head.type = 'button';
+    head.className = 'model-select-pane-toggle';
+    head.setAttribute('aria-expanded', paneOpen ? 'true' : 'false');
+    const caret = document.createElement('span');
+    caret.className = 'model-select-pane-caret';
+    caret.setAttribute('aria-hidden', 'true');
+    caret.textContent = paneOpen ? '▾' : '▸';
+    const lab = document.createElement('span');
+    lab.className = 'model-select-pane-label';
+    lab.textContent = title;
+    head.append(caret, lab);
+    const currentShort = shortModelId(currentId);
+    if (currentShort) {
+      const cur = document.createElement('span');
+      cur.className = 'model-select-pane-current';
+      cur.textContent = currentShort;
+      cur.title = String(currentId || '');
+      head.appendChild(cur);
+    }
+
+    const body = document.createElement('div');
+    body.className = 'model-select-pane-body';
+    body.hidden = !paneOpen;
+
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.className = 'model-select-search model-select-pane-search';
+    search.dataset.kind = kind;
+    search.setAttribute(
+      'placeholder',
+      t(kind === 'image' ? 'modelPickerSearchImage' : 'modelPickerSearchChat')
+    );
+    search.setAttribute('autocomplete', 'off');
+    search.setAttribute(
+      'aria-label',
+      t(kind === 'image' ? 'modelPickerSearchImage' : 'modelPickerSearchChat')
+    );
+    search.value = modelPickerPaneQuery[kind] || '';
+    wireModelPaneSearch(search);
+
+    const ul = document.createElement('ul');
+    ul.className = 'model-select-pane-list';
+    ul.setAttribute('role', 'listbox');
+    ul.setAttribute('aria-label', title);
+    const empty = document.createElement('div');
+    empty.className = 'model-select-empty model-select-pane-empty';
+    empty.hidden = true;
+
+    const paintList = () => {
+      const q = String(search.value || '').trim();
+      modelPickerPaneQuery[kind] = q;
+      const preferIds = [currentId].filter(Boolean);
+      if (kind === 'image') {
+        if (selectedImageModel) preferIds.push(selectedImageModel);
+      } else if (selectedModel) {
+        preferIds.push(selectedModel);
+      }
+      const shrunk = filterPickerGroup(items, q, {
+        limit: q ? 24 : 40,
+        preferIds
+      });
+      ul.innerHTML = '';
+      const seen = new Set();
+      for (const m of shrunk.items) {
+        const mid = String(m?.id || '').trim();
+        if (!mid || seen.has(mid)) continue;
+        seen.add(mid);
+        addItem(ul, mid, m.name || mid, providerId, kind);
+      }
+      const none = !shrunk.items.length;
+      empty.hidden = !none;
+      empty.textContent = q ? t('modelPickerNoMatch') : t('modelPickerEmpty');
+      ul.hidden = none;
+    };
+    search.addEventListener('input', paintList);
+    paintList();
+
+    head.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const next = !pane.classList.contains('is-open');
+      modelPickerPaneOpen[kind] = next;
+      pane.classList.toggle('is-open', next);
+      head.setAttribute('aria-expanded', next ? 'true' : 'false');
+      caret.textContent = next ? '▾' : '▸';
+      body.hidden = !next;
+      if (!next && body.contains(document.activeElement)) head.focus();
+    });
+
+    body.append(search, ul, empty);
+    pane.append(head, body);
+    host.appendChild(pane);
   };
   let any = false;
   const rows = providers.length ? providers : [{ id: '', name: '', model: select?.value || selectedModel }];
-  const accordion = rows.length > 1 && !searching;
+  const accordion = rows.length > 1;
   const openId =
     modelPickerOpenId === null ? activeProviderId || rows[0]?.id || '' : modelPickerOpenId;
   for (const p of rows) {
     const pack = await modelsForProvider(p);
-    const shrunk = shrinkModelList(pack.items, {
-      query,
-      limit: searching ? 24 : 40,
-      preferIds: [p.model, selectedModel].filter(Boolean)
-    });
-    if (searching && !shrunk.items.length) continue;
     const expanded = accordion ? p.id === openId : true;
-    if (accordion || searching) {
+    const n = (pack.chatTotal || pack.chat.length) + (pack.image.length ? pack.imageTotal : 0);
+    const wrap = document.createElement('div');
+    wrap.className = 'model-select-provider';
+    wrap.dataset.providerId = p.id || '';
+
+    const row = document.createElement('div');
+    row.className = 'model-select-group-row';
+
+    if (p.id && accordion) {
       const groupBtn = document.createElement('button');
       groupBtn.type = 'button';
       groupBtn.className =
@@ -10903,7 +11085,8 @@ async function renderModelPickerList() {
       caret.className = 'model-select-group-caret';
       caret.textContent = expanded ? '▾' : '▸';
       const lab = document.createElement('span');
-      lab.textContent = `${p.name || p.id || 'API'} · ${pack.total || shrunk.items.length}`;
+      lab.className = 'model-select-group-label';
+      lab.textContent = `${p.name || p.id || 'API'} · ${n}`;
       groupBtn.append(caret, lab);
       groupBtn.addEventListener('click', (e) => {
         e.preventDefault();
@@ -10911,14 +11094,54 @@ async function renderModelPickerList() {
         modelPickerOpenId = p.id === openId ? '' : p.id;
         void renderModelPickerList();
       });
-      list.appendChild(groupBtn);
+      row.appendChild(groupBtn);
+    } else if (p.id) {
+      const lab = document.createElement('div');
+      lab.className = 'model-select-group is-static' + (p.id === activeProviderId ? ' is-active' : '');
+      const name = document.createElement('span');
+      name.className = 'model-select-group-label';
+      name.textContent = `${p.name || p.id || 'API'} · ${n}`;
+      lab.appendChild(name);
+      row.appendChild(lab);
     }
+
+    if (p.id) {
+      const probeBtn = document.createElement('button');
+      probeBtn.type = 'button';
+      probeBtn.className = 'model-select-probe';
+      const probing = modelPickerProbe.busy && modelPickerProbe.id === p.id;
+      probeBtn.disabled = probing;
+      probeBtn.setAttribute('aria-label', t('modelPickerProbe'));
+      probeBtn.title = t('modelPickerProbeHint');
+      probeBtn.textContent = probing ? t('modelPickerProbing') : t('modelPickerProbe');
+      probeBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void onPickerProbeProvider(p);
+      });
+      probeBtn.addEventListener('keydown', (e) => e.stopPropagation());
+      row.appendChild(probeBtn);
+    }
+    if (row.childElementCount) wrap.appendChild(row);
+
+    if (modelPickerProbe.error && modelPickerProbe.id === p.id && !modelPickerProbe.busy) {
+      const err = document.createElement('p');
+      err.className = 'model-select-probe-err';
+      err.textContent = t('apiProbeFail').replace('{err}', modelPickerProbe.error);
+      wrap.appendChild(err);
+    }
+
+    list.appendChild(wrap);
     if (!expanded) continue;
     const body = document.createElement('div');
     body.className = 'model-select-group-body';
-    for (const m of shrunk.items) addItem(body, m.id, m.name || m.id, p.id);
-    list.appendChild(body);
-    any = any || shrunk.items.length > 0;
+    const sameProvider = !p.id || p.id === activeProviderId;
+    const chatCurrent = sameProvider ? select?.value || selectedModel || p.model : p.model;
+    const imageCurrent = sameProvider ? selectedImageModel || p.image?.model : p.image?.model;
+    addPane(body, 'chat', t('modelPickerChat'), pack.chat, p.id, chatCurrent);
+    addPane(body, 'image', t('modelPickerImage'), pack.image, p.id, imageCurrent);
+    if (body.childElementCount) wrap.appendChild(body);
+    any = any || pack.chat.length > 0 || pack.image.length > 0;
   }
   if (!any) {
     const empty = document.createElement('div');
@@ -10926,8 +11149,67 @@ async function renderModelPickerList() {
     empty.textContent = t('modelPickerEmpty');
     list.appendChild(empty);
     const fallback = select?.value || selectedModel;
-    if (fallback) addItem(list, fallback, fallback, activeProviderId);
+    if (fallback) {
+      const body = document.createElement('div');
+      body.className = 'model-select-group-body';
+      addPane(body, 'chat', t('modelPickerChat'), [{ id: fallback, name: fallback }], activeProviderId, fallback);
+      list.appendChild(body);
+    }
   }
+}
+
+function paintPickerProbeRow(providerId, { busy, error } = {}) {
+  const wrap = document.querySelector(
+    `#modelSelectList .model-select-provider[data-provider-id="${CSS.escape(String(providerId || ''))}"]`
+  );
+  if (!wrap) return;
+  const btn = wrap.querySelector('.model-select-probe');
+  if (btn) {
+    btn.disabled = !!busy;
+    btn.textContent = busy ? t('modelPickerProbing') : t('modelPickerProbe');
+  }
+  let err = wrap.querySelector('.model-select-probe-err');
+  const msg = !busy && error ? t('apiProbeFail').replace('{err}', error) : '';
+  if (msg) {
+    if (!err) {
+      err = document.createElement('p');
+      err.className = 'model-select-probe-err';
+      wrap.insertBefore(err, wrap.querySelector('.model-select-group-body'));
+    }
+    err.textContent = msg;
+  } else if (err) {
+    err.remove();
+  }
+}
+
+async function onPickerProbeProvider(provider) {
+  const id = String(provider?.id || '').trim();
+  if (!id || modelPickerProbe.busy) return;
+  modelPickerProbe.id = id;
+  modelPickerProbe.busy = true;
+  modelPickerProbe.error = '';
+  modelPickerOpenId = id;
+  paintPickerProbeRow(id, { busy: true });
+  const result = await probeAndPersistProviderCatalog(provider);
+  modelPickerProbe.busy = false;
+  if (result.ok) {
+    modelPickerProbe.error = '';
+    if (settingsConfigUi.providerId === id) {
+      settingsProbedModels = result.chat;
+      catalogModels = result.chat;
+      settingsProbedImageModels = result.image;
+      fillModelDatalist(result.chat);
+      renderSettingsModelCatalog();
+      renderSettingsImageCatalog();
+      paintProbeResult({ ok: true, count: result.chat.length });
+      syncReasoningSwitch();
+    }
+    await renderModelPickerList();
+    return;
+  }
+  const err = String(result.error || 'error');
+  modelPickerProbe.error = err;
+  paintPickerProbeRow(id, { error: err });
 }
 
 function setModelSubmenuOpen(open) {
@@ -10938,12 +11220,13 @@ function setModelSubmenuOpen(open) {
   const next = !!open;
   if (next) {
     setModelSelectOpen(false);
-    const search = $('modelSelectSearch');
-    if (search) search.value = '';
+    modelPickerPaneQuery.chat = '';
+    modelPickerPaneQuery.image = '';
+    if (selectedImageModel) modelPickerPaneOpen.image = true;
     void renderModelPickerList().then(() => {
       if (sub.hidden) return;
       positionFloatingMenu(sub, btn, { preferUp: true });
-      search?.focus();
+      sub.querySelector('.model-select-pane.is-open .model-select-pane-search')?.focus();
     });
     sub.hidden = false;
     root?.classList.add('is-picking');
@@ -10995,15 +11278,6 @@ function setModelSelectOpen(open) {
 }
 
 function wireModelSelectUi() {
-  const search = $('modelSelectSearch');
-  if (search && !search.dataset.wired) {
-    search.dataset.wired = '1';
-    search.addEventListener('input', () => {
-      void renderModelPickerList();
-    });
-    search.addEventListener('click', (e) => e.stopPropagation());
-    search.addEventListener('keydown', (e) => e.stopPropagation());
-  }
   const trigger = $('modelSelectTrigger');
   if (trigger) {
     trigger.addEventListener('click', (e) => {
@@ -11064,16 +11338,17 @@ async function syncToolbarFromActiveProvider() {
       ensureModelOption(settings.model);
       chrome.storage.local.set({ selected_model: settings.model });
     }
+    selectedImageModel = settings?.image?.enabled ? String(settings.image.model || '') : '';
+    renderModelSelectMenu();
   } catch (_) {}
 }
 
 /**
- * Show/hide custom image base URL.
+ * Image Base URL / Key stay visible (inherit-if-empty). Refresh the status chip.
  */
 function syncImageSectionVisibility() {
-  const sameApi = !!document.getElementById('imageSameApiCheck')?.checked;
   const custom = document.getElementById('imageCustomApiFields');
-  if (custom) custom.hidden = sameApi;
+  if (custom) custom.hidden = false;
   refreshImageGenChip();
 }
 
@@ -11129,7 +11404,6 @@ async function refreshImageGenChip() {
  */
 function applyImagePreset(presetId) {
   const enabled = document.getElementById('providerImageEnabledCheck');
-  const sameApi = document.getElementById('imageSameApiCheck');
   const protocol = document.getElementById('providerImageProtocolInput');
   const model = document.getElementById('providerImageModelInput');
   const path = document.getElementById('providerImagePathInput');
@@ -11138,31 +11412,25 @@ function applyImagePreset(presetId) {
   const chatBase = document.getElementById('apiBaseInput')?.value?.trim() || '';
 
   if (enabled) enabled.checked = true;
-  if (sameApi) sameApi.checked = true;
 
   if (presetId === 'openrouter') {
     if (protocol) protocol.value = 'openrouter-image';
     if (model) model.value = 'google/gemini-2.5-flash-image';
     if (path) path.value = '/images';
-    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'sk-or-...';
-    if (!/openrouter\.ai/i.test(chatBase) && imgBase) {
-      if (sameApi) sameApi.checked = false;
-      imgBase.value = 'https://openrouter.ai/api/v1';
-    }
+    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'inherit chat / 与推理相同';
+    if (imgBase) imgBase.value = OPENROUTER_API_BASE || 'https://openrouter.ai/api/v1';
   } else if (presetId === 'openai') {
     if (protocol) protocol.value = 'openai-image';
     if (model) model.value = 'gpt-image-1';
     if (path) path.value = '/images/generations';
-    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'sk-...';
-    if (!/api\.openai\.com/i.test(chatBase) && imgBase) {
-      if (sameApi) sameApi.checked = false;
+    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'inherit chat / 与推理相同';
+    if (imgBase && !/api\.openai\.com/i.test(chatBase)) {
       imgBase.value = 'https://api.openai.com/v1';
     }
   } else if (presetId === 'openai-compatible') {
     if (protocol) protocol.value = 'openai-image';
     if (path) path.value = '/images/generations';
-    if (sameApi) sameApi.checked = false;
-    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'sk-...';
+    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'inherit chat / 与推理相同';
   } else if (presetId === 'minimax') {
     if (protocol) protocol.value = 'minimax-image';
     if (model) model.value = DEFAULT_IMAGE_MODEL || 'image-01';
@@ -11219,7 +11487,6 @@ function fillSettingsForm(provider, opts = {}) {
   const keyInput = document.getElementById('apiKeyInput');
   const modelInput = document.getElementById('providerModelInput');
   const imgEnabled = document.getElementById('providerImageEnabledCheck');
-  const imgSame = document.getElementById('imageSameApiCheck');
   const imgBase = document.getElementById('providerImageBaseInput');
   const imgKey = document.getElementById('providerImageKeyInput');
   const imgModel = document.getElementById('providerImageModelInput');
@@ -11251,7 +11518,7 @@ function fillSettingsForm(provider, opts = {}) {
       keyInput.placeholder = 'sk-...（尚未配置）';
     }
   }
-  // Image: same-API when image.baseURL is absent/empty
+  // Image: empty baseURL / apiKey inherit chat; OpenRouter template prefills the known origin
   const img =
     provider?.image && typeof provider.image === 'object'
       ? provider.image
@@ -11266,25 +11533,26 @@ function fillSettingsForm(provider, opts = {}) {
 
   const imageBaseStored =
     typeof img.baseURL === 'string' && img.baseURL.trim() ? img.baseURL.trim().replace(/\/$/, '') : '';
-  const sameAsChat = !imageBaseStored;
 
   settingsImageUi.hasStoredKey = !!(img.apiKey);
   settingsImageUi.keyTail = img.apiKey ? String(img.apiKey).slice(-4) : '';
 
   if (imgEnabled) imgEnabled.checked = !!img.enabled;
-  if (imgSame) imgSame.checked = sameAsChat;
-  if (imgBase) imgBase.value = imageBaseStored;
   const looksOr =
     /openrouter/i.test(String(img.protocol || '')) ||
     /openrouter\.ai/i.test(imageBaseStored) ||
     /openrouter\.ai/i.test(String(provider?.baseURL || ''));
+  if (imgBase) {
+    imgBase.value =
+      imageBaseStored ||
+      (looksOr ? OPENROUTER_API_BASE || 'https://openrouter.ai/api/v1' : '');
+    imgBase.placeholder = 'inherit chat / 与推理相同';
+  }
   if (imgKey) {
     imgKey.value = '';
     imgKey.placeholder = settingsImageUi.hasStoredKey
       ? `已配置 (…${settingsImageUi.keyTail}) — 留空则保持不变`
-      : looksOr
-        ? 'sk-or-...'
-        : 'sk-...';
+      : 'inherit chat / 与推理相同';
   }
   if (imgProtocol) {
     imgProtocol.value = img.protocol || (looksOr ? 'openrouter-image' : DEFAULT_IMAGE_PROTOCOL || 'openrouter-image');
@@ -11338,17 +11606,23 @@ function applyInferencePreset(presetId) {
     }
   }
 
-  // MiniMax preset: soft-suggest image defaults (do not force enable)
+  // Soft-suggest image defaults from the chat template (do not force enable)
   if (preset.image && typeof preset.image === 'object') {
     const imgModel = document.getElementById('providerImageModelInput');
     const imgPath = document.getElementById('providerImagePathInput');
-    if (imgModel && !imgModel.value) {
-      imgModel.value = preset.image.model || DEFAULT_IMAGE_MODEL || 'image-01';
-    } else if (imgModel && preset.id === 'minimax') {
+    const imgBase = document.getElementById('providerImageBaseInput');
+    const imgProtocol = document.getElementById('providerImageProtocolInput');
+    if (imgModel && (!imgModel.value || preset.id === 'minimax' || preset.id === 'openrouter')) {
       imgModel.value = preset.image.model || DEFAULT_IMAGE_MODEL || 'image-01';
     }
     if (imgPath && preset.image.path) {
       imgPath.value = preset.image.path;
+    }
+    if (imgProtocol && preset.image.protocol) {
+      imgProtocol.value = preset.image.protocol;
+    }
+    if (imgBase && preset.image.baseURL) {
+      imgBase.value = String(preset.image.baseURL).replace(/\/$/, '');
     }
   }
 
@@ -11511,26 +11785,89 @@ async function hydrateSettingsModelCatalog(provider) {
   paintProbeResult(provider?.lastProbe || null);
 }
 
-async function persistProbeOnProvider(probe) {
-  const id = settingsConfigUi.providerId;
+async function persistProbeOnProvider(probe, providerId = settingsConfigUi.providerId) {
+  const id = providerId;
   if (!id || !probe) return;
   try {
     const state = await loadProvidersState();
     const host = (state.providers || []).find((p) => p.id === id);
     if (!host) return;
+    const applied = applyProviderProbeResult(host, probe);
     await upsertProvider(
       {
         ...host,
-        lastProbe: {
-          ok: probe.ok === true,
-          at: Date.now(),
-          count: Number(probe.count) || 0,
-          error: probe.ok ? undefined : String(probe.error || '')
-        }
+        lastProbe: applied.lastProbe
       },
       { makeActive: false }
     );
   } catch (_) {}
+}
+
+/**
+ * Shared BYOK GET /models probe. Settings and composer picker both call this.
+ * Writes catalog cache + lastProbe. Does not change current model ids.
+ *
+ * @param {{ id?: string, baseURL?: string, apiKey?: string, image?: object }} provider
+ * @returns {Promise<{ ok: boolean, models: any[], chat: any[], image: any[], count: number, error?: string, endpoint?: string }>}
+ */
+async function probeAndPersistProviderCatalog(provider) {
+  const baseURL = String(provider?.baseURL || '').trim().replace(/\/$/, '');
+  const apiKey = String(provider?.apiKey || '').trim();
+  const empty = { ok: false, models: [], chat: [], image: [], count: 0 };
+  if (!baseURL) {
+    return {
+      ...empty,
+      error: settingsLangEn() ? 'Enter Base URL first.' : '请先填写 Base URL。'
+    };
+  }
+  if (/image_generation/i.test(baseURL)) {
+    return {
+      ...empty,
+      error: settingsLangEn()
+        ? 'Base URL cannot be an image_generation path.'
+        : 'Base URL 不能是 image_generation 路径。'
+    };
+  }
+  if (!apiKey) {
+    return {
+      ...empty,
+      error: settingsLangEn() ? 'API key required.' : '需要 API Key。'
+    };
+  }
+
+  const probe = await probeOpenAICompatibleApi(baseURL, apiKey);
+  const applied = applyProviderProbeResult(provider, probe);
+  if (probe.ok) {
+    try {
+      await cacheModelsForBase(baseURL, probe.models);
+    } catch (_) {}
+    const imageBase = String(provider?.image?.baseURL || '').trim().replace(/\/$/, '');
+    if (provider?.image?.enabled && imageBase && imageBase !== baseURL) {
+      const imageKey = String(provider.image.apiKey || apiKey).trim();
+      if (imageKey) {
+        try {
+          const images = await fetchImageGenModels(imageBase, imageKey);
+          if (images.length) {
+            try {
+              await cacheModelsForBase(imageBase, images);
+            } catch (_) {}
+            applied.catalog.image = images;
+          }
+        } catch (_) {}
+      }
+    }
+    await persistProbeOnProvider({ ...probe, count: applied.catalog.chat.length }, provider?.id);
+    return {
+      ok: true,
+      endpoint: probe.endpoint,
+      models: probe.models,
+      chat: applied.catalog.chat,
+      image: applied.catalog.image,
+      count: applied.catalog.chat.length
+    };
+  }
+  await persistProbeOnProvider(probe, provider?.id);
+  return { ...probe, chat: [], image: [] };
 }
 
 async function onRefreshChatModelsClick() {
@@ -11578,18 +11915,25 @@ async function onRefreshChatModelsClick() {
   paintProbeResult(null);
   if (hintEl) hintEl.textContent = 'GET /models …';
 
-  const probe = await probeOpenAICompatibleApi(baseURL, apiKey);
+  let image = undefined;
+  try {
+    const state = await loadProvidersState();
+    const host = (state.providers || []).find((x) => x.id === settingsConfigUi.providerId);
+    image = host?.image;
+  } catch (_) {}
+  const probe = await probeAndPersistProviderCatalog({
+    id: settingsConfigUi.providerId,
+    baseURL,
+    apiKey,
+    image
+  });
   try {
     if (probe.ok) {
-      const chat = chatModelsFromList(probe.models);
-      settingsProbedModels = chat.length ? chat : probe.models.filter((m) => !m.image);
+      settingsProbedModels = probe.chat.length ? probe.chat : probe.models.filter((m) => !m.image);
       catalogModels = settingsProbedModels;
-      try {
-        await cacheModelsForBase(baseURL, probe.models);
-      } catch (_) {}
       fillModelDatalist(settingsProbedModels);
       renderSettingsModelCatalog();
-      settingsProbedImageModels = imageModelsFromList(probe.models);
+      settingsProbedImageModels = probe.image;
       renderSettingsImageCatalog();
       paintProbeResult({ ...probe, count: settingsProbedModels.length });
       const modelInput = document.getElementById('providerModelInput');
@@ -11597,7 +11941,6 @@ async function onRefreshChatModelsClick() {
         modelInput.value = probe.models[0].id;
       }
       syncReasoningSwitch();
-      await persistProbeOnProvider(probe);
       await refreshVendorBoards();
       if (hintEl) {
         hintEl.textContent = settingsLangEn()
@@ -11608,7 +11951,6 @@ async function onRefreshChatModelsClick() {
       settingsProbedModels = [];
       renderSettingsModelCatalog();
       paintProbeResult(probe);
-      await persistProbeOnProvider(probe);
       if (hintEl) hintEl.textContent = probe.error || 'probe failed';
     }
   } finally {
@@ -11682,13 +12024,8 @@ function renderSettingsImageCatalog() {
 }
 
 async function resolveImageProbeCreds() {
-  const same = !!document.getElementById('imageSameApiCheck')?.checked;
-  let baseURL = same
-    ? document.getElementById('apiBaseInput')?.value?.trim() || ''
-    : document.getElementById('providerImageBaseInput')?.value?.trim() || '';
-  let apiKey = same
-    ? resolveEditorApiKey()
-    : document.getElementById('providerImageKeyInput')?.value?.trim() || '';
+  let baseURL = document.getElementById('providerImageBaseInput')?.value?.trim() || '';
+  let apiKey = document.getElementById('providerImageKeyInput')?.value?.trim() || '';
   const hostId =
     settingsImageUi.providerId || settingsConfigUi.providerId;
   if ((!baseURL || !apiKey) && hostId) {
@@ -11696,16 +12033,18 @@ async function resolveImageProbeCreds() {
       const state = await loadProvidersState();
       const p = (state.providers || []).find((x) => x.id === hostId);
       if (!baseURL) {
-        baseURL = same
-          ? String(p?.baseURL || '')
-          : String(p?.image?.baseURL || p?.baseURL || '');
+        baseURL = String(p?.image?.baseURL || p?.baseURL || '');
       }
       if (!apiKey) {
-        apiKey = same
-          ? String(p?.apiKey || '')
-          : String(p?.image?.apiKey || p?.apiKey || '');
+        apiKey = String(p?.image?.apiKey || p?.apiKey || '');
       }
     } catch (_) {}
+  }
+  if (!baseURL) {
+    baseURL = document.getElementById('apiBaseInput')?.value?.trim() || '';
+  }
+  if (!apiKey) {
+    apiKey = resolveEditorApiKey();
   }
   return { baseURL: String(baseURL || '').replace(/\/$/, ''), apiKey };
 }
@@ -11964,7 +12303,9 @@ function renderImageVendorList(state) {
   for (const p of images) {
     const model = p.image?.model || '';
     const host = vendorHostFromUrl(p.image?.baseURL || p.baseURL);
-    const same = !p.image?.baseURL;
+    const imageBase = String(p.image?.baseURL || '').replace(/\/$/, '');
+    const chatBase = String(p.baseURL || '').replace(/\/$/, '');
+    const same = !imageBase || imageBase === chatBase;
     const bits = [
       model,
       host,
@@ -12198,30 +12539,18 @@ async function saveImageEditor(opts = {}) {
     );
     return false;
   }
-  const sameApi = !!document.getElementById('imageSameApiCheck')?.checked;
   const nextImage = { ...(form.image || {}), enabled: true };
-  if (!sameApi) {
-    const prevKey = host.image && typeof host.image.apiKey === 'string' ? host.image.apiKey.trim() : '';
-    if (!nextImage.apiKey && prevKey) nextImage.apiKey = prevKey;
-    if (!nextImage.apiKey && !host.apiKey) {
-      showSidepanelToast(
-        settingsLangEn() ? 'Enter an image API key (or reuse the chat key).' : '请填写图像 API Key（或勾选与推理相同）。',
-        { error: true }
-      );
-      document.getElementById('providerImageKeyInput')?.focus();
-      return false;
-    }
-    if (!nextImage.baseURL) {
-      showSidepanelToast(
-        settingsLangEn() ? 'Enter an image Base URL.' : '请填写图像 Base URL。',
-        { error: true }
-      );
-      document.getElementById('providerImageBaseInput')?.focus();
-      return false;
-    }
-  } else {
-    delete nextImage.apiKey;
-    delete nextImage.baseURL;
+  const prevKey = host.image && typeof host.image.apiKey === 'string' ? host.image.apiKey.trim() : '';
+  if (!nextImage.apiKey && prevKey) nextImage.apiKey = prevKey;
+  if (!nextImage.apiKey && !host.apiKey) {
+    showSidepanelToast(
+      settingsLangEn()
+        ? 'Enter an image API key, or add a chat key to inherit.'
+        : '请填写图像 API Key，或先保存推理 Key 以便继承。',
+      { error: true }
+    );
+    document.getElementById('providerImageKeyInput')?.focus();
+    return false;
   }
   try {
     await upsertProvider(
@@ -12336,7 +12665,6 @@ function readSettingsForm() {
   const name = settingsConfigUi.providerName || 'Provider';
 
   const imageEnabled = !!document.getElementById('providerImageEnabledCheck')?.checked;
-  const sameApi = !!document.getElementById('imageSameApiCheck')?.checked;
   const protocolRaw = document.getElementById('providerImageProtocolInput')?.value?.trim();
   const openrouter = protocolRaw === 'openrouter-image' || !protocolRaw;
   let imageModel =
@@ -12360,11 +12688,10 @@ function readSettingsForm() {
     path: imagePath,
     model: imageModel || DEFAULT_IMAGE_MODEL || 'google/gemini-2.5-flash-image'
   };
-  // Same-API: omit baseURL / apiKey so runtime reuses chat base + chat key
-  if (imageEnabled && !sameApi && imageBaseRaw) {
+  if (imageEnabled && imageBaseRaw) {
     imageOverrides.baseURL = imageBaseRaw.replace(/\/$/, '');
   }
-  if (imageEnabled && !sameApi && imageKeyRaw) {
+  if (imageEnabled && imageKeyRaw) {
     imageOverrides.apiKey = imageKeyRaw;
   }
 
@@ -12373,8 +12700,7 @@ function readSettingsForm() {
       ? defaultImageConfig(imageOverrides)
       : imageOverrides;
 
-  // defaultImageConfig only adds baseURL/apiKey when provided — ensure same-API strips them
-  if (sameApi || !imageEnabled) {
+  if (!imageEnabled) {
     if (image && 'baseURL' in image) delete image.baseURL;
     if (image && 'apiKey' in image) delete image.apiKey;
   }
@@ -12613,10 +12939,6 @@ function setupAgentSettingsModal() {
     modelFilter.addEventListener('input', () => renderSettingsModelCatalog());
   }
 
-  document.getElementById('imageSameApiCheck')?.addEventListener('change', () => {
-    syncImageSectionVisibility();
-    void hydrateSettingsImageCatalog(null);
-  });
   document.getElementById('providerImageProbeBtn')?.addEventListener('click', () => {
     void onProbeImageModelsClick();
   });

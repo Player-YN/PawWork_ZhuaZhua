@@ -117,7 +117,7 @@ PawWork-vnext/
 | `vnext/skills/<id>/` | SKILL.md + resources; description = when-to-use |
 | `vnext/primitives/**` | `run` + `acquire` (host webSearch/webFetch; actions search\|fetch\|map\|crawl\|image\|note; no vendor names) |
 | `vnext/adapters/**` | QuickJS / esbuild / AI SDK / sandbox / stdlib |
-| `llm.js` + `provider.js` | BYOK inference + image (`pagewand_providers`; optional per-provider `image` key; output-modality detection) |
+| `llm.js` + `provider.js` | BYOK inference + image (`pagewand_providers`; optional per-provider `image` key / baseUrl; picker switches both; output-modality detection) |
 | `webAcquireSettings.js` | BYOK web acquire (`pagewand_web_acquire`) |
 | draft/artifacts/trajectory (agent root) | UI support; not workspace truth |
 

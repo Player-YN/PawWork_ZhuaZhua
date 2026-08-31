@@ -348,8 +348,7 @@
               <span class="model-select-back-caret" aria-hidden="true"></span>
               <span data-i18n="modelPickerTitle">选择模型</span>
             </button>
-            <input type="search" class="model-select-search" id="modelSelectSearch" data-i18n-placeholder="modelPickerSearch" placeholder="搜索模型…" autocomplete="off" />
-            <div class="model-select-list" id="modelSelectList" role="listbox"></div>
+            <div class="model-select-list" id="modelSelectList"></div>
           </div>
           <select id="modelSelect" class="model-select-native" hidden tabindex="-1" aria-hidden="true">
             <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
@@ -670,17 +669,13 @@
               <button type="button" class="provider-preset-chip" data-image-preset="openai-compatible">自定义</button>
             </div>
             <input type="checkbox" id="providerImageEnabledCheck" hidden />
-            <label class="settings-check-row">
-              <input type="checkbox" id="imageSameApiCheck" checked />
-              <span>使用与推理模型相同的 API Key / Base</span>
-            </label>
             <div id="imageConfigFields" class="image-config-fields">
-              <div id="imageCustomApiFields" class="image-custom-api-fields" hidden>
+              <div id="imageCustomApiFields" class="image-custom-api-fields">
                 <label class="settings-label" for="providerImageBaseInput">图像 Base URL</label>
-                <input type="text" id="providerImageBaseInput" class="modal-input" placeholder="https://openrouter.ai/api/v1" autocomplete="off" />
+                <input type="text" id="providerImageBaseInput" class="modal-input" placeholder="inherit chat / 与推理相同" autocomplete="off" />
                 <label class="settings-label" for="providerImageKeyInput">图像 API Key</label>
-                <input type="password" id="providerImageKeyInput" class="modal-input" placeholder="sk-or-..." autocomplete="off" />
-                <p class="settings-hint settings-field-hint">独立 Base / Key 仅存本机。留空 Key 则保持已保存的图像 Key。OpenRouter 用 <code>https://openrouter.ai/api/v1</code>。</p>
+                <input type="password" id="providerImageKeyInput" class="modal-input" placeholder="inherit chat / 与推理相同" autocomplete="off" />
+                <p class="settings-hint settings-field-hint">留空则继承推理 Base / Key。OpenRouter 模板已填 <code>https://openrouter.ai/api/v1</code>（生图走 <code>/images</code>），不必去文档里找。</p>
               </div>
               <input type="hidden" id="providerImageProtocolInput" value="openrouter-image" />
               <label class="settings-label" for="providerImageModelInput">图像模型</label>

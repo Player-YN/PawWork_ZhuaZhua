@@ -569,6 +569,21 @@ export function shrinkModelList(models, opts = {}) {
 }
 
 /**
+ * Filter one picker modality (推理 or 生图). Query never searches the other list.
+ * @param {ModelEntry[]} models
+ * @param {string} [query]
+ * @param {{ limit?: number, preferIds?: string[] }} [opts]
+ * @returns {{ items: ModelEntry[], total: number, truncated: boolean, query: string }}
+ */
+export function filterPickerGroup(models, query, opts = {}) {
+  return shrinkModelList(Array.isArray(models) ? models : [], {
+    query: typeof query === 'string' ? query : '',
+    limit: opts.limit,
+    preferIds: opts.preferIds
+  });
+}
+
+/**
  * Recommended slice: hardcoded small list, optionally filtered by baseURL hint.
  * @param {string} [baseURL]
  * @returns {ModelEntry[]}
@@ -609,7 +624,9 @@ export function getRecommendedChatModels(baseURL = '') {
  * @returns {ModelEntry[]}
  */
 export function chatModelsFromList(models) {
-  return (Array.isArray(models) ? models : []).filter((m) => m && m.id && !m.image);
+  return (Array.isArray(models) ? models : []).filter(
+    (m) => m && m.id && !m.image && !isLikelyImageGenModel(m.id)
+  );
 }
 
 /**
@@ -617,7 +634,124 @@ export function chatModelsFromList(models) {
  * @returns {ModelEntry[]}
  */
 export function imageModelsFromList(models) {
-  return (Array.isArray(models) ? models : []).filter((m) => m && m.id && m.image);
+  return (Array.isArray(models) ? models : []).filter(
+    (m) => m && m.id && (m.image === true || isLikelyImageGenModel(m.id))
+  );
+}
+
+/**
+ * Last path segment for compact chip / picker labels (`x-ai/grok-4` → `grok-4`).
+ * @param {string} [modelId]
+ * @returns {string}
+ */
+export function shortModelId(modelId) {
+  const raw = String(modelId || '').trim();
+  if (!raw) return '';
+  const slash = raw.lastIndexOf('/');
+  return slash >= 0 ? raw.slice(slash + 1) : raw;
+}
+
+/**
+ * Composer chip: chat only, or `chat · image` once an image model is active.
+ * @param {string} [chatModel]
+ * @param {string} [imageModel]
+ * @returns {string}
+ */
+export function formatModelChipLabel(chatModel, imageModel) {
+  const chat = shortModelId(chatModel);
+  const image = shortModelId(imageModel);
+  if (chat && image) return `${chat} · ${image}`;
+  return chat || image || '';
+}
+
+/**
+ * Split one provider's catalog into picker groups.
+ * Image group is empty unless image API is enabled and at least one image model id exists.
+ * @param {{ model?: string, image?: { enabled?: boolean, model?: string } }|null|undefined} provider
+ * @param {{ chat?: ModelEntry[], image?: ModelEntry[] }} [catalog]
+ * @returns {{ chat: ModelEntry[], image: ModelEntry[] }}
+ */
+export function buildProviderPickerGroups(provider, catalog = {}) {
+  /** @type {ModelEntry[]} */
+  const chat = [];
+  /** @type {ModelEntry[]} */
+  const image = [];
+  const seenChat = new Set();
+  const seenImage = new Set();
+  const push = (list, seen, id, name) => {
+    const mid = String(id || '').trim();
+    if (!mid || seen.has(mid)) return;
+    seen.add(mid);
+    list.push({ id: mid, name: name || mid });
+  };
+
+  const imageOn = !!(provider?.image && provider.image.enabled);
+  if (imageOn) {
+    push(image, seenImage, provider.image.model);
+    for (const m of catalog.image || []) {
+      if (!m?.id) continue;
+      if (m.image === false) continue;
+      if (m.image !== true && !isLikelyImageGenModel(m.id)) continue;
+      push(image, seenImage, m.id, m.name);
+    }
+  }
+
+  const chatId = String(provider?.model || '').trim();
+  if (chatId) push(chat, seenChat, chatId);
+  for (const m of catalog.chat || []) {
+    if (!m?.id) continue;
+    if (m.image || seenImage.has(m.id)) continue;
+    if (m.id !== chatId && isLikelyImageGenModel(m.id)) continue;
+    push(chat, seenChat, m.id, m.name);
+  }
+  return { chat, image };
+}
+
+/**
+ * Apply a GET /models probe onto a provider record + split catalogs.
+ * Same lastProbe shape Settings writes on pagewand_providers. Does not
+ * change the current chat / image model ids.
+ *
+ * @param {object|null|undefined} provider
+ * @param {{ ok?: boolean, models?: ModelEntry[], count?: number, error?: string }} probe
+ * @param {number} [now]
+ * @returns {{ provider: object, catalog: { chat: ModelEntry[], image: ModelEntry[] }, lastProbe: { ok: boolean, at: number, count: number, error?: string } }}
+ */
+export function applyProviderProbeResult(provider, probe, now = Date.now()) {
+  const models = Array.isArray(probe?.models) ? probe.models : [];
+  const chatRaw = chatModelsFromList(models);
+  const catalog = {
+    chat: chatRaw.length ? chatRaw : models.filter((m) => m && m.id && !m.image),
+    image: imageModelsFromList(models)
+  };
+  /** @type {{ ok: boolean, at: number, count: number, error?: string }} */
+  const lastProbe = {
+    ok: probe?.ok === true,
+    at: Number.isFinite(now) ? now : Date.now(),
+    count: Number(probe?.count) || (probe?.ok ? catalog.chat.length : 0)
+  };
+  if (!lastProbe.ok) lastProbe.error = String(probe?.error || 'error');
+  return {
+    provider: provider && typeof provider === 'object' ? { ...provider, lastProbe } : { lastProbe },
+    catalog,
+    lastProbe
+  };
+}
+
+/**
+ * Picker refresh after a probe: lastProbe + 推理 / 生图 groups.
+ * Current selections stay first in each group when still present.
+ *
+ * @param {object|null|undefined} provider
+ * @param {{ ok?: boolean, models?: ModelEntry[], count?: number, error?: string }} probe
+ * @param {number} [now]
+ */
+export function refreshPickerCatalogFromProbe(provider, probe, now = Date.now()) {
+  const applied = applyProviderProbeResult(provider, probe, now);
+  return {
+    lastProbe: applied.lastProbe,
+    groups: buildProviderPickerGroups(applied.provider, applied.catalog)
+  };
 }
 
 export function getStaticImageModels(protocol = 'minimax-image') {

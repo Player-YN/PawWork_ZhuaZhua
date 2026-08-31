@@ -7,15 +7,22 @@
  * Legacy keys (pagewand_api_key / pagewand_api_base / selected_model) migrate once.
  *
  * Chat baseURL + model are chat-only. Optional provider.image is a separate
- * image-generation endpoint config (never overwrite chat base with image path).
+ * image-generation endpoint (own baseURL / key / model; empty inherits chat).
+ * Picker switches both modalities. Never overwrite chat base with an image path.
  */
 
 export const DEFAULT_BASE = 'https://api.deepseek.com/v1';
+
+/** Canonical OpenRouter OpenAI-compatible origin (chat + dedicated POST /images). */
+export const OPENROUTER_API_BASE = 'https://openrouter.ai/api/v1';
 
 /** MiniMax-oriented image-gen defaults (path is relative to image base / chat origin). */
 export const DEFAULT_IMAGE_PROTOCOL = 'minimax-image';
 export const DEFAULT_IMAGE_PATH = '/image_generation';
 export const DEFAULT_IMAGE_MODEL = 'image-01';
+export const DEFAULT_OPENROUTER_IMAGE_PROTOCOL = 'openrouter-image';
+export const DEFAULT_OPENROUTER_IMAGE_PATH = '/images';
+export const DEFAULT_OPENROUTER_IMAGE_MODEL = 'google/gemini-2.5-flash-image';
 
 /** chrome.storage.local keys */
 export const PROVIDERS_STORAGE_KEY = 'pagewand_providers';
@@ -50,9 +57,17 @@ export const PROVIDER_PRESETS = [
   {
     id: 'openrouter',
     name: 'OpenRouter',
-    baseURL: 'https://openrouter.ai/api/v1',
+    baseURL: OPENROUTER_API_BASE,
     model: 'openai/gpt-4o',
-    apiKeyPlaceholder: 'sk-or-...'
+    apiKeyPlaceholder: 'sk-or-...',
+    // Image shares this origin; path is /images. Prefill so 生图 is not a scavenger hunt.
+    image: {
+      enabled: false,
+      protocol: DEFAULT_OPENROUTER_IMAGE_PROTOCOL,
+      path: DEFAULT_OPENROUTER_IMAGE_PATH,
+      model: DEFAULT_OPENROUTER_IMAGE_MODEL,
+      baseURL: OPENROUTER_API_BASE
+    }
   },
   {
     id: 'minimax',
@@ -372,6 +387,44 @@ export async function setActiveProviderModel(modelId, opts = {}) {
 }
 
 /**
+ * Apply an image-model id onto a provider record without touching chat model / key / base.
+ * @param {PageWandProvider|null|undefined} provider
+ * @param {string} modelId
+ * @returns {PageWandProvider|null}
+ */
+export function applyProviderImageModel(provider, modelId) {
+  const id = String(modelId || '').trim();
+  if (!provider || typeof provider !== 'object' || !id) return provider || null;
+  const prev = provider.image && typeof provider.image === 'object' ? provider.image : {};
+  return {
+    ...provider,
+    image: defaultImageConfig({
+      ...prev,
+      enabled: true,
+      model: id
+    })
+  };
+}
+
+/**
+ * Switch image model on an existing provider without changing chat model or keys.
+ * @param {string} modelId
+ * @param {{ providerId?: string|null }} [opts]
+ */
+export async function setActiveProviderImageModel(modelId, opts = {}) {
+  const id = String(modelId || '').trim();
+  if (!id) throw new Error('MODEL_REQUIRED');
+  const { providers, activeProviderId } = await loadProvidersState();
+  const targetId = String(opts.providerId || activeProviderId || '').trim();
+  const idx = providers.findIndex((p) => p.id === targetId);
+  if (idx < 0) throw new Error('PROVIDER_NOT_FOUND');
+  const next = applyProviderImageModel(providers[idx], id);
+  if (!next) throw new Error('INVALID_PROVIDER');
+  providers[idx] = next;
+  return saveProvidersState(providers, targetId);
+}
+
+/**
  * Insert or update a provider; optionally make it active.
  * @param {Partial<PageWandProvider>} provider
  * @param {{ makeActive?: boolean }} [opts]
@@ -389,6 +442,8 @@ export async function upsertProvider(provider, opts = {}) {
     // Preserve image config when caller omits `image` (partial chat-only updates)
     if (next.image === undefined && providers[idx].image) {
       next.image = providers[idx].image;
+    } else if (next.image && providers[idx].image?.apiKey && !next.image.apiKey) {
+      next.image = { ...next.image, apiKey: providers[idx].image.apiKey };
     }
     if (next.lastProbe === undefined && providers[idx].lastProbe) {
       next.lastProbe = providers[idx].lastProbe;

@@ -14,7 +14,13 @@ import {
 } from '../../src/agent/vnext/sessionWorkspace/imageGen.js';
 import { createSessionGuestFs } from '../../src/agent/vnext/sessionWorkspace/fs.js';
 import { beginExecution, settleExecution } from '../../src/agent/vnext/sessionWorkspace/execution.js';
-import { defaultImageConfig, normalizeProvider } from '../../src/agent/llm.js';
+import {
+  defaultImageConfig,
+  normalizeProvider,
+  applyProviderImageModel,
+  PROVIDER_PRESETS,
+  OPENROUTER_API_BASE
+} from '../../src/agent/llm.js';
 import { isLikelyImageGenModel, parseModelsResponse } from '../../src/agent/modelCatalog.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -99,6 +105,50 @@ const orSettings = {
   );
 }
 
+// OpenRouter template ships the canonical image origin (same host as chat; path /images)
+{
+  const or = PROVIDER_PRESETS.find((p) => p.id === 'openrouter');
+  assert.ok(or);
+  assert.equal(or.baseURL, 'https://openrouter.ai/api/v1');
+  assert.equal(or.image.baseURL, 'https://openrouter.ai/api/v1');
+  assert.equal(or.image.baseURL, OPENROUTER_API_BASE);
+  assert.equal(or.image.path, '/images');
+  assert.equal(or.image.protocol, 'openrouter-image');
+}
+
+// image baseUrl empty → inherits chat; apiKey empty → inherits chat key
+{
+  const cfg = resolveImageRuntimeConfig({
+    apiKey: 'sk-or-chat',
+    apiBase: 'https://openrouter.ai/api/v1',
+    image: { enabled: true, protocol: 'openrouter-image', path: '/images', model: 'google/gemini-2.5-flash-image' }
+  });
+  assert.equal(cfg.baseURL, 'https://openrouter.ai/api/v1');
+  assert.equal(cfg.apiKey, 'sk-or-chat');
+  assert.equal(cfg.path, '/images');
+}
+
+// image baseUrl set → used for image; chat base stays on settings
+{
+  const settings = {
+    apiKey: 'sk-or-chat',
+    apiBase: 'https://openrouter.ai/api/v1',
+    image: {
+      enabled: true,
+      protocol: 'openai-image',
+      path: '/images/generations',
+      model: 'gpt-image-1',
+      baseURL: 'https://api.openai.com/v1',
+      apiKey: 'sk-openai'
+    }
+  };
+  const cfg = resolveImageRuntimeConfig(settings);
+  assert.equal(cfg.baseURL, 'https://api.openai.com/v1');
+  assert.equal(cfg.apiKey, 'sk-openai');
+  assert.equal(settings.apiBase, 'https://openrouter.ai/api/v1');
+  assert.equal(settings.apiKey, 'sk-or-chat');
+}
+
 // Settings round-trip: image.apiKey + baseURL persist on the chat vendor record
 {
   const rec = normalizeProvider({
@@ -126,6 +176,83 @@ const orSettings = {
   });
   assert.equal(cfg.apiKey, 'sk-or-image');
   assert.equal(cfg.protocol, 'openrouter-image');
+  assert.equal(cfg.baseURL, 'https://openrouter.ai/api/v1');
+}
+
+// Switching image model does not rewrite chat model / key / base
+{
+  const rec = normalizeProvider({
+    id: 'prov_img',
+    name: 'OpenRouter',
+    baseURL: 'https://openrouter.ai/api/v1',
+    apiKey: 'sk-or-chat',
+    model: 'openai/gpt-4o',
+    image: defaultImageConfig({
+      enabled: true,
+      protocol: 'openrouter-image',
+      baseURL: 'https://openrouter.ai/api/v1',
+      apiKey: 'sk-or-image',
+      path: '/images',
+      model: 'google/gemini-2.5-flash-image'
+    })
+  });
+  const next = applyProviderImageModel(rec, 'black-forest-labs/flux.2-pro');
+  assert.equal(next.model, 'openai/gpt-4o');
+  assert.equal(next.apiKey, 'sk-or-chat');
+  assert.equal(next.baseURL, 'https://openrouter.ai/api/v1');
+  assert.equal(next.image.model, 'black-forest-labs/flux.2-pro');
+  assert.equal(next.image.apiKey, 'sk-or-image');
+  assert.equal(next.image.baseURL, 'https://openrouter.ai/api/v1');
+}
+
+// Distinct image origin is the request host; chat origin is not concatenated
+{
+  const urls = [];
+  const out = await runGen(
+    {
+      apiKey: 'sk-or-chat',
+      apiBase: 'https://openrouter.ai/api/v1',
+      image: {
+        enabled: true,
+        protocol: 'openai-image',
+        path: '/images/generations',
+        model: 'gpt-image-1',
+        baseURL: 'https://api.openai.com/v1',
+        apiKey: 'sk-openai'
+      }
+    },
+    async (url, init = {}) => {
+      urls.push(String(url));
+      assert.match(String(init.headers?.Authorization || ''), /sk-openai/);
+      return jsonRes(200, { data: [{ b64_json: pngB64, media_type: 'image/png' }] });
+    }
+  );
+  assert.equal(out.ok, true, out.error);
+  assert.ok(urls.every((u) => u.startsWith('https://api.openai.com/v1/')));
+  assert.ok(!urls.some((u) => /openrouter/i.test(u)));
+}
+
+// Empty image key inherits chat key on the wire
+{
+  const auth = [];
+  const out = await runGen(
+    {
+      apiKey: 'sk-or-shared',
+      apiBase: 'https://openrouter.ai/api/v1',
+      image: {
+        enabled: true,
+        protocol: 'openrouter-image',
+        path: '/images',
+        model: 'google/gemini-2.5-flash-image'
+      }
+    },
+    async (url, init = {}) => {
+      auth.push(String(init.headers?.Authorization || ''));
+      return jsonRes(200, { data: [{ b64_json: pngB64, media_type: 'image/png' }] });
+    }
+  );
+  assert.equal(out.ok, true, out.error);
+  assert.ok(auth.every((h) => h === 'Bearer sk-or-shared'));
 }
 
 // Image key wins over chat key on the Authorization header
@@ -303,8 +430,16 @@ const html = fs.readFileSync(path.join(root, 'src/sidepanel.html'), 'utf8');
 const js = fs.readFileSync(path.join(root, 'src/sidepanel.js'), 'utf8');
 assert.match(html, /id="providerImageKeyInput"/);
 assert.match(html, /type="password"[^>]*id="providerImageKeyInput"|id="providerImageKeyInput"[^>]*type="password"/);
+assert.match(html, /inherit chat \/ 与推理相同/);
+assert.match(html, /https:\/\/openrouter\.ai\/api\/v1/);
+assert.doesNotMatch(html, /id="imageSameApiCheck"/);
+assert.doesNotMatch(html, /id="imageCustomApiFields"[^>]*hidden/);
 assert.match(js, /providerImageKeyInput/);
 assert.match(js, /imageOverrides\.apiKey|nextImage\.apiKey/);
 assert.match(js, /fetchImageGenModels/);
+assert.match(js, /OPENROUTER_API_BASE/);
+assert.match(js, /imgBase\.value = OPENROUTER_API_BASE/);
+assert.match(js, /pickComposerImageModel/);
+assert.match(js, /setActiveProviderImageModel/);
 
 console.log('test_image_gen: ok');
