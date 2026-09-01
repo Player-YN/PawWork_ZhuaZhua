@@ -7,15 +7,25 @@ English · [中文](README.zh-CN.md)
 > [!IMPORTANT]
 > **Just want to use Paw Work?** Do **not** clone this whole repository. You do not need the developer files. Clone **only** branch [`unpacked`](https://github.com/Player-YN/PawWork_ZhuaZhua/tree/unpacked) (~44 MB). That folder *is* the Chrome extension (`manifest.json` at the root).
 >
-> 1. In a terminal:
->    ```bash
->    git clone --depth 1 --single-branch --branch unpacked https://github.com/Player-YN/PawWork_ZhuaZhua.git paw-work
->    ```
-> 2. Open Chrome. In the address bar, go to `chrome://extensions`
-> 3. Turn on **Developer mode** (top-right)
-> 4. Click **Load unpacked**. Select the `paw-work` folder — the one that contains `manifest.json`
+> Clone creates `paw-work` under **the directory where you run the command**, not a fixed Desktop path. If you run it from your user home, that is `C:\Users\yyy\paw-work`. Git cannot print the path by itself — the last line of the block below does. In Chrome, Load unpacked that printed folder.
 >
-> No git? On this GitHub page: **Code → switch the branch to `unpacked` → Download ZIP**. Unzip, then do steps 2–4 (select the unzipped folder that contains `manifest.json`).
+> **Windows (PowerShell)** — paste this whole block:
+>
+> ```powershell
+> git clone --depth 1 --single-branch --branch unpacked https://github.com/Player-YN/PawWork_ZhuaZhua.git paw-work
+> (Get-Item .\paw-work).FullName
+> ```
+>
+> **macOS / Linux:**
+>
+> ```bash
+> git clone --depth 1 --single-branch --branch unpacked https://github.com/Player-YN/PawWork_ZhuaZhua.git paw-work
+> realpath paw-work
+> ```
+>
+> Then: Chrome → `chrome://extensions` → **Developer mode** → **Load unpacked** → select the folder whose path was just printed.
+>
+> No git? On this GitHub page: **Code → switch the branch to `unpacked` → Download ZIP**. Unzip, then Load unpacked the folder that contains `manifest.json`.
 >
 > Optional, same bytes: the [Release zip](https://github.com/Player-YN/PawWork_ZhuaZhua/releases/latest) (`paw-work-unpacked.zip`). Unzip and Load unpacked the inner `paw-work` folder.
 
@@ -102,10 +112,10 @@ Not listed on the Chrome Web Store yet. **Passersby:** clone only branch [`unpac
 
 **If you just want to use it** — do not clone this whole repository. Clone **only** branch `unpacked`.
 
-1. `git clone --depth 1 --single-branch --branch unpacked https://github.com/Player-YN/PawWork_ZhuaZhua.git paw-work`
+1. Paste the PowerShell (or macOS/Linux) block at the top of this README. The last line prints the absolute path of `paw-work`.
 2. Open Chrome → `chrome://extensions`
 3. Turn on **Developer mode**
-4. **Load unpacked** → select the `paw-work` folder (it contains `manifest.json`)
+4. **Load unpacked** → select the folder whose path was printed (`manifest.json` is at that root)
 
 No git? **Code → branch `unpacked` → Download ZIP**, unzip, then steps 2–4. Same pack is also on the [Release page](https://github.com/Player-YN/PawWork_ZhuaZhua/releases/latest) as `paw-work-unpacked.zip`.
 

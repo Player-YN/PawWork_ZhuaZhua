@@ -73,17 +73,20 @@ jobs:
             TAG="unpacked-$(git rev-parse --short HEAD)"
           fi
           NOTES="$(printf '%s\n' \
-            'Preferred: clone only branch unpacked —' \
+            'Preferred: clone only branch unpacked. The last line prints the absolute path — Load unpacked that folder.' \
             '' \
             '  git clone --depth 1 --single-branch --branch unpacked https://github.com/Player-YN/PawWork_ZhuaZhua.git paw-work' \
+            '  (Get-Item .\paw-work).FullName' \
             '' \
-            'Then Chrome → chrome://extensions → Developer mode → Load unpacked → select the `paw-work` folder (the one with manifest.json).' \
+            'Clone creates paw-work under the directory where you run the command (not a fixed Desktop path). If you run it from your user home, that is C:\Users\yyy\paw-work.' \
+            '' \
+            'Then Chrome → chrome://extensions → Developer mode → Load unpacked → select the printed folder (the one with manifest.json).' \
             '' \
             'This zip is the same bytes. Unzip, then the same Chrome steps on the inner `paw-work` folder.' \
             '' \
             'Do not git clone the default (source) branch to install. Do not load a folder that contains node_modules.' \
             '' \
-            '推荐：只克隆 unpacked 分支，然后 Chrome → chrome://extensions → 开发者模式 → 加载已解压的扩展程序 → 选 `paw-work` 文件夹（里面有 manifest.json）。不要 clone 源码仓当安装包。')"
+            '推荐：只克隆 unpacked 分支。克隆会在你运行命令时的当前目录下新建 paw-work，不是固定到桌面。最后一行会打印绝对路径；Chrome 加载已解压的扩展程序时选那个文件夹。不要 clone 源码仓当安装包。')"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" artifacts/release/paw-work-unpacked.zip --clobber
           else

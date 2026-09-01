@@ -7,15 +7,25 @@
 > [!IMPORTANT]
 > **只想用产品？** 不要 clone 整个仓库，也不需要开发侧文件。只要克隆 [`unpacked`](https://github.com/Player-YN/PawWork_ZhuaZhua/tree/unpacked) 分支（约 44 MB）。那个文件夹本身就是 Chrome 扩展（根目录有 `manifest.json`）。
 >
-> 1. 在终端里执行：
->    ```bash
->    git clone --depth 1 --single-branch --branch unpacked https://github.com/Player-YN/PawWork_ZhuaZhua.git paw-work
->    ```
-> 2. 打开 Chrome，地址栏输入 `chrome://extensions` 回车
-> 3. 打开右上角 **开发者模式**
-> 4. 点 **加载已解压的扩展程序**，选 `paw-work` 文件夹（里面有 `manifest.json`）
+> 克隆会在**你运行命令时的当前目录**下新建 `paw-work`，不是固定到桌面。若在用户主目录跑，就是 `C:\Users\yyy\paw-work`。Git 不会在 clone 结束后自动报路径——下面最后一行会打印绝对路径。Chrome 加载时选打印出来的那个文件夹。
 >
-> 没有 git？在本 GitHub 页面：**Code → 把分支切到 `unpacked` → Download ZIP**。解压后做第 2–4 步（选解压出来、里面有 `manifest.json` 的那个文件夹）。
+> **Windows（PowerShell）** — 整段粘贴：
+>
+> ```powershell
+> git clone --depth 1 --single-branch --branch unpacked https://github.com/Player-YN/PawWork_ZhuaZhua.git paw-work
+> (Get-Item .\paw-work).FullName
+> ```
+>
+> **macOS / Linux：**
+>
+> ```bash
+> git clone --depth 1 --single-branch --branch unpacked https://github.com/Player-YN/PawWork_ZhuaZhua.git paw-work
+> realpath paw-work
+> ```
+>
+> 然后：Chrome → `chrome://extensions` → **开发者模式** → **加载已解压的扩展程序** → 选刚刚打印出来的文件夹。
+>
+> 没有 git？在本 GitHub 页面：**Code → 把分支切到 `unpacked` → Download ZIP**。解压后加载里面有 `manifest.json` 的那个文件夹。
 >
 > 同一份包也可从 [Release zip](https://github.com/Player-YN/PawWork_ZhuaZhua/releases/latest) 下载（`paw-work-unpacked.zip`），解压后加载里面的 `paw-work` 文件夹。
 
@@ -102,10 +112,10 @@
 
 **只想用产品，不要 clone 整个仓库。** 不需要开发侧文件，只克隆 `unpacked` 分支。
 
-1. `git clone --depth 1 --single-branch --branch unpacked https://github.com/Player-YN/PawWork_ZhuaZhua.git paw-work`
+1. 粘贴文首的 PowerShell（或 macOS/Linux）整段。最后一行会打印 `paw-work` 的绝对路径。
 2. 打开 Chrome → 地址栏进入 `chrome://extensions`
 3. 打开 **开发者模式**
-4. **加载已解压的扩展程序** → 选 `paw-work` 文件夹（里面有 `manifest.json`）
+4. **加载已解压的扩展程序** → 选打印出来的那个文件夹（根目录有 `manifest.json`）
 
 没有 git？**Code → 分支切到 `unpacked` → Download ZIP**，解压后做第 2–4 步。同一份包也在 [Release 页](https://github.com/Player-YN/PawWork_ZhuaZhua/releases/latest) 的 `paw-work-unpacked.zip` 里。
 
