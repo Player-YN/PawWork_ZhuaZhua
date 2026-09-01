@@ -22,7 +22,7 @@ This file is the auto-loaded spine. Keep it short.
 | **Dev** | **`runtime-vnext`** · `C:\Users\yyy\Desktop\PawWork-vnext` |
 | **Remote** | https://github.com/Player-YN/PawWork-vnext (private) · default **`main`** |
 | **Public** | https://github.com/Player-YN/PawWork_ZhuaZhua · `Desktop\PawWork_ZhuaZhua` · **tree sync**, never push private history |
-| **Release** | Merge **`runtime-vnext` → `main`** in `Desktop\PawWork` (never checkout `main` here); `git push origin main`; `npm run sync:public -- --commit --push`. Passerby install until CWS: GitHub Release `paw-work-unpacked.zip` (workflow `release-unpacked` on the **public** repo; secret `PAW_TLDRAW_LICENSE_KEY`, never commit the key). CWS zip = same `pack:extension`. Keep developing on `runtime-vnext`. |
+| **Release** | Merge **`runtime-vnext` → `main`** in `Desktop\PawWork` (never checkout `main` here); `git push origin main`; `npm run sync:public -- --commit --push`. Passerby install until CWS: clone public branch **`unpacked`** (not source); same bytes as GitHub Release `paw-work-unpacked.zip` (workflow `release-unpacked` on the **public** repo force-updates only `unpacked`; secret `PAW_TLDRAW_LICENSE_KEY`, never commit the key). CWS zip = same `pack:extension`. Keep developing on `runtime-vnext`. |
 
 ---
 

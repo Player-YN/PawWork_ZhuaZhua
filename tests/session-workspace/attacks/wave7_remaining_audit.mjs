@@ -119,6 +119,11 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
     /THIRD_PARTY_NOTICES/.test(pack) && /tldraw-LICENSE/.test(pack) && /['"]licenses['"]/.test(pack),
     ''
   );
+  record(
+    'pack-writes-load-readme',
+    /README\.md/.test(pack) && /Load unpacked/.test(pack) && /chrome:\/\/extensions/.test(pack),
+    ''
+  );
 }
 
 // M-8: agent_invoke removed; user export/screenshot entry points retained

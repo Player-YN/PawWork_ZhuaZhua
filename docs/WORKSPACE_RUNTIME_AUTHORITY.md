@@ -33,6 +33,7 @@ Product path is Session Workspace only.
 - `.github/workflows/ci.yml`: build + session-workspace:all + attacks + pack gates + pack:extension  
 - `pack:extension` forbids shipping `node_modules` / `.git` / plan extracts  
 - `sync:public` archives `main` into `Desktop/PawWork_ZhuaZhua` (separate public history)  
+- Passerby clone: public branch `unpacked` (pack root; not source). Workflow `release-unpacked` force-updates that branch only.  
 
 ## Stack companions
 

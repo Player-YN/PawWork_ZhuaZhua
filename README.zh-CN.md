@@ -4,6 +4,21 @@
 
 [English](README.md) · 中文
 
+> [!IMPORTANT]
+> **只想用产品？** 不要 clone 整个仓库，也不需要开发侧文件。只要克隆 [`unpacked`](https://github.com/Player-YN/PawWork_ZhuaZhua/tree/unpacked) 分支（约 44 MB）。那个文件夹本身就是 Chrome 扩展（根目录有 `manifest.json`）。
+>
+> 1. 在终端里执行：
+>    ```bash
+>    git clone --depth 1 --single-branch --branch unpacked https://github.com/Player-YN/PawWork_ZhuaZhua.git paw-work
+>    ```
+> 2. 打开 Chrome，地址栏输入 `chrome://extensions` 回车
+> 3. 打开右上角 **开发者模式**
+> 4. 点 **加载已解压的扩展程序**，选 `paw-work` 文件夹（里面有 `manifest.json`）
+>
+> 没有 git？在本 GitHub 页面：**Code → 把分支切到 `unpacked` → Download ZIP**。解压后做第 2–4 步（选解压出来、里面有 `manifest.json` 的那个文件夹）。
+>
+> 同一份包也可从 [Release zip](https://github.com/Player-YN/PawWork_ZhuaZhua/releases/latest) 下载（`paw-work-unpacked.zip`），解压后加载里面的 `paw-work` 文件夹。
+
 [![CI](https://github.com/Player-YN/PawWork_ZhuaZhua/actions/workflows/ci.yml/badge.svg)](https://github.com/Player-YN/PawWork_ZhuaZhua/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/Player-YN/PawWork_ZhuaZhua)](LICENSE)
 ![Chrome MV3](https://img.shields.io/badge/chrome-manifest%20v3-4285F4?logo=googlechrome&logoColor=white)
@@ -74,7 +89,7 @@
 活网页（伸爪开）→ 点选 → 侧栏 → 活画布 / 文件
 ```
 
-尚未上架 Chrome 网上应用店。**路人：** 下载 [最新 unpacked zip](https://github.com/Player-YN/PawWork_ZhuaZhua/releases/latest)（约 44 MB）。解压 → `chrome://extensions` → 开发者模式 → **加载已解压的扩展程序** → 选 `paw-work` 文件夹（里面有 `manifest.json`）。然后：开伸爪 → 填模型密钥 → 选一块 → 说一句。
+尚未上架 Chrome 网上应用店。**路人：** 只克隆 [`unpacked`](https://github.com/Player-YN/PawWork_ZhuaZhua/tree/unpacked) 分支（见文首提示框），不要 clone 这份源码。然后：开伸爪 → 填模型密钥 → 选一块 → 说一句。
 
 ## 信任与隐私
 
@@ -85,11 +100,14 @@
 
 ## 安装
 
-**只想用产品，不要 clone 这个仓库。**
+**只想用产品，不要 clone 整个仓库。** 不需要开发侧文件，只克隆 `unpacked` 分支。
 
-1. 打开 [最新 GitHub Release](https://github.com/Player-YN/PawWork_ZhuaZhua/releases/latest)，下载 `paw-work-unpacked.zip`（约 44 MB）。
-2. 解压。应看到带 `manifest.json` 的 `paw-work` 文件夹。
-3. Chrome → `chrome://extensions` → 启用开发者模式 → **加载已解压的扩展程序** → 选那个 `paw-work` 文件夹。
+1. `git clone --depth 1 --single-branch --branch unpacked https://github.com/Player-YN/PawWork_ZhuaZhua.git paw-work`
+2. 打开 Chrome → 地址栏进入 `chrome://extensions`
+3. 打开 **开发者模式**
+4. **加载已解压的扩展程序** → 选 `paw-work` 文件夹（里面有 `manifest.json`）
+
+没有 git？**Code → 分支切到 `unpacked` → Download ZIP**，解压后做第 2–4 步。同一份包也在 [Release 页](https://github.com/Player-YN/PawWork_ZhuaZhua/releases/latest) 的 `paw-work-unpacked.zip` 里。
 
 不需要 Node，也不要 `npm install`。不要加载源码仓根目录。
 
@@ -126,7 +144,7 @@ Chrome MV3 扩展。侧栏连的是扩展内的工作区，没有爪爪云。表
 
 ## 已知限制
 
-- **尚未上架 Chrome 网上应用店。** 用 [Release zip](https://github.com/Player-YN/PawWork_ZhuaZhua/releases/latest)。GitHub 加载 unpacked 是现在的旁路；以后商店才是正门。
+- **尚未上架 Chrome 网上应用店。** 克隆 [`unpacked`](https://github.com/Player-YN/PawWork_ZhuaZhua/tree/unpacked) 分支（或同一份 [Release zip](https://github.com/Player-YN/PawWork_ZhuaZhua/releases/latest)）。GitHub 加载 unpacked 是现在的旁路；以后商店才是正门。
 - **仅扩展。** 只支持 Chromium MV3。没有托管服务、没有账号。
 - **必须自带密钥。** 对话、生图、检索各自需要你的密钥。
 - **tldraw 水印。** 没有 tldraw 官方生产许可时，Design/Slides 会显示官方水印。用 CSS/DOM 藏水印不被支持，也不可接受。
@@ -135,4 +153,4 @@ Chrome MV3 扩展。侧栏连的是扩展内的工作区，没有爪爪云。表
 
 ## 许可
 
-本仓库代码使用 MIT 许可（见 [LICENSE](LICENSE)）。源码树不分发 Univer/tldraw 运行时包（需本地构建）。**Release zip** 会带上这些构建产物，以及 tldraw 许可原文（[notices/tldraw-LICENSE.md](notices/tldraw-LICENSE.md)）。
+本仓库代码使用 MIT 许可（见 [LICENSE](LICENSE)）。源码树不分发 Univer/tldraw 运行时包（需本地构建）。**`unpacked` 分支** 和 **Release zip** 会带上这些构建产物，以及 tldraw 许可原文（[notices/tldraw-LICENSE.md](notices/tldraw-LICENSE.md)）。
