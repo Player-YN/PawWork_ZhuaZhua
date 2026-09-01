@@ -67,6 +67,27 @@ export function matrixToCsv(rows) {
     .join('\n');
 }
 
+/** MV3 structured-clone / IDB of an unbounded string can OOM the service worker; 8MiB is past any article. */
+export const CLIPBOARD_TEXT_HOST_MAX = 8 * 1024 * 1024;
+
+export function clipClipboardText(value) {
+  const text = String(value ?? '');
+  if (text.length <= CLIPBOARD_TEXT_HOST_MAX) return text;
+  return text.slice(0, CLIPBOARD_TEXT_HOST_MAX);
+}
+
+/**
+ * Live-page text clicks go to the Clipboard group, not the capture Group.
+ * Explicit non-text kinds (image / table / container / screenshot / page / …) stay as Group items.
+ */
+export function isClipboardTextPick(desc = {}, opts = {}) {
+  const hint = String(desc.kindHint || desc.kind || desc.labelKind || '')
+    .toLowerCase()
+    .trim();
+  if (hint && hint !== 'text' && hint !== 'txt' && hint !== '文字' && hint !== '文本') return false;
+  return classifyContextKind(desc, opts) === 'text';
+}
+
 /**
  * @param {{
  *   tag?: string,

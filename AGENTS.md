@@ -146,12 +146,14 @@ npm run test:workspace
 npm run playwright:install   # Chromium for visual / packed-extension E2E only
 npm run test:visual-deck     # real tldraw harness pixels (requires playwright:install)
 npm run test:extension-e2e   # packed MV3 + local mock model (requires pack + playwright:install)
-npm run pack:extension       # artifacts/unpacked — no node_modules
+npm run pack:extension       # rebuild vendor + copy → artifacts/unpacked
+npm run pack:dev             # copy src only (no Univer/tldraw rebuild) → artifacts/unpacked
+npm run pack:watch           # pack:dev then re-copy when src changes
 npm run sync:public          # copy `main` tree → ../PawWork_ZhuaZhua (no history)
 npm run ci:local
 ```
 
-**Load `artifacts/unpacked/` for size.** Repo root includes `node_modules` (~360MB) — never load the repo root as the extension. Pack is ~44MB (`esbuild.wasm` + `sheet-runtime.js` + `design-runtime.js` + loaders). Reload after `build:agent` / `build:sheet` / `build:design`. Develop on **`runtime-vnext`** in `Desktop\PawWork-vnext`. Merge tested tips onto **`main`** (`Desktop\PawWork`); `npm run sync:public -- --commit --push` updates the public clone. Keep developing on `runtime-vnext`.
+**Load `artifacts/unpacked/`.** Repo root includes `node_modules` (~360MB) — never load the repo root. That folder is a pack snapshot (gitignored); it does not update on save or `git pull`. Daily: `npm run pack:dev` after `src` edits, then **Reload** on `chrome://extensions`. `npm run pack:watch` keeps copying. First clone / vendor missing: `npm run pack:extension` (full `build:agent`). Pack is ~44MB. Develop on **`runtime-vnext`**. Merge tested tips onto **`main`** (`Desktop\PawWork`); `npm run sync:public -- --commit --push` updates the public clone.
 
 ---
 

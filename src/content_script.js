@@ -28,6 +28,8 @@
           return el ? { element: el, kind: 'text' } : null;
         },
         classifyContextKind: () => 'text',
+        isClipboardTextPick: (desc) => String(desc?.kind || desc?.kindHint || 'text') === 'text',
+        clipClipboardText: (s) => String(s || ''),
         contextSrcOf: (el) => String(el?.currentSrc || el?.src || ''),
         contextHrefOf: (el) => String(el?.href || ''),
         srcLooksImage: () => false
@@ -50,6 +52,19 @@
     const api = pick();
     if (api?.classifyContextKind) return api.classifyContextKind(desc, opts);
     return 'text';
+  }
+
+  function isClipboardTextPick(desc, opts) {
+    const api = pick();
+    if (api?.isClipboardTextPick) return api.isClipboardTextPick(desc, opts);
+    const hint = String(desc?.kind || desc?.kindHint || 'text').toLowerCase();
+    return hint === 'text' || hint === 'txt';
+  }
+
+  function clipClipboardText(value) {
+    const api = pick();
+    if (api?.clipClipboardText) return api.clipClipboardText(value);
+    return String(value || '');
   }
 
   function contextSrcOf(el) {
@@ -596,19 +611,48 @@
     } else {
       const href = contextHrefOf(element);
       const src = contextSrcOf(element);
+      const fullText = cleanDOMText(element.innerText || element.textContent || '');
       const kind = snapped.kind || classifyContextKind({
         tag: element.tagName.toLowerCase(),
         src,
         href,
-        text: cleanDOMText((element.innerText || element.textContent || '').substring(0, 500))
+        text: fullText
       });
+      if (
+        isClipboardTextPick({
+          kind,
+          kindHint: kind,
+          tag: element.tagName.toLowerCase(),
+          src,
+          href,
+          text: fullText
+        })
+      ) {
+        const text = clipClipboardText(fullText);
+        if (text) {
+          extSend({
+            action: 'clipboard_text_picked',
+            text,
+            url: window.location.href,
+            pageTitle: document.title
+          });
+          element.classList.remove('pagewand-hovered');
+          element.classList.add('pagewand-selected');
+          setTimeout(() => {
+            try {
+              element.classList.remove('pagewand-selected');
+            } catch (_) {}
+          }, 280);
+        }
+        return;
+      }
       element.classList.remove('pagewand-hovered');
       element.classList.add('pagewand-selected');
       selectedElements.push({
         element: element,
         selector: generateSelector(element),
         tag: element.tagName.toLowerCase(),
-        text: cleanDOMText((element.innerText || element.textContent || '').substring(0, 500)),
+        text: fullText,
         src,
         href,
         kind,

@@ -26,7 +26,7 @@ import {
   classifyLabelKind,
   formatItemLabel
 } from './agent/vnext/sessionWorkspace/itemLabel.js';
-import { hrefLooksDownloadable } from './agent/vnext/sessionWorkspace/pickContext.js';
+import { hrefLooksDownloadable, clipClipboardText, isClipboardTextPick } from './agent/vnext/sessionWorkspace/pickContext.js';
 import { SESSION_TITLE_MAX } from './agent/vnext/sessionWorkspace/taskTitle.js';
 import {
   buildMentionCandidates,
@@ -2452,7 +2452,7 @@ function pinTextsToClipboard(texts, { openDrawer = true, toast = true } = {}) {
   const toPin = (Array.isArray(texts) ? texts : [texts])
     .map((x) => (typeof x === 'string' ? { text: x } : x))
     .filter((x) => x && String(x.text || '').trim())
-    .map((x) => ({ ...x, text: String(x.text) })); // full text — no char cap
+    .map((x) => ({ ...x, text: clipClipboardText(String(x.text)) })); // full text; host max only if MV3 would OOM
   if (!toPin.length) return [];
   const existing = new Set(getClipboardPins().map((p) => p.text));
   const fresh = toPin.filter((x) => !existing.has(String(x.text).trim()));
@@ -7412,6 +7412,12 @@ function setupCoreEventListeners() {
       sendResponse?.({ ok: true });
       return true;
     }
+    if (request?.action === 'clipboard_text_picked') {
+      const text = clipClipboardText(String(request.text || ''));
+      if (text.trim()) pinTextsToClipboard([{ text, kind: 'text' }], { openDrawer: true, toast: true });
+      sendResponse?.({ ok: true });
+      return true;
+    }
     if (request?.action === 'elements_updated' || request?.type === 'elements_updated') {
       handleElementsUpdatedMessage(request, sender);
       sendResponse?.({ ok: true });
@@ -9203,6 +9209,15 @@ async function restoreBoundHighlightsToTab(tabId, pageUrl) {
 
 function handleElementsUpdatedMessage(request, sender) {
   const tabId = (sender && sender.tab) ? sender.tab.id : null;
+  const incoming = Array.isArray(request.elements) ? request.elements : [];
+  const leftoverText = incoming.filter((el) => isClipboardTextPick(el));
+  const captureEls = incoming.filter((el) => !isClipboardTextPick(el));
+  if (leftoverText.length) {
+    pinTextsToClipboard(
+      leftoverText.map((el) => ({ text: String(el.text || ''), kind: 'text' })),
+      { openDrawer: true, toast: false }
+    );
+  }
   const empty = !request.count || request.count === 0;
   if (empty && request.cleared !== true && tabId != null) {
     void restoreBoundHighlightsToTab(tabId, request.url || sender?.tab?.url || '').then((ok) => {
@@ -9216,14 +9231,13 @@ function handleElementsUpdatedMessage(request, sender) {
     return;
   }
   void syncTabSelectionToWorkspace(request, sender);
-  const storeKey = tabId != null ? tabId : 'current';
   const domain = request.domain || ((sender && sender.tab && sender.tab.url) ? new URL(sender.tab.url).hostname : '网页');
   const pageTitle = request.pageTitle || ((sender && sender.tab) ? sender.tab.title : '');
-  if (!request.count || request.count === 0) {
-    crossTabStore.delete(tabId);
+  if (!request.count || request.count === 0 || !captureEls.length) {
+    if (tabId != null) crossTabStore.delete(tabId);
   } else {
     crossTabStore.set(tabId, {
-      tabId, domain, pageTitle, elements: request.elements || []
+      tabId, domain, pageTitle, elements: captureEls
     });
   }
   renderCrossTabElementsUI();

@@ -554,7 +554,7 @@ export class SessionWorkspaceService {
     }
     this._writeSessionActiveGroup(sessionId, groupId);
 
-    const { selectionIdentityKey, updateWebItem, addWebItem, removeWebItem } =
+    const { selectionIdentityKey, updateWebItem, addWebItem, removeWebItem, pinClipboardItems, isClipboardTextPick } =
       await import('../sessionWorkspace/groups.js');
     const { gcUnreachableWebItems } = await import('../sessionWorkspace/gc.js');
 
@@ -573,7 +573,22 @@ export class SessionWorkspaceService {
     }
 
     const seenKeys = new Set();
+    const clipboardTexts = [];
     for (const raw of elements || []) {
+      if (
+        isClipboardTextPick({
+          tag: raw.tag || raw.tagName || '',
+          src: raw.src || '',
+          href: raw.href || '',
+          text: raw.text || raw.textSnippet || '',
+          kind: raw.kind || raw.kindHint || '',
+          kindHint: raw.kind || raw.kindHint || ''
+        })
+      ) {
+        const snippet = String(raw.text || raw.textSnippet || '').trim();
+        if (snippet) clipboardTexts.push(snippet);
+        continue;
+      }
       const capture = {
         source: { tabId, url, origin, pageTitle },
         locator: { css: raw.selector || raw.css || '' },
@@ -620,6 +635,7 @@ export class SessionWorkspaceService {
       }
     }
     gcUnreachableWebItems(this.runtime.store);
+    if (clipboardTexts.length) pinClipboardItems(this.runtime.store, clipboardTexts, sessionId);
 
     await this._persist();
     return this.getWorkspaceState({ sessionId });

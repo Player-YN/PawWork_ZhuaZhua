@@ -1,6 +1,9 @@
 /**
  * pack:extension — export a clean Chrome unpacked root for load/test.
  * Source of truth remains the git repo. Output: artifacts/unpacked/
+ *
+ * Default rebuilds vendor then copies. Daily dev: `npm run pack:dev` / `pack:watch`
+ * copies src without rebuilding Univer/tldraw (those already live under src/preview/vendor).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,6 +13,15 @@ import { execSync } from 'node:child_process';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const outRoot = path.join(root, 'artifacts', 'unpacked');
+const args = new Set(process.argv.slice(2));
+const skipBuild = args.has('--skip-build');
+const watch = args.has('--watch');
+
+const VENDOR_RUNTIME = [
+  'src/preview/vendor/sheet-runtime.js',
+  'src/preview/vendor/docs-runtime.js',
+  'src/preview/vendor/design-runtime.js'
+];
 
 function rmrf(p) {
   fs.rmSync(p, { recursive: true, force: true });
@@ -31,10 +43,66 @@ function copyDir(src, dest) {
   }
 }
 
-function main() {
-  console.log('[pack:extension] build:agent…');
-  execSync('npm run build:agent', { cwd: root, stdio: 'inherit' });
+function assertVendorPresent() {
+  const missing = VENDOR_RUNTIME.filter((rel) => !fs.existsSync(path.join(root, rel)));
+  if (missing.length) {
+    console.error(
+      `[pack:extension] --skip-build needs local vendor runtimes. Missing:\n  ${missing.join('\n  ')}\nRun npm run build:agent once, then pack:dev.`
+    );
+    process.exit(1);
+  }
+}
 
+const LOAD_README = [
+  '# Paw Work — this folder is the Chrome extension',
+  '',
+  '**Where is this folder?** This README lives inside the folder Chrome must load. Git clone creates `paw-work` under the directory where you ran the command — it is not a fixed Desktop path. If you cloned from your user home, that is `C:\\Users\\yyy\\paw-work`.',
+  '',
+  'Print the absolute path (run this *inside* this folder):',
+  '',
+  '```powershell',
+  '(Get-Item .).FullName',
+  '```',
+  '',
+  'macOS / Linux: `pwd` or `realpath .`',
+  '',
+  'Load **this folder** in Chrome. Do not look for a separate `src` tree or run `npm install`.',
+  '',
+  '1. Open Chrome and go to `chrome://extensions`',
+  '2. Turn on **Developer mode** (top-right)',
+  '3. Click **Load unpacked**',
+  '4. Select **this folder** — the path printed above (it contains `manifest.json`)',
+  '',
+  'Then turn Paw Mode on, paste a model key, select something on a page, and describe the outcome.',
+  '',
+  'Updates: clone branch `unpacked` again, or download the [Release zip](https://github.com/Player-YN/PawWork_ZhuaZhua/releases/latest).',
+  '',
+  '---',
+  '',
+  '# 爪爪 · 这个文件夹就是 Chrome 扩展',
+  '',
+  '**你现在在哪个文件夹？** 这份 README 就在 Chrome 要加载的文件夹里。克隆会在**你运行命令时的当前目录**下新建 `paw-work`，不是固定到桌面。若在用户主目录跑，就是 `C:\\Users\\yyy\\paw-work`。',
+  '',
+  '在本文件夹里打开 PowerShell，打印绝对路径：',
+  '',
+  '```powershell',
+  '(Get-Item .).FullName',
+  '```',
+  '',
+  'macOS / Linux：`pwd` 或 `realpath .`',
+  '',
+  '在 Chrome 里加载 **本文件夹**。不要找开发用的 `src`，也不要 `npm install`。',
+  '',
+  '1. 打开 Chrome，地址栏进入 `chrome://extensions`',
+  '2. 打开右上角 **开发者模式**',
+  '3. 点 **加载已解压的扩展程序**',
+  '4. 选 **本文件夹** — 上面打印出来的路径（里面有 `manifest.json`）',
+  '',
+  '然后打开伸爪、填模型密钥、在网页上选一块、说出结果。',
+  ''
+].join('\n');
+
+function writeUnpacked() {
   const manifest = path.join(root, 'manifest.json');
   if (!fs.existsSync(manifest)) {
     console.error('[pack:extension] missing manifest.json at repo root');
@@ -65,58 +133,7 @@ function main() {
   }
   copyFile(tldrawLicense, path.join(outRoot, 'licenses', 'tldraw-LICENSE.md'));
 
-  fs.writeFileSync(
-    path.join(outRoot, 'README.md'),
-    [
-      '# Paw Work — this folder is the Chrome extension',
-      '',
-      '**Where is this folder?** This README lives inside the folder Chrome must load. Git clone creates `paw-work` under the directory where you ran the command — it is not a fixed Desktop path. If you cloned from your user home, that is `C:\\Users\\yyy\\paw-work`.',
-      '',
-      'Print the absolute path (run this *inside* this folder):',
-      '',
-      '```powershell',
-      '(Get-Item .).FullName',
-      '```',
-      '',
-      'macOS / Linux: `pwd` or `realpath .`',
-      '',
-      'Load **this folder** in Chrome. Do not look for a separate `src` tree or run `npm install`.',
-      '',
-      '1. Open Chrome and go to `chrome://extensions`',
-      '2. Turn on **Developer mode** (top-right)',
-      '3. Click **Load unpacked**',
-      '4. Select **this folder** — the path printed above (it contains `manifest.json`)',
-      '',
-      'Then turn Paw Mode on, paste a model key, select something on a page, and describe the outcome.',
-      '',
-      'Updates: clone branch `unpacked` again, or download the [Release zip](https://github.com/Player-YN/PawWork_ZhuaZhua/releases/latest).',
-      '',
-      '---',
-      '',
-      '# 爪爪 · 这个文件夹就是 Chrome 扩展',
-      '',
-      '**你现在在哪个文件夹？** 这份 README 就在 Chrome 要加载的文件夹里。克隆会在**你运行命令时的当前目录**下新建 `paw-work`，不是固定到桌面。若在用户主目录跑，就是 `C:\\Users\\yyy\\paw-work`。',
-      '',
-      '在本文件夹里打开 PowerShell，打印绝对路径：',
-      '',
-      '```powershell',
-      '(Get-Item .).FullName',
-      '```',
-      '',
-      'macOS / Linux：`pwd` 或 `realpath .`',
-      '',
-      '在 Chrome 里加载 **本文件夹**。不要找开发用的 `src`，也不要 `npm install`。',
-      '',
-      '1. 打开 Chrome，地址栏进入 `chrome://extensions`',
-      '2. 打开右上角 **开发者模式**',
-      '3. 点 **加载已解压的扩展程序**',
-      '4. 选 **本文件夹** — 上面打印出来的路径（里面有 `manifest.json`）',
-      '',
-      '然后打开伸爪、填模型密钥、在网页上选一块、说出结果。',
-      '',
-    ].join('\n'),
-    'utf8'
-  );
+  fs.writeFileSync(path.join(outRoot, 'README.md'), LOAD_README, 'utf8');
 
   let n = 0;
   function walk(dir) {
@@ -128,7 +145,6 @@ function main() {
   }
   walk(outRoot);
 
-  // Audit M-7: clean release — never ship node_modules, .git, plan extracts
   const forbidden = ['node_modules', '.git', '_plan_extract'];
   function assertClean(dir, rel = '') {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -143,13 +159,47 @@ function main() {
   }
   assertClean(outRoot);
 
-  // Must not contain package-lock as runtime dependency of extension
   if (fs.existsSync(path.join(outRoot, 'package.json'))) {
     console.warn('[pack:extension] warning: package.json in unpacked root (unusual)');
   }
 
   console.log(`[pack:extension] wrote ${n} files → artifacts/unpacked/ (clean gate ok)`);
   console.log(`[pack:extension] Load in Chrome: ${outRoot}`);
+  return n;
+}
+
+function startWatch() {
+  let timer = null;
+  const kick = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      try {
+        writeUnpacked();
+        console.log('[pack:watch] synced. Reload the extension on chrome://extensions.');
+      } catch (err) {
+        console.error('[pack:watch]', err);
+      }
+    }, 400);
+  };
+  for (const rel of ['src', 'icons', 'assets', 'manifest.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'notices']) {
+    const p = path.join(root, rel);
+    if (!fs.existsSync(p)) continue;
+    fs.watch(p, { recursive: fs.statSync(p).isDirectory() }, kick);
+  }
+  console.log('[pack:watch] watching src/ (and manifest/icons). Ctrl+C to stop.');
+}
+
+function main() {
+  if (skipBuild) {
+    console.log('[pack:extension] --skip-build (copy only; vendor must already exist)');
+    assertVendorPresent();
+  } else {
+    console.log('[pack:extension] build:agent…');
+    execSync('npm run build:agent', { cwd: root, stdio: 'inherit' });
+  }
+
+  writeUnpacked();
+  if (watch) startWatch();
 }
 
 main();

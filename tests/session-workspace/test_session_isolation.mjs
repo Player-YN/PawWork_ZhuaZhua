@@ -151,21 +151,21 @@ function run() {
         sessionId: 'sa',
         tabId: 11,
         url: 'https://example.com/page',
-        elements: [{ text: 'page-a', selector: '#a' }]
+        elements: [{ src: 'https://example.com/page-a.png', kind: 'image', tag: 'IMG', selector: '#a' }]
       });
       await svc.syncTabSelection({
         sessionId: 'sb',
         tabId: 11,
         url: 'https://example.com/page',
-        elements: [{ text: 'page-b', selector: '#b' }]
+        elements: [{ src: 'https://example.com/page-b.png', kind: 'image', tag: 'IMG', selector: '#b' }]
       });
       const a4 = await svc.getWorkspaceState({ sessionId: 'sa' });
       const b4 = await svc.getWorkspaceState({ sessionId: 'sb' });
       const itemsA = a4.groups.flatMap((g) => g.items || []);
       const itemsB = b4.groups.flatMap((g) => g.items || []);
-      assert.ok(itemsA.some((i) => String(i.text).includes('page-b')));
-      assert.ok(itemsB.some((i) => String(i.text).includes('page-b')));
-      assert.equal(itemsA.some((i) => String(i.text).includes('page-a')), false);
+      assert.ok(itemsA.some((i) => String(i.src).includes('page-b.png')));
+      assert.ok(itemsB.some((i) => String(i.src).includes('page-b.png')));
+      assert.equal(itemsA.some((i) => String(i.src).includes('page-a.png')), false);
 
       const acA = new AbortController();
       const acB = new AbortController();

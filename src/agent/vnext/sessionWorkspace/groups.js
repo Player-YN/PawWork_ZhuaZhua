@@ -5,6 +5,9 @@
 
 import { createGroupId, createWebItemId } from './ids.js';
 import { normalizeLabelKind, classifyLabelKind } from './itemLabel.js';
+import { clipClipboardText } from './pickContext.js';
+
+export { isClipboardTextPick, clipClipboardText, CLIPBOARD_TEXT_HOST_MAX } from './pickContext.js';
 
 export function normalizeGroupName(name) {
   return String(name || '').replace(/\s+/g, ' ').trim();
@@ -94,12 +97,12 @@ export function pinClipboardItems(store, rawItems, sessionId = '') {
       text = raw.text != null ? String(raw.text) : String(raw.content || raw.body || '');
       if (raw.kind) kindHint = String(raw.kind);
     }
-    text = clipboardPinTextKey(text);
-    if (!text || seen.has(text)) continue;
-    seen.add(text);
+    const key = clipboardPinTextKey(text);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
     added.push(
       addWebItem(store, g.groupId, {
-        text,
+        text: clipClipboardText(text),
         kindHint,
         source: { clipboard: true }
       })

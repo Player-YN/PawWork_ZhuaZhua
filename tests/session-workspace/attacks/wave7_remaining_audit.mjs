@@ -124,6 +124,11 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
     /README\.md/.test(pack) && /Load unpacked/.test(pack) && /chrome:\/\/extensions/.test(pack),
     ''
   );
+  record(
+    'pack-dev-skip-build-flag',
+    /--skip-build/.test(pack) && /assertVendorPresent/.test(pack),
+    ''
+  );
 }
 
 // M-8: agent_invoke removed; user export/screenshot entry points retained
@@ -298,12 +303,17 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
       /deleteSession/.test(side),
     ''
   );
+  const cs = fs.readFileSync(path.join(root, 'src/content_script.js'), 'utf8');
   record(
     'text-picks-go-to-clipboard-not-chips',
     /function isSelectionChipKind/.test(side) &&
       /kind !== 'text'/.test(side) &&
       /if \(!isSelectionChipKind\(kind\)\) return;/.test(side) &&
-      /pinTextsToClipboard\(fresh, \{ openDrawer: true, toast: false \}\)/.test(side),
+      /pinTextsToClipboard\(fresh, \{ openDrawer: true, toast: false \}\)/.test(side) &&
+      /clipboard_text_picked/.test(side) &&
+      /clipboard_text_picked/.test(cs) &&
+      /isClipboardTextPick/.test(cs) &&
+      !/substring\(0,\s*500\)/.test(cs.slice(cs.indexOf('function handleClick'), cs.indexOf('function hideLinkOptionBubble'))),
     ''
   );
   record(
@@ -319,6 +329,46 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
       /if \(it\.labelKind === 'page' \|\| it\.kindHint === 'page'/.test(side) &&
       !/if \(item\.labelKind === 'page'/.test(side),
     ''
+  );
+}
+
+{
+  const { isClipboardTextPick, clipClipboardText, CLIPBOARD_TEXT_HOST_MAX } = await import(
+    '../../../src/agent/vnext/sessionWorkspace/pickContext.js'
+  );
+  record(
+    'clipboard-text-pick-classifier',
+    isClipboardTextPick({ tag: 'p', text: 'hello' }) === true &&
+      isClipboardTextPick({ kind: 'image', tag: 'img', src: 'https://x/a.png' }) === false &&
+      isClipboardTextPick({ kind: 'container', tag: 'div', text: 'box' }) === false,
+    ''
+  );
+  const long = '篇'.repeat(20000);
+  record(
+    'clipboard-text-no-small-char-cap',
+    clipClipboardText(long).length === 20000 && CLIPBOARD_TEXT_HOST_MAX >= 8 * 1024 * 1024,
+    `max=${CLIPBOARD_TEXT_HOST_MAX}`
+  );
+  const svc = new SessionWorkspaceService({ store: new SessionWorkspaceStore() });
+  svc.ensureSession('txt');
+  await svc.createGroup({ name: 'Picks', sessionId: 'txt' });
+  const article = '长'.repeat(12000);
+  const st = await svc.syncTabSelection({
+    sessionId: 'txt',
+    tabId: 2,
+    elements: [
+      { text: article, tag: 'P', selector: 'p.long' },
+      { src: 'https://cdn.example/a.png', kind: 'image', tag: 'IMG', selector: 'img.a' }
+    ]
+  });
+  const cap = st.groups.find((g) => g.groupId === st.activeGroupId);
+  const clip = st.groups.find((g) => g.kind === 'clipboard');
+  record(
+    'sync-text-skips-capture-group',
+    (cap?.items || []).length === 1 &&
+      String(cap.items[0].src || '').includes('a.png') &&
+      clip?.items?.some((it) => String(it.text || '').length === 12000),
+    `cap=${cap?.items?.length} clip=${clip?.itemCount} clipLen=${clip?.items?.[0]?.text?.length}`
   );
 }
 

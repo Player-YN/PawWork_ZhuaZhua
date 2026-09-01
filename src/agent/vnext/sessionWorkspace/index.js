@@ -22,6 +22,7 @@ export {
   ensureClipboardGroup,
   pinClipboardItems,
   clearClipboardGroup,
+  isClipboardTextPick,
   groupVisibleToSession,
   readActiveCaptureGroupId,
   writeActiveCaptureGroupId,

@@ -207,19 +207,27 @@ function record(name, ok, detail) {
     const itemsLen = Array.isArray(active.items) ? active.items.length : 0;
     if (itemCount > 0 && itemsLen === 0) return true; // chips wiped while store has items
     if (itemsLen === 0) return true;
-    const hasText = active.items.some(
-      (it) => String(it.text || '').includes('CHIP_TEXT_SECRET') || String(it.src || '').includes('a.png')
-    );
-    return !hasText;
+    const hasImage = active.items.some((it) => String(it.src || '').includes('a.png'));
+    return !hasImage;
   }
 
   const clearDefault = sidepanelWouldClearSelection(stateDefault);
   const clearExplicit = sidepanelWouldClearSelection(stateExplicit);
   const active = stateDefault.groups?.find((g) => g.groupId === stateDefault.activeGroupId);
+  const clipMirror = stateDefault.groups?.find((g) => g.kind === 'clipboard');
   record(
     'getWorkspaceState-sidepanel-selection-mirror',
-    !clearDefault && !clearExplicit && (active?.items?.length || 0) >= 2,
+    !clearDefault &&
+      !clearExplicit &&
+      (active?.items?.length || 0) === 1 &&
+      active.items.some((it) => String(it.src || '').includes('a.png')) &&
+      !active.items.some((it) => String(it.text || '').includes('CHIP_TEXT_SECRET')),
     `itemCount=${active?.itemCount} itemsLen=${active?.items?.length} clearDefault=${clearDefault}`
+  );
+  record(
+    'sync-text-goes-to-clipboard-not-capture',
+    clipMirror?.items?.some((it) => String(it.text || '').includes('CHIP_TEXT_SECRET')),
+    `clip=${clipMirror?.itemCount}`
   );
 
   // compact:true is allowed to omit items (index-only) — must not be the product default
@@ -239,7 +247,7 @@ function record(name, ok, detail) {
 {
   const svc = new SessionWorkspaceService({ store: new SessionWorkspaceStore() });
   svc.ensureSession('sel');
-  const el = [{ text: 'stable-text', tag: 'P', selector: 'p.main' }];
+  const el = [{ src: 'https://example.com/stable.png', kind: 'image', tag: 'IMG', selector: 'img.stable' }];
   await svc.syncTabSelection({ sessionId: 'sel', tabId: 7, elements: el });
   const s1 = await svc.getWorkspaceState({ sessionId: 'sel' });
   const active1 = s1.groups.find((g) => g.groupId === s1.activeGroupId);
@@ -286,7 +294,7 @@ function record(name, ok, detail) {
     sessionId: 'wipe',
     tabId: 9,
     url: 'https://b.example/',
-    elements: [{ selector: 'p.b', tag: 'p', text: 'hello' }]
+    elements: [{ selector: 'table.b', tag: 'table', kind: 'table', text: 'hello' }]
   });
   const before = await svc.getWorkspaceState({ sessionId: 'wipe' });
   const gBefore = before.groups.find((g) => g.groupId === before.activeGroupId);
@@ -309,18 +317,18 @@ function record(name, ok, detail) {
     sessionId: 'iso',
     tabId: 3,
     elements: [
-      { text: 'a', tag: 'P', selector: 'p.a' },
-      { text: 'b', tag: 'P', selector: 'p.b' },
-      { text: 'c', tag: 'P', selector: 'p.c' },
-      { text: 'd', tag: 'P', selector: 'p.d' },
-      { text: 'e', tag: 'P', selector: 'p.e' }
+      { src: 'https://cdn.example/a.png', kind: 'image', tag: 'IMG', selector: 'img.a' },
+      { src: 'https://cdn.example/b.png', kind: 'image', tag: 'IMG', selector: 'img.b' },
+      { src: 'https://cdn.example/c.png', kind: 'image', tag: 'IMG', selector: 'img.c' },
+      { src: 'https://cdn.example/d.png', kind: 'image', tag: 'IMG', selector: 'img.d' },
+      { src: 'https://cdn.example/e.png', kind: 'image', tag: 'IMG', selector: 'img.e' }
     ]
   });
   const g2 = await svc.createGroup({ name: 'Group 2', sessionId: 'iso' });
   await svc.syncTabSelection({
     sessionId: 'iso',
     tabId: 3,
-    elements: [{ text: 'only-g2', tag: 'P', selector: 'p.g2' }]
+    elements: [{ src: 'https://cdn.example/g2.png', kind: 'image', tag: 'IMG', selector: 'img.g2' }]
   });
   const state = await svc.getWorkspaceState({ sessionId: 'iso' });
   const one = state.groups.find((g) => g.groupId === g1.activeGroupId);
@@ -329,7 +337,7 @@ function record(name, ok, detail) {
     'new-group-sync-does-not-copy-previous-group',
     (one?.items?.length || 0) === 5 &&
       (two?.items?.length || 0) === 1 &&
-      two.items[0].text === 'only-g2',
+      String(two.items[0].src || '').includes('g2.png'),
     `g1=${one?.items?.length} g2=${two?.items?.length}`
   );
 }
