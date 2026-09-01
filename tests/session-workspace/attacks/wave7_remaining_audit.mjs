@@ -114,6 +114,11 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
     /FORBIDDEN|node_modules|\.git/.test(pack) && /assertClean|forbidden/.test(pack),
     ''
   );
+  record(
+    'pack-copies-mit-and-tldraw-license',
+    /THIRD_PARTY_NOTICES/.test(pack) && /tldraw-LICENSE/.test(pack) && /['"]licenses['"]/.test(pack),
+    ''
+  );
 }
 
 // M-8: agent_invoke removed; user export/screenshot entry points retained

@@ -19,6 +19,21 @@ Every user message → General ToolLoopAgent (toolChoice=auto)
   → /scratch (transient) and/or /artifacts (durable)
 ```
 
+### Host path
+
+```text
+Sidepanel
+  → workspaceRpc (background service worker)
+  → Offscreen SessionWorkspaceService
+  → every user message: sendMessage
+  → AI SDK ToolLoopAgent (toolChoice=auto)
+  → tools: inspect / acquire / run / clarify / sheet / deck / doc / web
+  → /artifacts (durable) + /scratch (per-execution)
+  → live canvases: Univer sheet & docs · tldraw Design/Slides · HTML site
+```
+
+Public README describes the product path (select → describe → canvas). This block is the extension host path. Tool names are runtime capabilities, not a user-facing feature list.
+
 ### North-star principles
 
 1. **Session is the workspace.**

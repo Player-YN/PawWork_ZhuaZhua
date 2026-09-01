@@ -56,6 +56,15 @@ function main() {
     if (fs.existsSync(p)) copyDir(p, path.join(outRoot, extra));
   }
 
+  copyFile(path.join(root, 'LICENSE'), path.join(outRoot, 'LICENSE'));
+  copyFile(path.join(root, 'THIRD_PARTY_NOTICES.md'), path.join(outRoot, 'THIRD_PARTY_NOTICES.md'));
+  const tldrawLicense = path.join(root, 'notices', 'tldraw-LICENSE.md');
+  if (!fs.existsSync(tldrawLicense)) {
+    console.error('[pack:extension] missing notices/tldraw-LICENSE.md (verbatim tldraw license)');
+    process.exit(1);
+  }
+  copyFile(tldrawLicense, path.join(outRoot, 'licenses', 'tldraw-LICENSE.md'));
+
   let n = 0;
   function walk(dir) {
     for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {

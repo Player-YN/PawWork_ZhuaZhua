@@ -1,0 +1,81 @@
+# Publish the ~44MB unpacked extension as a GitHub Release zip.
+# Passersby unzip and Load unpacked — no npm. Do not load a source clone root.
+#
+# Run this on https://github.com/Player-YN/PawWork_ZhuaZhua (public),
+# after sync:public, with repo secret PAW_TLDRAW_LICENSE_KEY set.
+# Never commit the key. A release without that secret is blocked.
+name: release-unpacked
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-unpacked-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: pack · zip · GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PAW_TLDRAW_LICENSE_KEY: ${{ secrets.PAW_TLDRAW_LICENSE_KEY }}
+
+    steps:
+      - name: Require tldraw production key
+        run: |
+          if [ -z "$PAW_TLDRAW_LICENSE_KEY" ]; then
+            echo "Set repository secret PAW_TLDRAW_LICENSE_KEY before releasing a passerby pack."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Pack clean unpacked extension
+        run: npm run pack:extension
+
+      - name: Zip loadable folder
+        run: |
+          mkdir -p artifacts/release
+          cp -a artifacts/unpacked artifacts/release/paw-work
+          test -f artifacts/release/paw-work/manifest.json
+          test -f artifacts/release/paw-work/LICENSE
+          test -f artifacts/release/paw-work/licenses/tldraw-LICENSE.md
+          (cd artifacts/release && zip -r paw-work-unpacked.zip paw-work)
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            TAG="unpacked-$(git rev-parse --short HEAD)"
+          fi
+          NOTES="$(printf '%s\n' \
+            'Unzip, then Chrome → chrome://extensions → Developer mode → Load unpacked → select the `paw-work` folder (the one with manifest.json).' \
+            '' \
+            'Do not git clone the source repo to install. Do not load a folder that contains node_modules.' \
+            '' \
+            '解压后：Chrome → chrome://extensions → 开发者模式 → 加载已解压的扩展程序 → 选 `paw-work` 文件夹（里面有 manifest.json）。不要 clone 源码仓当安装包。')"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/release/paw-work-unpacked.zip --clobber
+          else
+            gh release create "$TAG" artifacts/release/paw-work-unpacked.zip \
+              --title "Paw Work unpacked ${TAG}" \
+              --notes "$NOTES"
+          fi

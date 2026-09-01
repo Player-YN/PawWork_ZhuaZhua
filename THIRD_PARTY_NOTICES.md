@@ -1,6 +1,8 @@
 # Third-party notices
 
-Paw Work's own code is MIT-licensed (see [LICENSE](LICENSE)). The product builds on the engines and libraries below. **The large editor bundles are built locally on your machine via npm (`npm run build:agent`) and are gitignored — this repository does not redistribute them.** A few small compiled loaders and `esbuild.wasm` are committed for reproducible packaging, as noted.
+Paw Work's own code is MIT-licensed (see [LICENSE](LICENSE)). The **source repository** does not redistribute Univer/tldraw runtime bundles — those are built locally via `npm run build:agent` and gitignored. A few small compiled loaders and `esbuild.wasm` are committed for reproducible packaging, as noted.
+
+The **GitHub Release zip** (`paw-work-unpacked.zip`) **does** redistribute those built bundles. That zip includes this notice, the MIT `LICENSE`, and a verbatim copy of the [tldraw license](notices/tldraw-LICENSE.md). Do not commit a tldraw production key; inject it at pack time with `PAW_TLDRAW_LICENSE_KEY`.
 
 | Component | License | How it ships |
 |-----------|---------|--------------|
