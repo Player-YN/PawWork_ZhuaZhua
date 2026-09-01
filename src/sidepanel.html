@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <!--
+    PageWand Side Panel — task-first shell (pagewand-ux-demo design)
+    1. Task-first: one active task timeline; past tasks collapsed in history.
+    2. Visible states: Chat / Shape / Running / Done·Confirm / Verified.
+    3. Primary 点选 picker; counts/chips only after real selection — no hollow empty card.
+    4. Quick tools (下图 / 剪贴板) only when content exists; row-click = copy; Export ▾ in clip header.
+    5. Progressive disclosure: Advanced / Settings behind ⋯ / ⚙️.
+  -->
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>爪爪 · Paw Work</title>
+  <link rel="stylesheet" href="sidepanel/css/tokens.css" />
+  <link rel="stylesheet" href="sidepanel/css/layout.css" />
+  <link rel="stylesheet" href="sidepanel/css/motion.css" />
+  <link rel="stylesheet" href="sidepanel.css" />
+  <script src="marked.min.js"></script>
+</head>
+<body data-theme="dark" data-theme-mode="system">
+  <aside class="panel" id="panel" aria-label="爪爪 · Paw Work">
+    <div class="ambient-layer" aria-hidden="true"></div>
+    <div class="file-drop-overlay" id="fileDropOverlay" aria-hidden="true">
+      <span class="file-drop-overlay-label" id="fileDropOverlayLabel" data-i18n="fileDropHint">松开以上传附件</span>
+    </div>
+
+    <!-- Left session rail: collapsed by default; edge hover reveals fab -->
+    <div class="session-edge" id="sessionEdge" aria-hidden="false">
+      <button
+        type="button"
+        class="session-edge-fab"
+        id="sessionEdgeFab"
+        title="任务"
+        aria-label="打开任务列表"
+        aria-expanded="false"
+        aria-controls="sessionRail"
+      >
+        <span class="session-edge-fab-icon" aria-hidden="true"></span>
+      </button>
+    </div>
+    <div class="session-rail-scrim" id="sessionRailScrim" hidden></div>
+    <aside class="session-rail" id="sessionRail" aria-label="任务" aria-hidden="true" hidden inert>
+      <div class="session-rail-head">
+        <span class="session-rail-title" data-i18n="sessionsTitle">任务</span>
+        <div class="session-rail-actions">
+          <button type="button" class="session-rail-icon-btn" id="sessionRailNewBtn" title="新建任务" aria-label="新建任务">＋</button>
+          <button type="button" class="session-rail-icon-btn" id="sessionRailCloseBtn" title="收起" aria-label="收起任务列表">‹</button>
+        </div>
+      </div>
+      <ul class="session-rail-list" id="sessionRailList" role="list"></ul>
+      <div class="session-rail-foot" id="sessionRailFoot" hidden>
+        <div class="session-rail-foot-label" data-i18n="historyTitle">本任务</div>
+        <div id="sessionRailTasks"></div>
+      </div>
+    </aside>
+
+    <div class="artifact-rail-scrim" id="artifactRailScrim" hidden></div>
+    <aside class="artifact-rail" id="artifactRail" aria-label="交付物" aria-hidden="true" hidden inert>
+      <div class="artifact-rail-head">
+        <span class="artifact-rail-title" data-i18n="artifactShelfTitle">交付物</span>
+        <button type="button" class="session-rail-icon-btn" id="artifactRailCloseBtn" title="收起" aria-label="收起工作区">›</button>
+      </div>
+      <nav class="artifact-rail-nav" id="artifactRailNav" hidden aria-label="交付物分类"></nav>
+      <div class="artifact-rail-empty" id="sessionArtifactEmpty" hidden>工作区还没有文件</div>
+      <ul class="artifact-rail-list" id="artifactShelfList" role="list"></ul>
+      <div class="artifact-rail-foot" id="artifactRailFoot">
+        <div class="artifact-rail-new" id="artifactRailNew">
+          <div class="artifact-rail-new-label" id="artifactRailNewLabel" data-i18n="artifactNew">新建</div>
+          <div class="artifact-rail-new-list" role="group" aria-labelledby="artifactRailNewLabel">
+            <button type="button" class="artifact-rail-new-btn" data-blank-kind="design" data-i18n="artifactNewDesign">空白画板</button>
+            <button type="button" class="artifact-rail-new-btn" data-blank-kind="slides" data-i18n="artifactNewSlides">空白 PPT</button>
+            <button type="button" class="artifact-rail-new-btn" data-blank-kind="sheet" data-i18n="artifactNewSheet">空白 Sheet</button>
+            <button type="button" class="artifact-rail-new-btn" data-blank-kind="doc" data-i18n="artifactNewDoc">空白 Document</button>
+            <button type="button" class="artifact-rail-new-btn" data-blank-kind="site" data-i18n="artifactNewSite">空白网站</button>
+          </div>
+        </div>
+        <button type="button" class="artifact-rail-foot-btn" id="artifactRailZipSelected" data-i18n="artifactZipSelected">下载所选</button>
+      </div>
+    </aside>
+
+    <!-- Sticky chrome: brand + page listen dot + more -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo logo-paw" id="brandLogo" aria-hidden="true" title="爪爪 · Paw Work"></span>
+        <div class="brand-text">
+          <div class="brand-name" data-i18n="brandName">爪爪</div>
+          <div class="brand-sub" data-i18n="brandSub">Paw Work</div>
+        </div>
+        <!-- Compact page listen trust indicator (no title/URL wall) -->
+        <button type="button" class="page-listen" id="pageListenBtn" data-listen="pending" title="页面监听" aria-label="页面监听状态">
+          <span class="page-listen-dot" aria-hidden="true"></span>
+          <span class="page-listen-label" id="pageListenLabel">监听中</span>
+        </button>
+        <span class="worker-slot-pill" id="workerSlotPill" hidden data-state="idle"></span>
+        <!-- Hidden fields kept for JS that still reads title/domain -->
+        <span id="activePageTitle" hidden></span>
+        <span id="activePageDomain" hidden></span>
+        <span id="pageFavicon" hidden></span>
+      </div>
+      <div class="topbar-right">
+        <button type="button" class="icon-btn" id="moreBtn" title="更多" aria-label="更多" aria-expanded="false" aria-haspopup="dialog" aria-controls="moreSheet">⋯</button>
+        <!-- Hidden legacy hooks (settings/lang/theme/status still driven by JS via more sheet) -->
+        <button type="button" id="gearBtn" hidden aria-hidden="true" aria-haspopup="dialog" aria-controls="agentSettingsModal"></button>
+        <button type="button" id="langToggle" hidden aria-hidden="true"></button>
+        <button type="button" id="themeToggleBtn" hidden aria-hidden="true"></button>
+        <div id="statusPill" data-state="ready" hidden aria-hidden="true">
+          <span class="status-dot"></span>
+          <span class="status-label" id="statusLabel"></span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Pinned under topbar: pick / shot / group / clipboard (does not scroll away) -->
+    <section class="selection-bar is-empty" id="selectionBar" aria-label="Selection summary" aria-expanded="false">
+      <div class="sel-toolbar" id="selToolbar">
+        <button type="button" class="pick-btn" id="pickBtn" aria-pressed="false" title="伸爪：在网页上点选元素" aria-label="伸爪">
+          <span class="pick-icon pick-icon-paw" aria-hidden="true"></span>
+          <span class="pick-label" id="pickBtnLabel" data-i18n="pickBtn">伸爪</span>
+        </button>
+        <!-- Same tier as 点选: capture page region into chat -->
+        <button type="button" class="shot-btn" id="captureScreenshotBtn" title="区域截图" aria-label="截图">
+          <span class="shot-icon" aria-hidden="true">📸</span>
+          <span class="shot-label" data-i18n="shotBtn">截图</span>
+        </button>
+        <button type="button" class="sel-pin-btn" id="pinSelBtn" data-drawer-pin hidden title="固定展开面板" aria-label="固定展开面板" aria-pressed="false">
+          <span class="sel-pin-icon" aria-hidden="true"></span>
+        </button>
+        <!-- Active Group for capture only (where new selections go). Session bind lives under the dialog. -->
+        <div class="group-select" id="groupSelect" title="当前选择组：伸爪/截图写入此组">
+          <button
+            type="button"
+            class="group-select-trigger"
+            id="groupSelectTrigger"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-controls="groupSelectMenu"
+            title="选择当前 Group（添加元素的目标）"
+          >
+            <span class="group-select-label" id="groupSelectLabel">未选择组</span>
+            <span class="group-select-caret" aria-hidden="true"></span>
+          </button>
+          <div class="group-select-menu" id="groupSelectMenu" hidden role="listbox" aria-label="选择组">
+            <div class="group-select-list" id="groupSelectList"></div>
+            <button type="button" class="group-select-create" id="groupSelectCreate">+ 新建 Group</button>
+            <button type="button" class="group-select-create group-select-add-links" id="groupSelectAddLinks" data-i18n="addLinks">添加链接</button>
+            <div class="group-add-links" id="groupAddLinks" hidden>
+              <div class="group-add-links-inner">
+                <textarea
+                  class="group-add-links-input"
+                  id="groupAddLinksInput"
+                  rows="3"
+                  data-i18n-placeholder="addLinksHint"
+                  placeholder="粘贴链接，Enter 添加"
+                ></textarea>
+                <p class="group-add-links-note" id="groupAddLinksNote" hidden></p>
+              </div>
+            </div>
+          </div>
+          <!-- a11y / programmatic mirror -->
+          <select id="activeGroupSelect" hidden aria-hidden="true" tabindex="-1"></select>
+        </div>
+        <div class="sel-summary" id="selSummary" hidden>
+          <span class="sel-label" data-i18n="selected">已选</span>
+          <span class="sel-counts" id="selCounts">
+            <span class="sel-count" data-kind="text" hidden><span data-i18n="kindText">文</span>×<b id="countText">0</b></span>
+            <span class="sel-count" data-kind="image" hidden><span data-i18n="kindImage">图</span>×<b id="countImage">0</b></span>
+            <span class="sel-count" data-kind="table" hidden><span data-i18n="kindTable">表</span>×<b id="countTable">0</b></span>
+            <span class="sel-count" data-kind="link" hidden><span data-i18n="kindLink">链</span>×<b id="countLink">0</b></span>
+            <span class="sel-count" data-kind="page" hidden><span data-i18n="kindPage">页</span>×<b id="countPage">0</b></span>
+            <span class="sel-count" data-kind="vector" hidden><span data-i18n="kindVector">量</span>×<b id="countVector">0</b></span>
+            <span class="sel-count" data-kind="video" hidden><span data-i18n="kindVideo">视频</span>×<b id="countVideo">0</b></span>
+          </span>
+        </div>
+        <div class="sel-toolbar-actions">
+          <button type="button" class="sel-clear" id="clearSelBtn" data-i18n="clearSel" title="清空选中" hidden>清空</button>
+        </div>
+      </div>
+      <div class="sel-expand-body" data-drawer-body id="selExpandBody">
+        <div class="sel-chips" id="selChips"></div>
+        <div class="sel-extra" id="selExtra" hidden>
+          <!-- 下图 only; clipboard no longer has a separate pill — opens with selection hover -->
+          <div class="quick-tools" id="quickTools" aria-label="快捷操作">
+            <button type="button" class="quick-tool" id="toolDlImg" hidden title="下载当前选中的图片">
+              📷 <span data-i18n="toolDlImg">下图</span><span class="qt-badge" id="badgeImg">0</span>
+            </button>
+            <button type="button" class="quick-tool" id="toolExportTable" hidden title="导出选中表格为 CSV">
+              📊 <span data-i18n="toolExportTable">导出表</span><span class="qt-badge" id="badgeTable">0</span>
+            </button>
+            <button type="button" class="quick-tool" id="toolCopyLink" hidden title="复制选中链接">
+              🔗 <span data-i18n="toolCopyLink">复制链接</span><span class="qt-badge" id="badgeLink">0</span>
+            </button>
+            <button type="button" class="quick-tool" id="toolDlFile" hidden title="下载链接指向的文件">
+              ⬇️ <span data-i18n="toolDlFile">下载文件</span><span class="qt-badge" id="badgeFile">0</span>
+            </button>
+            <button type="button" class="quick-tool" id="toolDlSvg" hidden title="下载选中 SVG">
+              🧩 <span data-i18n="toolDlSvg">下矢量</span><span class="qt-badge" id="badgeSvg">0</span>
+            </button>
+            <button type="button" class="quick-tool" id="toolCoverLink" hidden title="下载 AVIF 封面到文档，并附上页面链接">
+              🎬 <span data-i18n="toolCoverLink">下载封面</span><span class="qt-badge" id="badgeCover">0</span>
+            </button>
+          </div>
+          <div class="clip-drawer" id="clipDrawer" hidden>
+            <!-- Head stays fixed; list scrolls in .clip-drawer-body -->
+            <div class="clip-drawer-head">
+              <div class="clip-drawer-title-row">
+                <span class="clip-drawer-title" data-i18n="clipDrawerTitle">剪贴板</span>
+                <span class="clip-count-badge" id="badgeClip" hidden>0</span>
+              </div>
+              <div class="clip-head-actions">
+                <div class="clip-export-wrap">
+                  <button type="button" class="clip-action-btn clip-export-btn" id="clipExportBtn" data-i18n="clipExport" aria-haspopup="menu" aria-controls="clipExportMenu" aria-expanded="false">导出 ▾</button>
+                  <div class="clip-export-menu" id="clipExportMenu" hidden role="menu">
+                    <button type="button" class="clip-export-item" data-fmt="md" role="menuitem">Markdown (.md)</button>
+                    <button type="button" class="clip-export-item" data-fmt="txt" role="menuitem">纯文本 (.txt)</button>
+                    <button type="button" class="clip-export-item" data-fmt="html" role="menuitem">HTML (.html)</button>
+                    <button type="button" class="clip-export-item" data-fmt="csv" role="menuitem">CSV (.csv)</button>
+                    <button type="button" class="clip-export-item" data-fmt="json" role="menuitem">JSON (.json)</button>
+                  </div>
+                </div>
+                <button type="button" class="clip-action-btn" id="clipCopySelectedBtn" data-i18n="clipCopySelected" hidden>复制所选</button>
+                <button type="button" class="clip-action-btn" id="clipDeleteSelectedBtn" data-i18n="clipDeleteSelected" hidden>删除所选</button>
+                <button type="button" class="clip-clear-btn" id="clearClipBtn" data-i18n="clearClip">清空</button>
+              </div>
+            </div>
+            <div class="clip-drawer-body">
+              <ul class="clip-list" id="clipList"></ul>
+              <p class="clip-hint" data-i18n="clipHint">点整行即可复制 · 勾选后可批量删除 · 标题栏导出</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="quick-toast" id="quickToast" hidden></div>
+    </section>
+
+    <!-- Conversation scrollport only -->
+    <div class="panel-scroll" id="panelScroll">
+
+    <!-- Unfinished drafts (same scroll level; hidden when empty) -->
+    <section class="drafts-bar" id="draftsBar" hidden aria-label="Unfinished drafts">
+      <div class="drafts-header">
+        <div class="drafts-header-left">
+          <span class="drafts-title">未完成草稿</span>
+          <span class="drafts-count" id="draftsCount">0</span>
+        </div>
+        <button type="button" class="history-toggle-btn" id="draftsRefreshBtn" title="刷新草稿列表">刷新</button>
+      </div>
+      <div class="drafts-list" id="draftsList" role="list"></div>
+    </section>
+
+    <!-- Thread workspace: history + current task are ONE flat section (same scroll) -->
+    <section class="thread-workspace" id="threadWorkspace" aria-label="任务与对话">
+      <div class="history-bar is-collapsed" id="historyBar" hidden>
+        <div class="history-header" id="historyHeaderToggle" role="button" tabindex="0" title="展开 / 收起历史" aria-expanded="false" aria-controls="historyList">
+          <div class="history-header-left">
+            <span class="history-title" data-i18n="historyTitle">历史任务</span>
+            <span class="history-count" id="historyCount">0</span>
+          </div>
+          <div class="history-header-actions">
+            <button type="button" class="history-toggle-btn" id="historyToggleBtn" aria-expanded="false" aria-controls="historyList" data-i18n="historyExpand">展开</button>
+            <button type="button" class="history-clear-btn" id="clearHistoryBtn" data-i18n="clearHistory" title="清空任务记录">清空记录</button>
+          </div>
+        </div>
+        <div class="history-list" id="historyList" role="list" hidden></div>
+      </div>
+
+      <main class="task-stream" id="taskStream" aria-live="polite">
+        <!-- Home empty: tagline lives only as composer placeholder; chips near centered input -->
+        <div class="welcome" id="welcome">
+          <div class="home-center" id="homeCenter">
+            <div class="home-mark home-mark-paw" aria-hidden="true"></div>
+            <div class="home-composer-slot" id="homeComposerSlot"></div>
+            <div class="hint-chips" id="hintChips">
+              <button type="button" class="hint-chip" data-prompt-key="userGuide" data-i18n="guideChipLabel" data-prompt="爪爪（Paw Work）能做什么？简短介绍伸爪选中、对话、下载与导出。">怎么用爪爪？</button>
+            </div>
+          </div>
+        </div>
+      </main>
+    </section>
+
+    </div><!-- /#panelScroll -->
+
+    <nav class="turn-jump" id="turnJumpRail" hidden aria-label="跳转到发言"></nav>
+
+    <!-- Hidden attachment bar (kept for multimodal / screenshot) -->
+    <div class="attachment-preview-bar" id="attachmentPreviewBar" hidden></div>
+    <input type="file" id="fileInput" accept="image/*,.txt,.json,.js,.py,.md,.csv,.pdf" multiple hidden />
+
+    <!-- Read-only worker thinking session (no user input) -->
+    <dialog class="worker-session-dialog" id="workerSessionDialog" aria-labelledby="workerSessionTitle">
+      <div class="worker-session-sheet">
+        <header class="worker-session-header">
+          <div class="worker-session-heading">
+            <span class="worker-session-kicker" id="workerSessionKicker">Worker</span>
+            <h2 class="worker-session-title" id="workerSessionTitle">Worker</h2>
+          </div>
+          <button type="button" class="sheet-close" id="workerSessionClose" aria-label="Close">×</button>
+        </header>
+        <p class="worker-session-goal" id="workerSessionGoal"></p>
+        <p class="worker-session-note" id="workerSessionNote">只读任务 · 不可直接对话</p>
+        <pre class="worker-session-body" id="workerSessionBody" tabindex="0"></pre>
+      </div>
+    </dialog>
+
+    <!-- Sticky composer: floating model / bind-group / artifacts above white shell -->
+    <footer class="composer">
+      <div class="composer-float-row" id="composerMeta" aria-label="模型与任务 Group">
+        <div class="model-select" id="modelSelectRoot">
+          <button
+            type="button"
+            class="composer-bubble composer-bubble-model"
+            id="modelSelectTrigger"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-controls="modelSelectMenu"
+            title="模型"
+          >
+            <span class="think-effort-spark" aria-hidden="true"></span>
+            <span class="model-select-label" id="modelSelectLabel">model</span>
+            <span class="model-select-caret" aria-hidden="true"></span>
+          </button>
+          <div class="model-select-menu" id="modelSelectMenu" hidden>
+            <div class="model-effort-row" id="thinkEffort">
+              <span class="model-effort-label" id="thinkEffortLabel">无思考</span>
+              <div
+                class="think-effort-slider"
+                id="thinkEffortPop"
+                role="slider"
+                tabindex="0"
+                aria-valuemin="0"
+              >
+                <span class="think-effort-fill"></span>
+                <span class="think-effort-spark" aria-hidden="true"></span>
+                <span class="think-effort-dots" id="thinkEffortDots"></span>
+                <span class="think-effort-thumb"></span>
+              </div>
+            </div>
+            <button type="button" class="model-select-item model-select-next" id="modelSelectOpenList">
+              <span class="model-select-next-text">
+                <span class="model-select-next-kicker" data-i18n="modelSwitchModels">切换模型</span>
+                <span class="model-select-next-name" id="modelSelectCurrentName"></span>
+              </span>
+              <span class="model-select-next-caret" aria-hidden="true"></span>
+            </button>
+          </div>
+          <div class="model-select-menu model-select-submenu" id="modelSelectSubmenu" hidden>
+            <button type="button" class="model-select-item model-select-back" id="modelSelectBack">
+              <span class="model-select-back-caret" aria-hidden="true"></span>
+              <span data-i18n="modelPickerTitle">选择模型</span>
+            </button>
+            <div class="model-select-list" id="modelSelectList"></div>
+          </div>
+          <select id="modelSelect" class="model-select-native" hidden tabindex="-1" aria-hidden="true">
+            <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+          </select>
+        </div>
+        <div class="session-bind-add" id="sessionBindAdd">
+          <button
+            type="button"
+            class="composer-bubble session-bind-add-btn"
+            id="sessionBindAddBtn"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-controls="sessionBindAddMenu"
+            title="当前任务绑定 Group"
+          >Bind Group</button>
+          <div class="session-bind-add-menu" id="sessionBindAddMenu" hidden></div>
+          <div class="bind-group-hint" id="bindGroupHint" hidden>
+            <div class="bind-group-hint-card">
+              <span class="bind-group-hint-text">
+                <span data-i18n="bindGroupHint">当前没有绑定任何 Group 到这个任务。</span>
+                <strong data-i18n="bindGroupHintEmphasis">Agent 只能访问已绑定的 Group。</strong>
+              </span>
+              <button type="button" class="bind-group-hint-x" id="bindGroupHintClose" aria-label="关闭">×</button>
+            </div>
+            <span class="bind-group-hint-arrow" aria-hidden="true"></span>
+          </div>
+        </div>
+        <div class="session-artifact-add" id="sessionArtifactAdd">
+          <button
+            type="button"
+            class="composer-bubble session-artifact-btn"
+            id="sessionArtifactBtn"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            aria-controls="artifactRail"
+            data-i18n-title="artifactShelfTitle"
+            title="交付物"
+          >
+            <span data-i18n="artifactShelfTitle">交付物</span>
+            <span class="session-artifact-count" id="artifactShelfCount" hidden>0</span>
+          </button>
+        </div>
+        <div class="bound-groups-chips" id="boundGroupsChips" role="list" hidden></div>
+        <select id="boundGroupsSelect" multiple hidden aria-hidden="true" tabindex="-1"></select>
+      </div>
+      <div class="sheet-sel-row" id="sheetSelRow" hidden>
+        <div class="sheet-sel-groups" id="sheetSelGroups"></div>
+        <button type="button" class="sheet-sel-clear" id="sheetSelClear" data-i18n="sheetSelClear" hidden>清空</button>
+      </div>
+      <div class="sheet-sel-row is-canvas" id="canvasSelRow" hidden>
+        <div class="sheet-sel-groups" id="canvasSelGroups"></div>
+        <button type="button" class="sheet-sel-clear" id="canvasSelClear" data-i18n="canvasSelClear" hidden>清空</button>
+      </div>
+      <div class="composer-inner">
+        <button type="button" class="attach-btn" id="attachFileBtn" title="上传图片或文本文件" aria-label="Attach">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+          </svg>
+        </button>
+        <div class="composer-field">
+          <div
+            id="input"
+            class="is-empty"
+            contenteditable="true"
+            role="textbox"
+            aria-multiline="true"
+            aria-autocomplete="list"
+            aria-controls="mentionPalette"
+            aria-expanded="false"
+            data-i18n-aria="inputPlaceholder"
+            aria-label="选中，说要什么"
+            spellcheck="true"
+          ></div>
+          <span id="composerTypewriter" class="composer-typewriter" aria-hidden="true"></span>
+        </div>
+        <div class="composer-actions">
+          <span
+            class="context-ring"
+            id="contextRing"
+            role="meter"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+            aria-label="上下文 0%"
+            title="上下文 0%"
+            data-ratio="0"
+          >
+            <svg class="context-ring-svg" viewBox="0 0 32 32" aria-hidden="true">
+              <circle class="context-ring-track" cx="16" cy="16" r="12"></circle>
+              <circle class="context-ring-fill" cx="16" cy="16" r="12"></circle>
+            </svg>
+            <span class="context-ring-label" id="contextRingLabel" hidden>Compacting</span>
+          </span>
+          <span id="promptQueueHint" class="prompt-queue-hint" hidden></span>
+          <!-- Hover + scroll wheel on send: chat (accent) ↔ run (purple). Same shape. -->
+          <button type="button" class="send-btn is-send" id="sendBtn" data-mode="chat" data-submit="chat" title="发送（对话）· 悬停滚轮切换运行" aria-label="发送（对话）">
+            <span class="send-icon" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="stop-btn" id="stopBtn" hidden title="停止" aria-label="停止" aria-hidden="true">
+            <span class="stop-icon" aria-hidden="true"></span>
+          </button>
+        </div>
+      </div>
+    </footer>
+
+    <!-- Advanced sheet -->
+    <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+    <div class="more-sheet" id="moreSheet" hidden role="dialog" aria-modal="true" aria-label="更多">
+      <div class="sheet-handle"></div>
+      <h3 data-i18n="moreTitle">更多</h3>
+
+      <div class="sheet-section">
+        <div class="sheet-section-title">外观与语言</div>
+        <div class="sheet-tools-row">
+          <button type="button" class="sheet-mini-btn" id="moreLangBtn" title="语言">语言 · 中/EN</button>
+          <button type="button" class="sheet-mini-btn" id="moreThemeBtn" title="主题">主题</button>
+          <button type="button" class="sheet-mini-btn" id="moreSettingsBtn" title="设置">设置 · API</button>
+        </div>
+      </div>
+
+      <div class="sheet-section">
+        <div class="sheet-section-title" data-i18n="moreSkills">Skills 技能</div>
+        <p class="sheet-note" data-i18n="settingsSkillsHint">打包 playbook 与本机 / GitHub overlay。对话输入 / 选用。instruction 按需 inspect，不进 system。</p>
+        <button type="button" class="sheet-action-btn" id="moreSkillsBtn" data-i18n="moreSkillsOpen">打开 Skills</button>
+      </div>
+
+      <div class="sheet-section">
+        <div class="sheet-section-title">🛤️ <span data-i18n="moreTrajectory">运行轨迹</span></div>
+        <button type="button" class="sheet-action-btn" id="exportMdBtn">导出任务 Markdown</button>
+      </div>
+
+      <!-- Keep sessionSelect in DOM for JS that still refreshes sessions (hidden) -->
+      <select id="sessionSelect" hidden aria-hidden="true"></select>
+      <button type="button" id="newSessionBtn" hidden aria-hidden="true"></button>
+      <button type="button" id="renameSessionBtn" hidden aria-hidden="true"></button>
+      <button type="button" id="deleteSessionBtn" hidden aria-hidden="true"></button>
+
+      <button type="button" class="sheet-close" id="sheetClose" data-i18n="close">关闭</button>
+    </div>
+  </aside>
+
+  <!-- ── Production overlays (same IDs as before) ── -->
+
+
+  <!-- App modal (prompt / confirm) -->
+  <dialog id="appModalOverlay" class="pw-dialog" aria-labelledby="modalTitle">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="modalTitle">任务重命名</h3>
+        <button type="button" id="modalCloseBtn" class="modal-close-btn" aria-label="关闭">&times;</button>
+      </div>
+      <div class="modal-body" id="modalBody">
+        <p id="modalMessage" class="modal-message" hidden></p>
+        <input type="text" id="modalInput" class="modal-input" placeholder="请输入新任务名称...">
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="modalCancelBtn" class="btn btn-secondary">取消</button>
+        <button type="button" id="modalConfirmBtn" class="btn btn-primary">确认</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Image gen preview -->
+  <div id="imageGenPreviewOverlay" class="modal-overlay image-gen-preview-overlay" style="display: none;" aria-hidden="true">
+    <div class="modal-card image-gen-preview-card" role="dialog" aria-labelledby="imageGenPreviewTitle">
+      <div class="modal-header">
+        <h3 id="imageGenPreviewTitle" class="modal-title">生成的图片</h3>
+        <button type="button" id="imageGenPreviewCloseBtn" class="modal-close-btn" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body image-gen-preview-body">
+        <div class="image-gen-preview-frame">
+          <img id="imageGenPreviewImg" class="image-gen-preview-img" alt="Generated image" />
+        </div>
+        <p id="imageGenPreviewMeta" class="image-gen-preview-meta settings-hint"></p>
+      </div>
+      <div class="modal-footer image-gen-preview-footer">
+        <button type="button" id="imageGenAttachBtn" class="btn btn-secondary">加入附件</button>
+        <button type="button" id="imageGenDownloadBtn" class="btn btn-secondary">重新下载</button>
+        <button type="button" id="imageGenPreviewDoneBtn" class="btn btn-primary">完成</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Artifact preview -->
+  <div id="artifactPreviewOverlay" class="modal-overlay artifact-preview-overlay" style="display: none;" aria-hidden="true">
+    <div class="modal-card artifact-preview-card" role="dialog" aria-labelledby="artifactPreviewTitle">
+      <div class="modal-header">
+        <h3 id="artifactPreviewTitle" class="modal-title">产物预览</h3>
+        <button type="button" id="artifactPreviewCloseBtn" class="modal-close-btn" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body artifact-preview-body">
+        <p id="artifactPreviewMeta" class="artifact-preview-meta settings-hint"></p>
+        <pre id="artifactPreviewSample" class="artifact-preview-sample" aria-label="内容样例"></pre>
+      </div>
+      <div class="modal-footer artifact-preview-footer">
+        <button type="button" id="artifactPreviewCancelBtn" class="btn btn-secondary">取消</button>
+        <button type="button" id="artifactPreviewConfirmBtn" class="btn btn-primary">确认下载</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Legacy skill catalog (unused; Skills live in Settings) -->
+  <div id="skillCatalogModal" class="modal-overlay" hidden style="display: none;" aria-hidden="true">
+    <div class="modal-card skill-catalog-card">
+      <div class="modal-header">
+        <h3>🧩 Skills 技能库</h3>
+        <button id="skillModalCloseBtn" class="modal-close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="skill-catalog-subtitle">用户 Skills 保存在本机；运行消耗云端 BYOK API（扩展内 vNext Runtime）。</p>
+        <div id="skillCardsGrid" class="skill-cards-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Trajectory export -->
+  <div id="trajectoryExportOverlay" class="modal-overlay" style="display: none;" aria-hidden="true">
+    <div class="modal-card trajectory-export-card">
+      <div class="modal-header">
+        <h3 class="modal-title">下载任务轨迹</h3>
+        <button type="button" id="trajectoryExportCloseBtn" class="modal-close-btn" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="settings-hint">
+          导出当前任务的完整 Agent 运行轨迹（开发调试用）。<strong>人工状态由您定义</strong>。
+        </p>
+        <label class="settings-label" for="trajectoryHumanStatusSelect">人工完成状态 (humanStatus)</label>
+        <select id="trajectoryHumanStatusSelect" class="modal-input trajectory-status-select">
+          <option value="unknown">unknown — 未知</option>
+          <option value="in_progress">in_progress — 进行中</option>
+          <option value="completed">completed — 已完成</option>
+          <option value="failed">failed — 失败</option>
+          <option value="partial">partial — 部分完成</option>
+          <option value="cancelled">cancelled — 已取消</option>
+        </select>
+        <label class="settings-label" for="trajectoryHumanStatusNote">备注（可选）</label>
+        <textarea id="trajectoryHumanStatusNote" class="modal-input trajectory-status-note" rows="2" placeholder="例如：页面结构变了导致半途失败"></textarea>
+        <label class="settings-check-row">
+          <input type="checkbox" id="trajectoryPersistHumanStatus" checked />
+          <span>将此状态保存到当前任务（下次导出默认带上）</span>
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="trajectoryExportCancelBtn" class="btn btn-secondary">取消</button>
+        <button type="button" id="trajectoryExportConfirmBtn" class="btn btn-primary">下载 JSON</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Agent settings -->
+  <dialog id="agentSettingsModal" class="pw-dialog" aria-labelledby="settingsModalTitle">
+    <div class="modal-card settings-modal-card">
+      <div class="modal-header">
+        <h3 id="settingsModalTitle">⚙️ 设置</h3>
+        <button type="button" id="settingsModalCloseBtn" class="modal-close-btn" aria-label="关闭">&times;</button>
+      </div>
+      <div class="modal-body settings-modal-body">
+        <!-- 1. Inference / chat model -->
+        <section class="settings-api-card" id="settingsInferenceCard" aria-labelledby="settingsInferenceTitle">
+          <h4 class="settings-api-card-title" id="settingsInferenceTitle">1. 推理模型 API</h4>
+          <p class="settings-hint" id="inferenceEmptyHint">添加后会以供应商卡片显示。点卡片可编辑或设为当前使用。</p>
+          <div id="inferenceVendorList" class="api-vendor-list"></div>
+          <button type="button" class="api-add-btn" id="addInferenceBtn">＋ 添加供应商</button>
+          <div id="inferenceEditor" class="api-vendor-editor" hidden>
+            <div class="provider-presets-row" id="inferencePresetRow" role="group" aria-label="快捷模板">
+              <span class="settings-hint settings-presets-label">快捷模板：</span>
+              <button type="button" class="provider-preset-chip" data-preset="deepseek">DeepSeek</button>
+              <button type="button" class="provider-preset-chip" data-preset="openai">OpenAI</button>
+              <button type="button" class="provider-preset-chip" data-preset="openrouter">OpenRouter</button>
+              <button type="button" class="provider-preset-chip" data-preset="minimax">MiniMax</button>
+              <button type="button" class="provider-preset-chip" data-preset="openai-compatible">自定义</button>
+            </div>
+
+            <label class="settings-label" for="apiBaseInput">Base URL <span class="settings-req">*</span></label>
+            <input type="text" id="apiBaseInput" class="modal-input" placeholder="https://api.deepseek.com/v1" autocomplete="off" />
+            <p class="settings-hint settings-field-hint">Chat Completions 根路径（如 <code>…/v1</code>）。勿填图像路径。</p>
+
+            <label class="settings-label" for="apiKeyInput">API Key</label>
+            <input type="password" id="apiKeyInput" class="modal-input" placeholder="sk-..." autocomplete="off" />
+
+            <label class="settings-label" for="providerModelInput">当前模型</label>
+            <div class="chat-model-input-row">
+              <input type="text" id="providerModelInput" class="modal-input" placeholder="deepseek-v4-flash / openai/gpt-4o / 自由填写…" autocomplete="off" list="providerModelSuggestions" />
+              <button type="button" id="providerModelRefreshBtn" class="btn btn-secondary settings-mini-btn" data-i18n="apiProbeBtn" title="GET {base}/models 探测密钥是否可用并列出模型">探测 API</button>
+            </div>
+            <p class="settings-hint" id="apiProbeResult" hidden></p>
+            <input type="search" id="providerModelFilter" class="modal-input" placeholder="搜索已探测到的模型 id…" autocomplete="off" hidden />
+            <div id="providerModelCatalog" class="api-model-catalog" hidden role="listbox" aria-label="探测到的模型"></div>
+            <datalist id="providerModelSuggestions">
+              <option value="deepseek-v4-flash"></option>
+              <option value="deepseek-v4-pro"></option>
+              <option value="gpt-4o"></option>
+              <option value="gpt-4.1"></option>
+              <option value="gpt-4o-mini"></option>
+              <option value="openai/gpt-4o"></option>
+              <option value="MiniMax-Text-01"></option>
+            </datalist>
+            <p class="settings-hint" id="settingsApiHint">Key 仅存本机。同一 API 下切换模型不必重填 Base / Key。协议：OpenAI 兼容 Chat Completions。</p>
+            <div class="api-editor-actions">
+              <button type="button" class="btn btn-secondary" id="cancelInferenceEditorBtn">取消</button>
+              <button type="button" class="btn btn-primary" id="saveInferenceEditorBtn">保存此供应商</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 2. Image generation model -->
+        <section class="settings-api-card" id="settingsImageCard" aria-labelledby="settingsImageTitle">
+          <h4 class="settings-api-card-title" id="settingsImageTitle">2. 图像生成 API</h4>
+          <p class="settings-hint" id="imageGenStatusLine">未添加生图 API。可挂在某个推理供应商上，或使用独立 Base / Key。</p>
+          <div id="imageVendorList" class="api-vendor-list"></div>
+          <button type="button" class="api-add-btn" id="addImageBtn">＋ 添加生图 API</button>
+          <div id="imageEditor" class="api-vendor-editor" hidden>
+            <div class="provider-presets-row" id="imagePresetRow" role="group" aria-label="生图模板">
+              <span class="settings-hint settings-presets-label">模板：</span>
+              <button type="button" class="provider-preset-chip" data-image-preset="openrouter">OpenRouter 生图</button>
+              <button type="button" class="provider-preset-chip" data-image-preset="openai">OpenAI</button>
+              <button type="button" class="provider-preset-chip" data-image-preset="minimax">MiniMax</button>
+              <button type="button" class="provider-preset-chip" data-image-preset="openai-compatible">自定义</button>
+            </div>
+            <input type="checkbox" id="providerImageEnabledCheck" hidden />
+            <div id="imageConfigFields" class="image-config-fields">
+              <div id="imageCustomApiFields" class="image-custom-api-fields">
+                <label class="settings-label" for="providerImageBaseInput">图像 Base URL</label>
+                <input type="text" id="providerImageBaseInput" class="modal-input" placeholder="inherit chat / 与推理相同" autocomplete="off" />
+                <label class="settings-label" for="providerImageKeyInput">图像 API Key</label>
+                <input type="password" id="providerImageKeyInput" class="modal-input" placeholder="inherit chat / 与推理相同" autocomplete="off" />
+                <p class="settings-hint settings-field-hint">留空则继承推理 Base / Key。OpenRouter 模板已填 <code>https://openrouter.ai/api/v1</code>（生图走 <code>/images</code>），不必去文档里找。</p>
+              </div>
+              <input type="hidden" id="providerImageProtocolInput" value="openrouter-image" />
+              <label class="settings-label" for="providerImageModelInput">图像模型</label>
+              <div class="chat-model-input-row">
+                <input type="text" id="providerImageModelInput" class="modal-input" placeholder="google/gemini-2.5-flash-image" autocomplete="off" list="providerImageModelSuggestions" />
+                <button type="button" id="providerImageProbeBtn" class="btn btn-secondary settings-mini-btn" data-i18n="apiProbeImageBtn" title="GET {base}/models 筛出生图模型">探测生图</button>
+              </div>
+              <p class="settings-hint" id="imageProbeResult" hidden></p>
+              <input type="search" id="providerImageModelFilter" class="modal-input" placeholder="搜索生图模型…" autocomplete="off" hidden />
+              <div id="providerImageCatalog" class="api-model-catalog" hidden role="listbox" aria-label="探测到的生图模型"></div>
+              <datalist id="providerImageModelSuggestions">
+                <option value="google/gemini-2.5-flash-image"></option>
+                <option value="openai/gpt-image-1"></option>
+                <option value="black-forest-labs/flux.2-pro"></option>
+                <option value="image-01"></option>
+              </datalist>
+              <details class="settings-advanced" id="imageAdvancedDetails">
+                <summary>高级：API path</summary>
+                <label class="settings-label" for="providerImagePathInput">图像 API path</label>
+                <input type="text" id="providerImagePathInput" class="modal-input" placeholder="/images" autocomplete="off" />
+                <p class="settings-hint settings-field-hint">OpenRouter 用 <code>/images</code>。MiniMax 用 <code>/image_generation</code>。</p>
+              </details>
+            </div>
+            <div class="api-editor-actions">
+              <button type="button" class="btn btn-secondary" id="cancelImageEditorBtn">取消</button>
+              <button type="button" class="btn btn-primary" id="saveImageEditorBtn">保存生图 API</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-api-card" id="settingsWebAcquireCard" aria-labelledby="settingsWebAcquireTitle">
+          <h4 class="settings-api-card-title" id="settingsWebAcquireTitle">3. 网页搜索 / 抽取 API</h4>
+          <p class="settings-hint" id="webAcquireStatusLine">未添加搜索 Key 时模型不能公开网搜索。绑定页优先于公开网。</p>
+          <div id="webVendorList" class="api-vendor-list"></div>
+          <button type="button" class="api-add-btn" id="addWebAcquireBtn">＋ 添加搜索 / 抽取 API</button>
+          <div id="webAcquireEditor" class="api-vendor-editor" hidden>
+            <div class="provider-presets-row" id="webVendorPresetRow" role="group" aria-label="搜索供应商">
+              <span class="settings-hint settings-presets-label">供应商：</span>
+              <button type="button" class="provider-preset-chip" data-web-preset="tavily">Tavily</button>
+              <button type="button" class="provider-preset-chip" data-web-preset="brave">Brave Search</button>
+              <button type="button" class="provider-preset-chip" data-web-preset="firecrawl">Firecrawl</button>
+            </div>
+            <select id="webSearchProviderSelect" class="modal-input" hidden>
+              <option value="tavily">Tavily（默认）</option>
+              <option value="brave">Brave Search</option>
+            </select>
+            <div id="tavilyKeyRow">
+              <label class="settings-label" for="tavilyKeyInput">Tavily API Key</label>
+              <input type="password" id="tavilyKeyInput" class="modal-input" placeholder="tvly-..." autocomplete="off" />
+            </div>
+            <div id="braveKeyRow" hidden>
+              <label class="settings-label" for="braveKeyInput">Brave Search API Key</label>
+              <input type="password" id="braveKeyInput" class="modal-input" placeholder="BSA..." autocomplete="off" />
+            </div>
+            <div id="firecrawlKeyRow" hidden>
+              <label class="settings-label" for="firecrawlKeyInput">Firecrawl API Key（增强 fetch）</label>
+              <input type="password" id="firecrawlKeyInput" class="modal-input" placeholder="fc-..." autocomplete="off" />
+              <p class="settings-hint settings-field-hint">配了之后 acquire fetch 会把公开网页抽成 Markdown；失败则回退普通 GET。</p>
+            </div>
+            <div class="api-editor-actions">
+              <button type="button" class="btn btn-secondary" id="cancelWebAcquireBtn">取消</button>
+              <button type="button" class="btn btn-primary" id="saveWebAcquireBtn">保存此 API</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-api-card" id="settingsTldrawCard" aria-labelledby="settingsTldrawTitle">
+          <h4 class="settings-api-card-title" id="settingsTldrawTitle">4. Design / Slides 引擎许可证</h4>
+          <p class="settings-hint">tldraw 在扩展页里不算 localhost。没有许可证时，引擎会在约 5 秒后把画布和工具栏卸掉（图层还在、画面空白）。把购买的 license key 贴在这里，仅存本机。</p>
+          <label class="settings-label" for="tldrawLicenseInput">tldraw license key</label>
+          <input type="password" id="tldrawLicenseInput" class="modal-input" placeholder="tldraw 许可证" autocomplete="off" />
+          <p class="settings-hint" id="tldrawLicenseHint">保存后请关掉并重新打开 Design 预览标签。</p>
+        </section>
+
+        <hr class="settings-divider" />
+        <label class="settings-label">🛠 开发者 / Debug</label>
+        <label class="settings-check-row">
+          <input type="checkbox" id="devTrajectoryExportCheck" checked />
+          <span>启用任务页轨迹导出</span>
+        </label>
+        <p class="settings-hint">开启后可在任务标题栏下载轨迹 JSON（调试用）。</p>
+
+        <div class="settings-capture-row" id="captureShortcutRow">
+          <label class="settings-label">📸 截图快捷键 / Capture shortcut</label>
+          <div class="settings-capture-controls">
+            <code id="captureShortcutLabel" class="capture-shortcut-code" data-shortcut="Alt+Shift+C">Alt+Shift+C</code>
+            <button type="button" id="captureShortcutOpenBtn" class="btn btn-secondary settings-mini-btn" title="在 Chrome 扩展快捷键页修改">修改快捷键</button>
+          </div>
+          <p class="settings-hint">默认 Alt+Shift+C · 拖拽框选区域 → 剪贴板 + 对话附件</p>
+        </div>
+        <p class="settings-hint" id="settingsHint">配置仅保存在本机，不会上传到云端服务器。</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="settingsCancelBtn" class="btn btn-secondary">关闭</button>
+        <button type="button" id="settingsSaveBtn" class="btn btn-primary">保存配置</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="skillsSettingsModal" class="pw-dialog" aria-labelledby="skillsModalTitle">
+    <div class="modal-card settings-modal-card">
+      <div class="modal-header">
+        <h3 id="skillsModalTitle" data-i18n="moreSkills">Skills 技能</h3>
+        <button type="button" id="skillsModalCloseBtn" class="modal-close-btn" aria-label="关闭">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="settings-hint" data-i18n="settingsSkillsHint">打包 playbook 与本机 / GitHub overlay。对话输入 / 选用。instruction 按需 inspect，不进 system。</p>
+        <div class="settings-tools-row">
+          <input type="url" id="skillImportUrl" class="modal-input skill-import-url" data-i18n-placeholder="skillImportPlaceholder" placeholder="https://github.com/org/repo" />
+          <button type="button" class="btn btn-secondary settings-mini-btn" id="skillImportBtn" data-i18n="skillImport">导入</button>
+        </div>
+        <p class="settings-hint" id="skillImportHint" hidden></p>
+        <div id="skillSettingsList" class="api-vendor-list"></div>
+        <button type="button" class="api-add-btn" id="skillAddBtn" data-i18n="skillAdd">＋ 新建 Skill</button>
+        <div id="skillSettingsEditor" class="api-vendor-editor" hidden>
+          <label class="settings-label" for="skillEditId" data-i18n="skillEditId">id</label>
+          <input type="text" id="skillEditId" class="modal-input" autocomplete="off" />
+          <label class="settings-label" for="skillEditName" data-i18n="skillEditName">name</label>
+          <input type="text" id="skillEditName" class="modal-input" autocomplete="off" />
+          <label class="settings-label" for="skillEditDesc" data-i18n="skillEditDesc">description（进 system catalog）</label>
+          <textarea id="skillEditDesc" class="modal-input" rows="3"></textarea>
+          <label class="settings-label" for="skillEditInst" data-i18n="skillEditInst">instruction（按需 inspect）</label>
+          <textarea id="skillEditInst" class="modal-input" rows="8"></textarea>
+          <p class="settings-hint" id="skillEditSource" hidden></p>
+          <ul class="skill-resource-list" id="skillEditResources" hidden></ul>
+          <div class="api-editor-actions">
+            <button type="button" class="btn btn-secondary" id="skillResetBtn" data-i18n="skillReset">恢复打包版</button>
+            <button type="button" class="btn btn-secondary" id="skillDeleteBtn" data-i18n="skillDelete">删除本机条</button>
+            <button type="button" class="btn btn-primary" id="skillSaveBtn" data-i18n="skillSave">保存</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="skillsModalDoneBtn" class="btn btn-primary" data-i18n="close">关闭</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Hidden legacy aliases used by some helpers -->
+  <button type="button" id="downloadTrajectoryFooterBtn" hidden style="display:none"></button>
+
+  <div id="mentionPalette" class="mention-palette" hidden role="listbox" data-i18n-aria="mentionPaletteAria" aria-label="引用选区"></div>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>

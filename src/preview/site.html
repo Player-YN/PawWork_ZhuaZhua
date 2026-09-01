@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>网页 · 爪爪</title>
+    <link rel="stylesheet" href="host-bar.css" />
+    <link rel="stylesheet" href="officeHelp.css" />
+    <link rel="stylesheet" href="workLock.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #f5f5f5;
+        color: #1a1a1a;
+        font-family: system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      }
+      #bar.host-file-strip {
+        background: #ffffff;
+        color: #1a1a1a;
+        border-bottom-color: #e5e5e5;
+      }
+      #bar.host-file-strip button {
+        background: #ffffff;
+        color: #1a1a1a;
+        border-color: #d9d9d9;
+      }
+      #bar.host-file-strip button.primary {
+        background: #f43f8c;
+        border-color: transparent;
+        color: #fff;
+      }
+      #bar.host-file-strip #status,
+      #bar.host-file-strip #sel {
+        color: #6b6b6b;
+      }
+      #boot {
+        padding: 24px 16px;
+        font-size: 13px;
+        color: #6b636b;
+      }
+      #boot.error {
+        color: #fb7185;
+      }
+      #page {
+        display: block;
+        width: 100%;
+        height: calc(100% - 48px);
+        border: 0;
+        background: #fff;
+      }
+      body.is-ready #boot {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="bar" class="host-file-strip">
+      <span id="title">网页 · 爪爪</span>
+      <span id="status"></span>
+      <span id="sel"></span>
+      <span class="sp"></span>
+      <span class="host-file-actions">
+        <button type="button" class="primary" data-act="save" id="saveBtn">保存</button>
+        <button type="button" data-act="undo" id="undoBtn" hidden>撤销</button>
+        <button type="button" data-act="download" id="downloadBtn">下载</button>
+        <button type="button" class="paw-help-btn" data-act="help" id="helpBtn" aria-label="快捷键" title="快捷键">?</button>
+      </span>
+    </div>
+    <div id="boot">正在打开网页…</div>
+    <iframe id="page" title="site" hidden></iframe>
+    <script src="workLock.js"></script>
+    <script type="module" src="site.js"></script>
+  </body>
+</html>
