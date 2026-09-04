@@ -1,8 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "爪爪 · Paw Work",
+  "name": "爪爪 · 完全解放版",
   "version": "1.0.0",
-  "description": "爪爪 · Paw Work — 伸爪选中网页元素，安静完成下载与导出。Pick something, do anything.",
+  "description": "爪爪 · 完全解放版 — 开发者模式本地实验：把已登录浏览器当成可编程层（live-page action）。不面向 CWS，不出售。",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "permissions": [
     "sidePanel",
     "activeTab",
@@ -11,7 +17,8 @@
     "storage",
     "downloads",
     "offscreen",
-    "tabGroups"
+    "tabGroups",
+    "webNavigation"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -52,7 +59,8 @@
       "js": [
         "src/content_script.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "web_accessible_resources": [
@@ -66,7 +74,13 @@
     }
   ],
   "action": {
-    "default_title": "打开 爪爪 · Paw Work"
+    "default_title": "打开 爪爪 · 完全解放版",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",

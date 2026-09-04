@@ -1,0 +1,42 @@
+# This folder IS the Chrome load root. Do not ignore src/ or src/preview/vendor/.
+
+# Dependencies (not required to load the unpacked extension)
+node_modules/
+
+# Chrome packaging / signing — never commit
+*.pem
+*.crx
+*.p12
+*.pfx
+
+# Secrets / local keys
+.env
+.env.*
+!.env.example
+*.key
+credentials.json
+secrets/
+**/tldraw.license
+**/*license*key*
+
+# OS junk
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*~
+
+# Logs / caches
+*.log
+.cache/
+
+# If someone later runs a pack script, keep output out of git
+artifacts/
+dist/
+*.zip
+!src/**/*.zip

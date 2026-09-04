@@ -3279,11 +3279,25 @@ ${fragment}
     };
   }
 
-  function dispatchValueEvents(el) {
+  function dispatchValueEvents(el, value) {
     try {
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     } catch (_) {}
+    if (value !== undefined) {
+      try {
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, data: String(value), inputType: 'insertText' }));
+      } catch (_) {}
+    }
+  }
+
+  function setNativeInputValue(el, value) {
+    const valueStr = value == null ? '' : String(value);
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (desc && typeof desc.set === 'function') desc.set.call(el, valueStr);
+    else el.value = valueStr;
+    dispatchValueEvents(el, valueStr);
   }
 
   function agentFindElements(opts = {}) {
@@ -3377,12 +3391,21 @@ ${fragment}
           el.textContent = valueStr;
           usedMode = 'text';
         } else if (mode === 'value') {
-          if ('value' in el) el.value = valueStr;
+          if (tag === 'input' || tag === 'textarea') setNativeInputValue(el, valueStr);
+          else if ('value' in el) el.value = valueStr;
           else el.textContent = valueStr;
           usedMode = 'value';
+          if (tag !== 'input' && tag !== 'textarea') dispatchValueEvents(el, valueStr);
+          results.push({ status: 'ok', mode: usedMode, ...summarizeElement(el) });
+          continue;
         } else {
           // auto
-          if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+          if (tag === 'input' || tag === 'textarea') {
+            setNativeInputValue(el, valueStr);
+            usedMode = 'value';
+            results.push({ status: 'ok', mode: usedMode, ...summarizeElement(el) });
+            continue;
+          } else if (tag === 'select') {
             el.value = valueStr;
             usedMode = 'value';
           } else if (el.isContentEditable) {
@@ -3609,6 +3632,653 @@ ${fragment}
       source: resolved.source,
       results
     };
+  }
+
+  /* ── Unified live-page action (session tool `action`) ──
+   * Structural loop: snapshot → opaque local ref (a12) → mutate.
+   * Background prefixes f{frameId}. and owns the tab-level rev.
+   */
+
+  const ACTION_SNAPSHOT_CAP = 80;
+  const ACTION_SELECT_OPTION_CAP = 40;
+  const ACTION_WAIT_DEFAULT_MS = 300;
+  const ACTION_WAIT_MAX_MS = 5000;
+  const ACTION_WAIT_POLL_MS = 150;
+  const pawActionEls = new Map();
+  const ACTION_INTERACTIVE_SEL = [
+    'input',
+    'select',
+    'textarea',
+    'button',
+    'a[href]',
+    '[role="button"]',
+    '[role="combobox"]',
+    '[role="textbox"]',
+    '[contenteditable=""], [contenteditable="true"]',
+    '[tabindex]'
+  ].join(',');
+  const ACTION_KEY_MAP = {
+    enter: { key: 'Enter', code: 'Enter', keyCode: 13 },
+    tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
+    escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
+    esc: { key: 'Escape', code: 'Escape', keyCode: 27 },
+    arrowdown: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
+    down: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
+    arrowup: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+    up: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+    arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+    left: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+    arrowright: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+    right: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+    space: { key: ' ', code: 'Space', keyCode: 32 },
+    backspace: { key: 'Backspace', code: 'Backspace', keyCode: 8 },
+    delete: { key: 'Delete', code: 'Delete', keyCode: 46 },
+    home: { key: 'Home', code: 'Home', keyCode: 36 },
+    end: { key: 'End', code: 'End', keyCode: 35 }
+  };
+
+  function isPawActionChrome(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const id = el.id != null ? String(el.id) : '';
+    if (id && (id === 'pagewand-region-root' || id.indexOf('pagewand-') === 0)) return true;
+    if (el.classList) {
+      for (const c of el.classList) {
+        if (String(c).indexOf('pagewand-') === 0) return true;
+      }
+    }
+    try {
+      if (el.closest && el.closest('[id^="pagewand-"], [class*="pagewand-"]')) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  function isTabindexOnlyCandidate(el) {
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'button' || tag === 'a') return false;
+    if (el.isContentEditable) return false;
+    const role = String(el.getAttribute('role') || '').toLowerCase();
+    if (role === 'button' || role === 'combobox' || role === 'textbox') return false;
+    return true;
+  }
+
+  function collectActionInteractive() {
+    const seen = new Set();
+    const visible = [];
+    const hidden = [];
+    let nodes = [];
+    try {
+      nodes = Array.from(document.querySelectorAll(ACTION_INTERACTIVE_SEL));
+    } catch (_) {
+      nodes = [];
+    }
+    for (const el of nodes) {
+      if (!el || el.nodeType !== 1 || seen.has(el) || isPawActionChrome(el)) continue;
+      if (isTabindexOnlyCandidate(el)) {
+        const ti = el.getAttribute('tabindex');
+        if (ti == null || ti === '') continue;
+        if (!isElementVisible(el)) continue;
+      }
+      seen.add(el);
+      (isElementVisible(el) ? visible : hidden).push(el);
+    }
+    return visible.concat(hidden).slice(0, ACTION_SNAPSHOT_CAP);
+  }
+
+  function actionControlType(el) {
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag === 'input') return String(el.type || 'text').toLowerCase();
+    return '';
+  }
+
+  function actionMaskedValue(el) {
+    const tag = (el.tagName || '').toLowerCase();
+    const type = actionControlType(el);
+    if (type === 'password') return '***';
+    if (type === 'checkbox' || type === 'radio') return el.checked ? 'true' : 'false';
+    const v = getElementValue(el);
+    if (v === undefined || v === null) return '';
+    return String(v).slice(0, 200);
+  }
+
+  function actionSelectOptions(el) {
+    if (!el || (el.tagName || '').toLowerCase() !== 'select') return undefined;
+    return Array.from(el.options || []).slice(0, ACTION_SELECT_OPTION_CAP).map((opt) => ({
+      value: String(opt.value || ''),
+      text: String(opt.textContent || '').trim().slice(0, 80)
+    }));
+  }
+
+  function actionNorm(s) {
+    return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
+  function actionAccessibleName(el) {
+    const nearby = resolveNearbyLabel(el);
+    const aria = el.getAttribute && el.getAttribute('aria-label');
+    const bits = [nearby && nearby.label_text, aria, el.placeholder];
+    for (const b of bits) {
+      const t = cleanDOMText(b || '');
+      if (t) return t.slice(0, 80);
+    }
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag === 'button' || tag === 'a' || tag === 'option') {
+      const t = cleanDOMText(el.innerText || el.textContent || '');
+      if (t) return t.slice(0, 80);
+    }
+    return '';
+  }
+
+  function actionRole(el) {
+    const explicit = String(el.getAttribute && el.getAttribute('role') || '').trim();
+    if (explicit) return explicit;
+    const tag = (el.tagName || '').toLowerCase();
+    const type = actionControlType(el);
+    if (tag === 'a') return 'link';
+    if (tag === 'button') return 'button';
+    if (tag === 'select') return 'combobox';
+    if (tag === 'textarea') return 'textbox';
+    if (tag === 'input') {
+      if (type === 'checkbox') return 'checkbox';
+      if (type === 'radio') return 'radio';
+      if (type === 'submit' || type === 'button' || type === 'reset' || type === 'image') return 'button';
+      if (type === 'file') return 'button';
+      return 'textbox';
+    }
+    if (el.isContentEditable) return 'textbox';
+    return tag || 'generic';
+  }
+
+  function actionRegion(el) {
+    try {
+      const fs = el.closest && el.closest('fieldset');
+      if (fs) {
+        const legend = fs.querySelector(':scope > legend') || fs.querySelector('legend');
+        const t = cleanDOMText((legend && (legend.innerText || legend.textContent)) || '');
+        if (t) return t.slice(0, 80);
+      }
+      let cur = el;
+      for (let i = 0; i < 8 && cur && cur !== document.documentElement; i++) {
+        let sib = cur.previousElementSibling;
+        while (sib) {
+          const tag = (sib.tagName || '').toLowerCase();
+          if (/^h[1-6]$/.test(tag) || String(sib.getAttribute('role') || '') === 'heading') {
+            const t = cleanDOMText(sib.innerText || sib.textContent || '');
+            if (t) return t.slice(0, 80);
+          }
+          sib = sib.previousElementSibling;
+        }
+        cur = cur.parentElement;
+      }
+    } catch (_) {}
+    return undefined;
+  }
+
+  function summarizeActionControl(el, ref) {
+    const type = actionControlType(el);
+    const name = actionAccessibleName(el);
+    const region = actionRegion(el);
+    const row = {
+      ref,
+      role: actionRole(el),
+      name: name || undefined,
+      type: type || undefined,
+      value: actionMaskedValue(el),
+      required: !!el.required
+    };
+    if (el.disabled) row.disabled = true;
+    if (!isElementVisible(el)) row.visible = false;
+    if (region) row.region = region;
+    const options = actionSelectOptions(el);
+    if (options) row.options = options;
+    return row;
+  }
+
+  function actionAfter(el, extra) {
+    if (!el) return extra || {};
+    const out = {
+      ref: extra && extra.ref,
+      role: actionRole(el),
+      name: actionAccessibleName(el) || undefined,
+      type: actionControlType(el) || undefined,
+      value: actionMaskedValue(el),
+      visible: isElementVisible(el)
+    };
+    if (extra && typeof extra === 'object') Object.assign(out, extra);
+    return out;
+  }
+
+  function takeActionSnapshot() {
+    const els = collectActionInteractive();
+    pawActionEls.clear();
+    const controls = [];
+    els.forEach((el, i) => {
+      const ref = 'a' + (i + 1);
+      pawActionEls.set(ref, el);
+      controls.push(summarizeActionControl(el, ref));
+    });
+    return {
+      ok: true,
+      op: 'snapshot',
+      frameUrl: location.href,
+      title: document.title,
+      count: controls.length,
+      controls
+    };
+  }
+
+  function parseLocalActionRef(ref) {
+    const raw = String(ref || '').trim();
+    if (!raw) return '';
+    const stripped = raw.replace(/^f\d+\./i, '');
+    const m = stripped.match(/^(a\d+)$/i);
+    return m ? m[1].toLowerCase() : '';
+  }
+
+  function ensureActionMap() {
+    if (pawActionEls.size === 0) takeActionSnapshot();
+  }
+
+  function findActionsByName(query) {
+    const q = actionNorm(query);
+    if (!q) return { exact: [], fuzzy: [] };
+    ensureActionMap();
+    const exact = [];
+    const fuzzy = [];
+    for (const [ref, el] of pawActionEls) {
+      if (!el || el.isConnected === false) continue;
+      const name = actionNorm(actionAccessibleName(el));
+      if (!name) continue;
+      if (name === q) exact.push({ ref, el });
+      else if (name.indexOf(q) >= 0 || (q.indexOf(name) >= 0 && name.length >= 2)) {
+        fuzzy.push({ ref, el });
+      }
+    }
+    return { exact, fuzzy };
+  }
+
+  function pickActionsByName(query) {
+    const { exact, fuzzy } = findActionsByName(query);
+    if (exact.length === 1) return { hits: exact };
+    if (exact.length > 1) return { hits: exact, ambiguous: true };
+    if (fuzzy.length === 1) return { hits: fuzzy };
+    if (fuzzy.length > 1) return { hits: fuzzy, ambiguous: true };
+    return { hits: [] };
+  }
+
+  function hasActionTargetHint(opts) {
+    if (opts == null) return false;
+    if (opts.ref != null && String(opts.ref).trim() !== '') return true;
+    if (opts.name != null && String(opts.name).trim() !== '') return true;
+    if (opts.label != null && String(opts.label).trim() !== '') return true;
+    if (opts.css != null && String(opts.css).trim() !== '') return true;
+    return false;
+  }
+
+  function resolveActionTarget(opts) {
+    const local = parseLocalActionRef(opts && opts.ref);
+    if (local) {
+      ensureActionMap();
+      const el = pawActionEls.get(local);
+      if (el && el.isConnected !== false) {
+        return { el, source: 'ref', ref: local };
+      }
+      const fallbackName = opts && (opts.name != null ? opts.name : opts.label);
+      if (fallbackName != null && String(fallbackName).trim() !== '') {
+        const picked = pickActionsByName(fallbackName);
+        if (picked.ambiguous) {
+          return {
+            el: null,
+            error: 'name matches multiple controls',
+            code: 'AMBIGUOUS',
+            matches: picked.hits.map((h) => ({ ref: h.ref, name: actionAccessibleName(h.el) }))
+          };
+        }
+        if (picked.hits.length === 1) {
+          return { el: picked.hits[0].el, source: 'name', ref: picked.hits[0].ref, stale: true };
+        }
+      }
+      return { el: null, error: 'ref is missing or detached — snapshot again', code: 'STALE_REF', ref: local };
+    }
+    const name = opts && (opts.name != null ? opts.name : opts.label);
+    if (name != null && String(name).trim() !== '') {
+      const picked = pickActionsByName(name);
+      if (picked.ambiguous) {
+        return {
+          el: null,
+          error: 'name matches multiple controls',
+          code: 'AMBIGUOUS',
+          matches: picked.hits.map((h) => ({ ref: h.ref, name: actionAccessibleName(h.el) }))
+        };
+      }
+      if (!picked.hits.length) {
+        return { el: null, error: 'no control matches name', code: 'NO_TARGET' };
+      }
+      return { el: picked.hits[0].el, source: 'name', ref: picked.hits[0].ref };
+    }
+    const css = opts && opts.css != null ? String(opts.css).trim() : '';
+    if (css) {
+      try {
+        const found = Array.from(document.querySelectorAll(css)).filter((el) => !isPawActionChrome(el));
+        if (!found.length) {
+          return { el: null, error: 'no elements match css', code: 'NO_TARGET' };
+        }
+        const visible = found.find(isElementVisible);
+        return { el: visible || found[0], source: 'css' };
+      } catch (e) {
+        return { el: null, error: 'invalid css selector: ' + (e.message || String(e)), code: 'BAD_INPUT' };
+      }
+    }
+    return { el: null, error: 'need ref or name', code: 'NO_TARGET' };
+  }
+
+  function parseCheckedToken(value) {
+    const s = String(value).trim().toLowerCase();
+    if (s === 'true' || s === 'on' || s === '1' || s === 'yes' || s === 'checked') return true;
+    if (s === 'false' || s === 'off' || s === '0' || s === 'no' || s === 'unchecked') return false;
+    return null;
+  }
+
+  function isOptionLikeNode(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const tag = (el.tagName || '').toLowerCase();
+    const role = String(el.getAttribute('role') || '').toLowerCase();
+    return tag === 'option' || role === 'option' || role === 'menuitem' || role === 'menuitemradio' || role === 'menuitemcheckbox';
+  }
+
+  function scrollActionTarget(el) {
+    try {
+      el.scrollIntoView({ block: 'center', inline: 'nearest' });
+    } catch (_) {
+      try { el.scrollIntoView(true); } catch (_) {}
+    }
+  }
+
+  function clickActionTarget(el) {
+    scrollActionTarget(el);
+    try { el.focus({ preventScroll: true }); } catch (_) {}
+    try { el.click(); } catch (_) {}
+  }
+
+  function fillActionTarget(el, value) {
+    const tag = (el.tagName || '').toLowerCase();
+    const type = actionControlType(el);
+    if (tag === 'input' && type === 'file') {
+      return { ok: false, error: 'file inputs cannot be set by script', code: 'FILE_INPUT' };
+    }
+    if (tag === 'input' && (type === 'checkbox' || type === 'radio')) {
+      const token = parseCheckedToken(value);
+      if (token !== null) el.checked = token;
+      else if (type === 'radio') el.checked = String(el.value) === String(value);
+      else el.checked = true;
+      dispatchValueEvents(el, value);
+      return { ok: true };
+    }
+    if (tag === 'input' || tag === 'textarea') {
+      setNativeInputValue(el, value);
+      return { ok: true };
+    }
+    if (tag === 'select') {
+      const hit = matchSelectOption(el, value);
+      if (!hit) return { ok: false, error: 'no matching option', code: 'NO_TARGET' };
+      el.value = hit.value;
+      dispatchValueEvents(el, hit.value);
+      return { ok: true };
+    }
+    if (el.isContentEditable) {
+      el.textContent = value == null ? '' : String(value);
+      dispatchValueEvents(el, value);
+      return { ok: true };
+    }
+    if ('value' in el) {
+      el.value = value == null ? '' : String(value);
+      dispatchValueEvents(el, value);
+      return { ok: true };
+    }
+    return { ok: false, error: 'target is not fillable', code: 'NO_TARGET' };
+  }
+
+  function matchSelectOption(el, value) {
+    const want = String(value);
+    const wantLower = want.toLowerCase();
+    const opts = Array.from(el.options || []);
+    return (
+      opts.find((o) => String(o.value) === want) ||
+      opts.find((o) => String(o.textContent || '').trim() === want) ||
+      opts.find((o) => String(o.textContent || '').trim().toLowerCase().indexOf(wantLower) >= 0)
+    );
+  }
+
+  function findOptionLikeByValue(root, value) {
+    const want = String(value).toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!want) return null;
+    const scope = root && root.querySelectorAll ? root : document;
+    let nodes = [];
+    try {
+      nodes = Array.from(scope.querySelectorAll('[role="option"], [role="menuitem"], [role="menuitemradio"], option'));
+    } catch (_) {
+      nodes = [];
+    }
+    for (const el of nodes) {
+      if (isPawActionChrome(el)) continue;
+      const text = String(el.innerText || el.textContent || el.value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+      const val = String(el.getAttribute('value') || el.value || '').toLowerCase();
+      if (text === want || val === want || text.indexOf(want) >= 0) return el;
+    }
+    const picked = pickActionsByName(value);
+    return picked.hits.length === 1 ? picked.hits[0].el : null;
+  }
+
+  function pressActionKey(el, keyRaw) {
+    const raw = String(keyRaw || '').trim();
+    if (!raw) return { ok: false, error: 'key is required', code: 'BAD_INPUT' };
+    const mapped = ACTION_KEY_MAP[raw.toLowerCase()] || {
+      key: raw.length === 1 ? raw : raw,
+      code: raw.length === 1 ? 'Key' + raw.toUpperCase() : raw,
+      keyCode: raw.length === 1 ? raw.toUpperCase().charCodeAt(0) : 0
+    };
+    const target = el && el.nodeType === 1 ? el : document.activeElement || document.body;
+    try { target.focus({ preventScroll: true }); } catch (_) {}
+    const common = {
+      key: mapped.key,
+      code: mapped.code,
+      keyCode: mapped.keyCode,
+      which: mapped.keyCode,
+      bubbles: true,
+      cancelable: true
+    };
+    try { target.dispatchEvent(new KeyboardEvent('keydown', common)); } catch (_) {}
+    try { target.dispatchEvent(new KeyboardEvent('keyup', common)); } catch (_) {}
+    return { ok: true, after: actionAfter(target, { key: mapped.key }) };
+  }
+
+  function waitActionCondition(request) {
+    let ms = Number(request.ms);
+    if (!Number.isFinite(ms) || ms < 0) ms = ACTION_WAIT_MAX_MS;
+    ms = Math.min(Math.round(ms), ACTION_WAIT_MAX_MS);
+    const local = parseLocalActionRef(request.ref);
+    const text = request.text != null ? String(request.text).trim() : '';
+    if (!local && !text) {
+      const sleep = Number.isFinite(Number(request.ms))
+        ? Math.min(Math.max(0, Math.round(Number(request.ms))), ACTION_WAIT_MAX_MS)
+        : ACTION_WAIT_DEFAULT_MS;
+      return new Promise((resolve) => {
+        setTimeout(() => resolve({ ok: true, op: 'wait', waited: sleep }), sleep);
+      });
+    }
+    const started = Date.now();
+    return new Promise((resolve) => {
+      const tick = () => {
+        const waited = Date.now() - started;
+        if (local) {
+          ensureActionMap();
+          const el = pawActionEls.get(local);
+          if (el && el.isConnected !== false && isElementVisible(el)) {
+            resolve({ ok: true, op: 'wait', waited, after: actionAfter(el, { ref: local }) });
+            return;
+          }
+        } else {
+          const check = matchWaitCondition({ text, condition: 'visible' });
+          if (check && check.ok && check.satisfied) {
+            resolve({
+              ok: true,
+              op: 'wait',
+              waited,
+              after: check.match || { text }
+            });
+            return;
+          }
+        }
+        if (waited >= ms) {
+          resolve({
+            ok: false,
+            error: 'wait timed out',
+            code: 'NO_TARGET',
+            waited
+          });
+          return;
+        }
+        setTimeout(tick, 200);
+      };
+      tick();
+    });
+  }
+
+  function runFillFormFields(fields) {
+    const results = [];
+    let allOk = true;
+    for (const field of Array.isArray(fields) ? fields : []) {
+      if (!field || typeof field !== 'object') {
+        allOk = false;
+        results.push({ ok: false, error: 'invalid field', code: 'BAD_INPUT' });
+        continue;
+      }
+      if (!Object.prototype.hasOwnProperty.call(field, 'value')) {
+        allOk = false;
+        results.push({ ok: false, ref: field.ref, error: 'value is required', code: 'BAD_INPUT' });
+        continue;
+      }
+      const resolved = resolveActionTarget(field);
+      if (!resolved.el) {
+        allOk = false;
+        results.push({
+          ok: false,
+          ref: resolved.ref || parseLocalActionRef(field.ref) || undefined,
+          error: resolved.error || 'no target',
+          code: resolved.code || 'NO_TARGET',
+          matches: resolved.matches
+        });
+        continue;
+      }
+      const filled = fillActionTarget(resolved.el, field.value);
+      if (!filled.ok) {
+        allOk = false;
+        results.push({
+          ok: false,
+          ref: resolved.ref,
+          error: filled.error,
+          code: filled.code || 'NO_TARGET'
+        });
+        continue;
+      }
+      results.push({
+        ok: true,
+        ref: resolved.ref,
+        after: actionAfter(resolved.el, { ref: resolved.ref, source: resolved.source })
+      });
+    }
+    return { ok: allOk, op: 'fill_form', results };
+  }
+
+  function runWorkspacePageAction(request) {
+    const op = String(request && request.op || '').trim().toLowerCase();
+    if (!op) return { ok: false, error: 'op is required', code: 'BAD_INPUT' };
+
+    if (op === 'wait') return waitActionCondition(request);
+
+    if (op === 'snapshot') return takeActionSnapshot();
+
+    if (op === 'resolve_name') {
+      const query = request.name != null ? request.name : request.label;
+      const { exact, fuzzy } = findActionsByName(query);
+      const list = exact.length ? exact : fuzzy;
+      return {
+        ok: true,
+        op: 'resolve_name',
+        matches: list.map((h) => ({
+          ref: h.ref,
+          name: actionAccessibleName(h.el)
+        }))
+      };
+    }
+
+    if (op === 'fill_form') {
+      return runFillFormFields(request.fields);
+    }
+
+    if (op === 'press' && !hasActionTargetHint(request)) {
+      const pressed = pressActionKey(document.activeElement || document.body, request.key);
+      return pressed.ok ? { ok: true, op, ...pressed } : pressed;
+    }
+
+    const resolved = resolveActionTarget(request);
+    if (!resolved.el) {
+      return {
+        ok: false,
+        error: resolved.error || 'no target',
+        code: resolved.code || 'NO_TARGET',
+        matches: resolved.matches
+      };
+    }
+    const el = resolved.el;
+    const afterExtra = { source: resolved.source, ref: resolved.ref };
+
+    if (op === 'click') {
+      clickActionTarget(el);
+      return { ok: true, op, after: actionAfter(el, afterExtra) };
+    }
+
+    if (op === 'scroll') {
+      scrollActionTarget(el);
+      return { ok: true, op, after: actionAfter(el, afterExtra) };
+    }
+
+    if (op === 'fill') {
+      if (!Object.prototype.hasOwnProperty.call(request, 'value')) {
+        return { ok: false, error: 'value is required', code: 'BAD_INPUT' };
+      }
+      const filled = fillActionTarget(el, request.value);
+      if (!filled.ok) return filled;
+      return { ok: true, op, after: actionAfter(el, afterExtra) };
+    }
+
+    if (op === 'select') {
+      if (!Object.prototype.hasOwnProperty.call(request, 'value') && !isOptionLikeNode(el)) {
+        return { ok: false, error: 'value is required', code: 'BAD_INPUT' };
+      }
+      const tag = (el.tagName || '').toLowerCase();
+      if (tag === 'select') {
+        const hit = matchSelectOption(el, request.value);
+        if (!hit) return { ok: false, error: 'no matching option', code: 'NO_TARGET' };
+        el.value = hit.value;
+        dispatchValueEvents(el, hit.value);
+        return { ok: true, op, after: actionAfter(el, { ...afterExtra, selected: hit.value }) };
+      }
+      if (isOptionLikeNode(el)) {
+        clickActionTarget(el);
+        return { ok: true, op, after: actionAfter(el, afterExtra) };
+      }
+      const opt = findOptionLikeByValue(el.parentElement || document, request.value);
+      if (!opt) return { ok: false, error: 'no matching option-like node', code: 'NO_TARGET' };
+      clickActionTarget(opt);
+      return { ok: true, op, after: actionAfter(opt, { source: 'option' }) };
+    }
+
+    if (op === 'press') {
+      const pressed = pressActionKey(el, request.key);
+      return pressed.ok ? { ok: true, op, ...pressed } : pressed;
+    }
+
+    return { ok: false, error: 'unknown op ' + op, code: 'BAD_INPUT' };
   }
 
   /* ── Anchor semantics: nearby labels + role guess (agent tools) ── */
@@ -4059,6 +4729,20 @@ ${fragment}
         sendResponse(capturePageBlueprint());
       } catch (error) {
         sendResponse({ ok: false, error: error?.message || String(error) });
+      }
+    }
+    else if (request.action === 'workspace_page_action') {
+      const out = runWorkspacePageAction(request);
+      if (out && typeof out.then === 'function') {
+        out
+          .then((result) => sendResponse(result))
+          .catch((error) => sendResponse({ ok: false, error: error?.message || String(error), code: 'BAD_INPUT' }));
+        return true;
+      }
+      try {
+        sendResponse(out);
+      } catch (error) {
+        sendResponse({ ok: false, error: error?.message || String(error), code: 'BAD_INPUT' });
       }
     }
     else if (request.action === 'get_picker_state') sendResponse({ active: pickerActive, count: selectedElements.length });

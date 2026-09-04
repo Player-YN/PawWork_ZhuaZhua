@@ -242,6 +242,7 @@ export async function sendMessage(store, input) {
     hostSheet: typeof input.hostSheet === 'function' ? input.hostSheet : null,
     hostCanvas: typeof input.hostCanvas === 'function' ? input.hostCanvas : null,
     hostPageCapture: typeof input.hostPageCapture === 'function' ? input.hostPageCapture : null,
+    hostPageAction: typeof input.hostPageAction === 'function' ? input.hostPageAction : null,
     hostFindTab: typeof input.hostFindTab === 'function' ? input.hostFindTab : null,
     activeTab: input.activeTab || pages.activeTab,
     focusPage: pages.focusPage,

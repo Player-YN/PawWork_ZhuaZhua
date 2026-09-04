@@ -10739,7 +10739,7 @@ function exportCurrentSessionMarkdown() {
     return;
   }
 
-  let mdContent = `# 爪爪 · Paw Work 任务记录: ${activeSess.name}\n\n`;
+  let mdContent = `# 爪爪 · 完全解放版 任务记录: ${activeSess.name}\n\n`;
   mdContent += `> 导出时间: ${new Date().toLocaleString()}\n\n`;
 
   activeSess.messages.forEach((msg, idx) => {

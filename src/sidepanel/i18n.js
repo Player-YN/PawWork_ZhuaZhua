@@ -6,9 +6,9 @@
 export const I18N = {
   zh: {
     brandName: '爪爪',
-    brandEn: 'Paw Work',
-    brandSub: 'Paw Work',
-    brandFull: '爪爪 · Paw Work',
+    brandEn: '完全解放版',
+    brandSub: '完全解放版',
+    brandFull: '爪爪 · 完全解放版',
     statusReady: 'Ready',
     statusRunning: 'Running',
     selected: '已选',
@@ -254,10 +254,10 @@ export const I18N = {
     apiProbeImageNone: 'API 可用，但未识别到生图模型。可手填模型 id。'
   },
   en: {
-    brandName: 'Paw Work',
-    brandEn: 'Paw Work',
+    brandName: 'Liberated',
+    brandEn: 'Liberated',
     brandSub: '爪爪',
-    brandFull: 'Paw Work',
+    brandFull: '爪爪 · Liberated',
     statusReady: 'Ready',
     statusRunning: 'Running',
     selected: 'Selected',

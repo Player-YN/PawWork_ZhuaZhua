@@ -773,6 +773,15 @@ export class SessionWorkspaceService {
             tabId: payload?.tabId ?? activeTab?.tabId ?? activeTab?.id,
             url: payload?.url || activeTab?.url
           }),
+        hostPageAction: (payload) =>
+          chrome.runtime.sendMessage({
+            target: 'pawwork-background',
+            action: 'workspace_page_action',
+            sessionId,
+            tabId: payload?.tabId ?? activeTab?.tabId ?? activeTab?.id,
+            url: payload?.url || activeTab?.url,
+            ...payload
+          }),
         hostFindTab: (url) =>
           chrome.runtime.sendMessage({
             target: 'pawwork-background',

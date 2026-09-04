@@ -1324,6 +1324,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request?.target === 'pawwork-background' && request?.action === 'workspace_page_action') {
+    handleWorkspacePageAction(request)
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error), code: 'NEED_PAGE' }));
+    return true;
+  }
+
   if (request?.target === 'pawwork-background' && request?.action === 'workspace_find_tab') {
     handleWorkspaceFindTab(request)
       .then((result) => sendResponse(result))
@@ -1661,6 +1668,423 @@ async function handleWorkspaceCapturePageBlueprint(request) {
   } catch (error) {
     return { ok: false, error: error?.message || String(error), code: 'NEED_PAGE' };
   }
+}
+
+function isRestrictedPageActionUrl(url) {
+  const raw = String(url || '');
+  if (!raw) return false;
+  const lower = raw.toLowerCase();
+  if (
+    lower.startsWith('chrome://') ||
+    lower.startsWith('chrome-extension://') ||
+    lower.startsWith('edge://') ||
+    lower.startsWith('about:') ||
+    lower.startsWith('devtools://') ||
+    lower.startsWith('view-source:')
+  ) {
+    return true;
+  }
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'chromewebstore.google.com') return true;
+    if (host === 'chrome.google.com' && /\/webstore\b/.test(parsed.pathname)) return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+async function resolvePageActionTab(request) {
+  let tabId = Number(request?.tabId);
+  let url = String(request?.url || '');
+  let tab = null;
+  if (!Number.isFinite(tabId) || tabId <= 0) {
+    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    tabId = Number(tab?.id);
+    url = url || tab?.url || tab?.pendingUrl || '';
+  } else if (!url) {
+    try {
+      tab = await chrome.tabs.get(tabId);
+      url = tab?.url || tab?.pendingUrl || '';
+    } catch {
+      /* tab may still accept sendMessage */
+    }
+  }
+  return { tabId, url };
+}
+
+const pageActionRevByTab = new Map();
+
+function parseActionRef(ref) {
+  const s = String(ref || '').trim();
+  if (!s) return null;
+  const framed = s.match(/^f(\d+)\.(a\d+)$/i);
+  if (framed) return { frameId: Number(framed[1]), local: framed[2].toLowerCase() };
+  const local = s.match(/^(a\d+)$/i);
+  if (local) return { frameId: null, local: local[1].toLowerCase() };
+  return null;
+}
+
+function stampPageActionRev(tabId) {
+  const n = (pageActionRevByTab.get(tabId) || 0) + 1;
+  pageActionRevByTab.set(tabId, n);
+  return 't' + n;
+}
+
+function currentPageActionRev(tabId) {
+  const n = pageActionRevByTab.get(tabId);
+  return n ? 't' + n : null;
+}
+
+function stalePageActionRev(tabId, rev) {
+  const have = currentPageActionRev(tabId);
+  const want = rev == null ? '' : String(rev).trim();
+  if (!have) {
+    return { ok: false, error: 'snapshot first — no rev yet', code: 'STALE_REF' };
+  }
+  if (!want || want !== have) {
+    return {
+      ok: false,
+      error: 'snapshot rev is stale — snapshot again',
+      code: 'STALE_REF',
+      rev: have
+    };
+  }
+  return null;
+}
+
+async function listPageActionFrames(tabId) {
+  if (chrome.webNavigation && typeof chrome.webNavigation.getAllFrames === 'function') {
+    try {
+      const frames = await chrome.webNavigation.getAllFrames({ tabId });
+      return (frames || []).filter((f) => {
+        if (!f || !Number.isFinite(f.frameId)) return false;
+        const lower = String(f.url || '').toLowerCase();
+        if (
+          lower.startsWith('chrome://') ||
+          lower.startsWith('chrome-extension://') ||
+          lower.startsWith('edge://') ||
+          lower.startsWith('devtools://') ||
+          lower.startsWith('view-source:')
+        ) {
+          return false;
+        }
+        return true;
+      });
+    } catch {
+      /* permission or tab gone */
+    }
+  }
+  return [{ frameId: 0 }];
+}
+
+async function sendPageActionToFrame(tabId, frameId, payload) {
+  return chrome.tabs.sendMessage(
+    tabId,
+    { action: 'workspace_page_action', ...payload },
+    Number.isFinite(frameId) ? { frameId } : {}
+  );
+}
+
+async function ensurePageActionScripts(tabId) {
+  const frames = await listPageActionFrames(tabId);
+  const missing = [];
+  for (const fr of frames) {
+    try {
+      const pong = await chrome.tabs.sendMessage(tabId, { action: 'ping' }, { frameId: fr.frameId });
+      if (pong && pong.status === 'pong') continue;
+    } catch {
+      /* not injected */
+    }
+    missing.push(fr.frameId);
+  }
+  if (!missing.length) return;
+  const candidates = ['src/content_script.js', 'content_script.js'];
+  for (const frameId of missing) {
+    let injected = false;
+    for (const file of candidates) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId, frameIds: [frameId] },
+          files: [file]
+        });
+        injected = true;
+        break;
+      } catch {
+        /* try next path */
+      }
+    }
+    if (!injected) {
+      for (const file of candidates) {
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId, allFrames: true },
+            files: [file]
+          });
+          break;
+        } catch {
+          /* last resort */
+        }
+      }
+    }
+  }
+}
+
+function prefixFrameRefs(controls, frameId) {
+  return (Array.isArray(controls) ? controls : []).map((c) => {
+    if (!c || typeof c !== 'object') return c;
+    const local = String(c.ref || '').replace(/^f\d+\./i, '');
+    return { ...c, ref: 'f' + frameId + '.' + local };
+  });
+}
+
+async function snapshotAllPageActionFrames(tabId) {
+  await ensurePageActionScripts(tabId);
+  const frames = await listPageActionFrames(tabId);
+  const controls = [];
+  const framesOut = [];
+  for (const fr of frames) {
+    try {
+      const raw = await sendPageActionToFrame(tabId, fr.frameId, { op: 'snapshot' });
+      if (!raw || raw.ok === false) continue;
+      const list = prefixFrameRefs(raw.controls, fr.frameId);
+      for (const row of list) controls.push(row);
+      framesOut.push({
+        frameId: fr.frameId,
+        url: raw.frameUrl || fr.url || '',
+        title: raw.title || '',
+        count: list.length
+      });
+    } catch {
+      /* isolated / about:blank / CSP */
+    }
+  }
+  const rev = stampPageActionRev(tabId);
+  const capped = controls.slice(0, 80);
+  return {
+    ok: true,
+    op: 'snapshot',
+    rev,
+    count: capped.length,
+    controls: capped,
+    frames: framesOut,
+    after: { url: framesOut[0]?.url, count: capped.length }
+  };
+}
+
+function attachFreshSnapshot(result, snap) {
+  if (!result || typeof result !== 'object' || !snap) return result;
+  return {
+    ...result,
+    rev: snap.rev,
+    controls: snap.controls,
+    count: snap.count,
+    frames: snap.frames
+  };
+}
+
+async function resolveNameAcrossFrames(tabId, name) {
+  const frames = await listPageActionFrames(tabId);
+  const hits = [];
+  for (const fr of frames) {
+    try {
+      const raw = await sendPageActionToFrame(tabId, fr.frameId, { op: 'resolve_name', name });
+      const matches = raw && Array.isArray(raw.matches) ? raw.matches : [];
+      for (const m of matches) {
+        if (!m || !m.ref) continue;
+        hits.push({
+          frameId: fr.frameId,
+          local: String(m.ref).replace(/^f\d+\./i, ''),
+          name: m.name || name,
+          ref: 'f' + fr.frameId + '.' + String(m.ref).replace(/^f\d+\./i, '')
+        });
+      }
+    } catch {
+      /* skip frame */
+    }
+  }
+  if (!hits.length) {
+    return { ok: false, error: 'no control matches name', code: 'NO_TARGET' };
+  }
+  if (hits.length > 1) {
+    return {
+      ok: false,
+      error: 'name matches multiple controls',
+      code: 'AMBIGUOUS',
+      matches: hits.map((h) => ({ ref: h.ref, name: h.name }))
+    };
+  }
+  return hits[0];
+}
+
+async function waitTextAnyFrame(tabId, request) {
+  const frames = await listPageActionFrames(tabId);
+  const started = Date.now();
+  if (!frames.length) {
+    return { ok: false, error: 'no frames', code: 'NEED_PAGE' };
+  }
+  const pending = frames.map((fr) =>
+    sendPageActionToFrame(tabId, fr.frameId, {
+      op: 'wait',
+      text: request.text,
+      ms: request.ms
+    }).catch(() => null)
+  );
+  const hit = await new Promise((resolve) => {
+    let left = pending.length;
+    for (const p of pending) {
+      p.then((r) => {
+        if (r && r.ok) resolve(r);
+        else if (--left === 0) resolve(null);
+      });
+    }
+  });
+  const snap = await snapshotAllPageActionFrames(tabId);
+  if (hit) return attachFreshSnapshot({ ...hit, waited: hit.waited ?? Date.now() - started }, snap);
+  return attachFreshSnapshot(
+    { ok: false, error: 'wait timed out', code: 'NO_TARGET', waited: Date.now() - started },
+    snap
+  );
+}
+
+async function handleWorkspacePageAction(request) {
+  const resolved = await resolvePageActionTab(request);
+  const tabId = resolved.tabId;
+  if (!Number.isFinite(tabId) || tabId <= 0) {
+    return { ok: false, error: 'no active tab', code: 'NEED_PAGE' };
+  }
+  if (isRestrictedPageActionUrl(resolved.url)) {
+    return {
+      ok: false,
+      error: 'cannot act on chrome://, Web Store, or extension pages',
+      code: 'NEED_PAGE'
+    };
+  }
+  const op = String(request?.op || '').trim().toLowerCase();
+  try {
+    await ensurePageActionScripts(tabId);
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error), code: 'NEED_PAGE' };
+  }
+
+  if (op === 'snapshot') {
+    return snapshotAllPageActionFrames(tabId);
+  }
+
+  const usesRef =
+    (request?.ref != null && String(request.ref).trim() !== '') ||
+    (Array.isArray(request?.fields) && request.fields.some((f) => f && f.ref));
+  const stale = usesRef ? stalePageActionRev(tabId, request?.rev) : null;
+  if (stale) return stale;
+
+  if (op === 'wait' && request?.text && !request?.ref) {
+    return waitTextAnyFrame(tabId, request);
+  }
+
+  if (op === 'fill_form') {
+    const fields = Array.isArray(request.fields) ? request.fields : [];
+    if (!fields.length) {
+      return { ok: false, error: 'fields is required', code: 'BAD_INPUT' };
+    }
+    const byFrame = new Map();
+    for (const field of fields) {
+      if (!field || typeof field !== 'object') {
+        return { ok: false, error: 'invalid field', code: 'BAD_INPUT' };
+      }
+      const parsed = parseActionRef(field.ref);
+      if (parsed && parsed.frameId != null) {
+        const list = byFrame.get(parsed.frameId) || [];
+        list.push({ ...field, ref: parsed.local });
+        byFrame.set(parsed.frameId, list);
+        continue;
+      }
+      const name = field.name || field.label;
+      if (name) {
+        const hit = await resolveNameAcrossFrames(tabId, name);
+        if (hit.code) return hit;
+        const list = byFrame.get(hit.frameId) || [];
+        list.push({ ...field, ref: hit.local });
+        byFrame.set(hit.frameId, list);
+        continue;
+      }
+      return { ok: false, error: 'each field needs ref or name', code: 'BAD_INPUT' };
+    }
+    const results = [];
+    let allOk = true;
+    for (const [frameId, frameFields] of byFrame) {
+      let raw;
+      try {
+        raw = await sendPageActionToFrame(tabId, frameId, { op: 'fill_form', fields: frameFields });
+      } catch (error) {
+        allOk = false;
+        results.push({
+          ok: false,
+          error: error?.message || String(error),
+          code: 'NEED_PAGE'
+        });
+        continue;
+      }
+      const rows = raw && Array.isArray(raw.results) ? raw.results : [];
+      if (!raw || raw.ok === false) allOk = false;
+      for (const row of rows) {
+        const local = row && row.ref ? String(row.ref).replace(/^f\d+\./i, '') : '';
+        results.push({
+          ...row,
+          ref: local ? 'f' + frameId + '.' + local : row?.ref
+        });
+      }
+      if (!rows.length && raw && raw.ok === false) {
+        results.push({ ok: false, error: raw.error, code: raw.code || 'NEED_PAGE' });
+      }
+    }
+    const snap = await snapshotAllPageActionFrames(tabId);
+    return attachFreshSnapshot({ ok: allOk, op: 'fill_form', results }, snap);
+  }
+
+  let frameId = null;
+  let localRef = '';
+  const parsed = parseActionRef(request?.ref);
+  if (parsed) {
+    frameId = parsed.frameId != null ? parsed.frameId : 0;
+    localRef = parsed.local;
+  } else if (request?.name || request?.label) {
+    const hit = await resolveNameAcrossFrames(tabId, request.name || request.label);
+    if (hit.code) return hit;
+    frameId = hit.frameId;
+    localRef = hit.local;
+  } else if (op === 'press' || (op === 'wait' && request?.ms != null && !request?.text && !request?.ref)) {
+    frameId = 0;
+  } else {
+    return { ok: false, error: 'need ref or name', code: 'NO_TARGET' };
+  }
+
+  const payload = {
+    op,
+    ref: localRef || undefined,
+    name: request?.name || request?.label,
+    value: request?.value,
+    key: request?.key,
+    text: request?.text,
+    ms: request?.ms
+  };
+  let raw;
+  try {
+    raw = await sendPageActionToFrame(tabId, frameId, payload);
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error), code: 'NEED_PAGE' };
+  }
+  if (!raw || typeof raw !== 'object') {
+    return { ok: false, error: 'empty page action result', code: 'NEED_PAGE' };
+  }
+  if (raw.after && raw.after.ref) {
+    raw.after = {
+      ...raw.after,
+      ref: 'f' + frameId + '.' + String(raw.after.ref).replace(/^f\d+\./i, '')
+    };
+  }
+  const snap = await snapshotAllPageActionFrames(tabId);
+  return attachFreshSnapshot(raw, snap);
 }
 
 /**

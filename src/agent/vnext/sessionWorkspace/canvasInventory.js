@@ -7,7 +7,7 @@ import { bytesToUtf8, isSheetArtifact } from '../../../preview/sheetCodec.js';
 import { classifyOpenArtifact, isUtf8OpenKind } from './openClassify.js';
 import { canvasKindFromDoc, isPawCanvasDoc } from './engineCanvas.js';
 
-export const KERNEL_TOOL_NAMES = ['inspect', 'acquire', 'run', 'clarify'];
+export const KERNEL_TOOL_NAMES = ['inspect', 'acquire', 'run', 'clarify', 'action'];
 export const OFFICE_TOOL_NAMES = ['sheet', 'deck', 'doc', 'web'];
 /** Always-on model surface. Inventory aims tools; it does not hide them. */
 export const SESSION_TOOL_NAMES = [...KERNEL_TOOL_NAMES, ...OFFICE_TOOL_NAMES];
