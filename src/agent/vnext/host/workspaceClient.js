@@ -12,7 +12,9 @@ export async function workspaceRpc(method, params = {}) {
     const detail =
       formatRpcError(response?.error) ||
       (response == null ? 'no response (offscreen not ready)' : 'unknown');
-    throw new Error(`workspace RPC failed: ${method}: ${detail}`);
+    throw Object.assign(new Error(`workspace RPC failed: ${method}: ${detail}`), {
+      code: response?.code || 'WORKSPACE_FAILED', actualRevision: response?.actualRevision
+    });
   }
   return response.result;
 }

@@ -76,6 +76,14 @@ export function createSessionGuestFs(store, opts) {
         updatedAt: Date.now(),
         size: bytes.byteLength
       });
+      // Raw guest writes must also invalidate a preview's editing baseline.
+      const normalized = normalizeGuest(guestPath);
+      for (const id of store.keys('artifacts')) {
+        const rec = store.get('artifacts', id);
+        if (rec.sessionId !== sessionId || rec.primaryPath !== normalized) continue;
+        store.put('artifacts', id, { ...rec, revision: (Number(rec.revision) || 0) + 1,
+          updatedAt: Date.now(), size: bytes.byteLength });
+      }
       return { ok: true, path: normalizeGuest(guestPath), bytes: bytes.byteLength };
     },
 

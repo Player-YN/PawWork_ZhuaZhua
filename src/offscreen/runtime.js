@@ -29,7 +29,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: true, result });
     } catch (error) {
       try {
-        sendResponse({ ok: false, error: formatRpcError(error) });
+        sendResponse({ ok: false, error: formatRpcError(error), code: error?.code || 'WORKSPACE_FAILED',
+          actualRevision: error?.actualRevision });
       } catch {
         /* port already closed */
       }

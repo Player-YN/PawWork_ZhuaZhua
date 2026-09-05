@@ -43,6 +43,8 @@ content_script → SW
 
 Offscreen URL：`src/offscreen/runtime.html`。SW `ensurePawWorkOffscreen()`。
 
+`workspace_sys` 只接受本扩展 offscreen URL 的 sender；调用携带 callId/sessionId/executionId/deadline，取消走同一消息入口。`workspace_rpc` 只在接收端连接尚未建立时重试；响应丢失不代表未执行，不自动重放可能有副作用的请求。
+
 ### `workspace_rpc`
 
 ```text
@@ -107,7 +109,7 @@ Content script：
 
 ## 其它宿主事实
 
-- 权限与命令见根 AGENTS.md / `manifest.json`。`userScripts` 给 `sys.eval` / page `fetch`；`debugger` 给 `sys.cdp`。Chrome 135+ 的 `userScripts.execute` 需要扩展卡片 **允许运行用户脚本**（或更早的开发者模式）。CDP 挂上时 Chrome 会显示调试横幅；F12 已打开会 `CDP_BUSY`。`sys` 是系统调用表，不是产品功能列表（[agent/AGENTS.md](agent/AGENTS.md)）。
+- 权限与命令见根 AGENTS.md / `manifest.json`。`userScripts` 给 `sys.eval` / page `fetch`；`debugger` 给 `sys.cdp`。Chrome 135+ 的 `userScripts.execute` 需要扩展卡片 **允许运行用户脚本**（或更早的开发者模式）。CDP 挂上时 Chrome 会显示调试横幅；F12 已打开会 `CDP_BUSY`。`eval` / page `fetch` / `cdp` 不注入扩展预览页。`sys` 是系统调用表，不是产品功能列表（[agent/AGENTS.md](agent/AGENTS.md)）。
 - 区域截图：Alt+Shift+C → content script 框选 → SW `captureVisibleTab` 裁剪 → 剪贴板 + 对话附件。
 - `llm_proxy_fetch`：侧栏/设置探测模型时走 SW，避免页面 CORS。
 - tldraw：`sessionWorkspace/tldrawLicense.js` 解析 key。

@@ -354,7 +354,7 @@ export function createSessionTools(env) {
           type: 'string',
           enum: ['groups', 'group', 'item', 'artifacts', 'files', 'skill', 'workbook', 'range', 'html', 'sys'],
           description:
-            'groups | group | item | artifacts | files | skill | workbook | range | html | sys. view=sys returns the browser machine ABI (tabs/eval/fetch/cdp/download/screenshot).'
+            'groups | group | item | artifacts | files | skill | workbook | range | html | sys. view=sys returns the browser machine ABI (help/capabilities/tabs/eval/fetch/cdp/download/screenshot).'
         },
         plateId: { type: 'string', description: 'HTML plate id (view=html)' },
         slotId: { type: 'string', description: 'HTML slot id (view=html)' },
@@ -984,21 +984,37 @@ export function createSessionTools(env) {
           };
         }
         const codeFs = createCodeFsBridge(fs);
+        const sysController = new AbortController();
+        const cancelSys = () => sysController.abort();
+        const sysTimeout = Math.max(1, Math.min(Number(input.timeoutMs) || 15000, 120000));
+        const sysTimer = setTimeout(cancelSys, sysTimeout);
+        signal?.addEventListener('abort', cancelSys, { once: true });
+        if (signal?.aborted) cancelSys();
         const sys = createGuestSys({
+          fs: codeFs,
+          signal: sysController.signal,
+          deadline: Date.now() + sysTimeout,
           hostSys: typeof env.hostSys === 'function' ? env.hostSys : null,
           defaultTabId: env.activeTab?.tabId ?? env.activeTab?.id ?? null
         });
-        const result = await runCodePrimitive(
-          { fs: codeFs, sys, signal, timeoutMs: input.timeoutMs },
-          {
-            code: String(input.code),
-            entry: input.entry,
-            entryFile: input.entryFile,
-            files: input.files,
-            timeoutMs: input.timeoutMs
-          }
-        );
-        const written = Array.isArray(result.writtenFiles) ? result.writtenFiles : [];
+        let result;
+        try {
+          result = await runCodePrimitive(
+            { fs: codeFs, sys, signal, timeoutMs: input.timeoutMs },
+            {
+              code: String(input.code),
+              entry: input.entry,
+              entryFile: input.entryFile,
+              files: input.files,
+              timeoutMs: input.timeoutMs
+            }
+          );
+        } finally {
+          clearTimeout(sysTimer);
+          signal?.removeEventListener('abort', cancelSys);
+          cancelSys();
+        }
+        const written = [...new Set([...(Array.isArray(result.writtenFiles) ? result.writtenFiles : []), ...sys.writtenFiles])];
         const guestWritten = written.map(mapHostToGuest).filter(Boolean);
         const { created, rejected } = registerWrittenArtifacts(store, fs, sessionId, guestWritten);
         for (const rec of created) emitHtmlPreviewIfMarked(rec);

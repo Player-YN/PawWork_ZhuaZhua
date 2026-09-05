@@ -4,7 +4,7 @@ Chrome MV3 **unpacked** 扩展：把已登录浏览器当成可编程层（live-
 
 加载根 = **本文件夹**（根上有 `manifest.json`）。显示名：`manifest.name` / `action.default_title` = `爪爪 · 完全解放版`。不面向 CWS，日常改 `src/` 后在扩展卡片点 **重新加载**。无 `package.json`，不跑 npm。
 
-人读加载与 Git：[HANDOFF.md](HANDOFF.md)。产品入口：[README.md](README.md)。
+产品入口与本地验证：[README.md](README.md)。实现进展与技术方向：[BROWSER_COMPUTER.md](BROWSER_COMPUTER.md)。
 
 ## 文档怎么读
 
@@ -95,7 +95,7 @@ Chrome MV3 **unpacked** 扩展：把已登录浏览器当成可编程层（live-
 ```text
 manifest.json              # MV3：SW / side_panel / content_scripts / sandbox / CSP
 icons/                     # 16|32|48|128
-HANDOFF.md                 # 加载路径与 Git 人读说明
+BROWSER_COMPUTER.md        # 实现进展与后续技术方向
 src/
   background.js            # Service worker（type: module）
   content_script.js        # <all_urls> all_frames；伸爪 + action

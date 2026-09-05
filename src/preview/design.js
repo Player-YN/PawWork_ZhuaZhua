@@ -72,6 +72,9 @@ document.title = titleEl?.textContent || 'Paw Work Design';
 
 let saveTimer = 0;
 let lastJson = '';
+let artifactRevision = 0;
+let localEditRevision = 0;
+let localDirty = false;
 let pawDoc = null;
 let saveArmed = false;
 let hostApi = null;
@@ -199,6 +202,8 @@ function wrapSnap(snap) {
 
 function scheduleSave(snap) {
   if (!saveArmed || !artifactId || !sessionId) return;
+  localEditRevision += 1;
+  localDirty = true;
   if (pointerDepth > 0) {
     clearTimeout(saveTimer);
     saveTimer = window.setTimeout(() => scheduleSave(snap), 200);
@@ -214,39 +219,32 @@ function isWorkLocked() {
   return !!document.getElementById('pawWorkLock')?.classList.contains('is-on');
 }
 
-async function persistNow(snap) {
+let pendingSave = Promise.resolve();
+function persistNow(snap) {
+  const editRevision = localEditRevision;
+  pendingSave = pendingSave.catch(() => false).then(() => persistSnapshot(snap, editRevision));
+  return pendingSave;
+}
+
+async function persistSnapshot(snap, editRevision) {
   if (!artifactId || !sessionId) return false;
   if (isWorkLocked()) return false;
-  try {
-    const rec = await workspaceRpc('readArtifact', { sessionId, artifactId });
-    const rawStore = rec?.content != null ? String(rec.content) : '';
-    if (rawStore && rawStore !== lastJson) {
-      await applyPatchFromStore();
-      return false;
-    }
-  } catch {
-    /* persist local snapshot if the store read fails */
-  }
   const editorSnap = snap || hostApi?.getSnapshot?.();
   if (!editorSnap) return false;
   const next = wrapSnap(editorSnap);
   const json = JSON.stringify(next);
-  if (json === lastJson) return true;
-  try {
-    const latest = await workspaceRpc('readArtifact', { sessionId, artifactId });
-    const rawStore = latest?.content != null ? String(latest.content) : '';
-    if (rawStore && rawStore !== lastJson && rawStore !== json) {
-      await applyPatchFromStore();
-      return false;
-    }
-  } catch {
-    /* last-look store read is best-effort */
+  if (json === lastJson) {
+    localDirty = localEditRevision !== editRevision;
+    return true;
   }
-  lastJson = json;
-  pawDoc = parsePawCanvas(next) || next;
+  localDirty = true;
   ignorePatchUntil = Date.now() + 3000;
   try {
-    await workspaceRpc('updateArtifact', { sessionId, artifactId, content: json });
+    const saved = await workspaceRpc('updateArtifact', { sessionId, artifactId, content: json, expectedRevision: artifactRevision });
+    artifactRevision = Number(saved?.artifact?.revision) || artifactRevision;
+    lastJson = json;
+    localDirty = localEditRevision !== editRevision;
+    pawDoc = parsePawCanvas(next) || next;
     setStatus('已保存');
     return true;
   } catch (e) {
@@ -771,11 +769,18 @@ function isStructuralCanvasReplace(next, editor) {
 
 async function applyPatchFromStore() {
   if (!sessionId || !artifactId) return false;
+  if (localDirty) {
+    setStatus('有未保存的本地修改；请先保存或导出副本，再重新载入。');
+    return false;
+  }
   try {
     const rec = await workspaceRpc('readArtifact', { sessionId, artifactId });
     const raw = rec?.content != null ? String(rec.content) : '';
     if (!raw) return false;
-    if (raw === lastJson) return true;
+    if (raw === lastJson) {
+      artifactRevision = Number(rec?.artifact?.revision) || 0;
+      return true;
+    }
     const next = isPawCanvasDoc(raw) ? parsePawCanvas(raw) : null;
     const snap = next?.tldraw;
     const editor = hostApi?.getEditor?.();
@@ -787,6 +792,7 @@ async function applyPatchFromStore() {
         editor.loadSnapshot(normalizeTldrawSnapshot(payload));
         pawDoc = next;
         lastJson = raw;
+        artifactRevision = Number(rec?.artifact?.revision) || 0;
         hostApi?.applyTheme?.(next.themeId, next);
         renderChrome(hostApi);
       } finally {
@@ -1162,6 +1168,7 @@ async function boot() {
       const rec = await workspaceRpc('readArtifact', { sessionId, artifactId });
       const raw = rec?.content != null ? String(rec.content) : '';
       const title = rec?.artifact?.name || rec?.name || '';
+      artifactRevision = Number(rec?.artifact?.revision) || 0;
       if (raw) shell = shellFromArtifactText(raw, shell);
       document.body.dataset.shell = shell;
       if (titleEl) {

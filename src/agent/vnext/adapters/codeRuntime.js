@@ -484,6 +484,7 @@ function injectFs(vm, sandboxFs) {
           return hostFn(...args);
         })
         .then((result) => {
+          if (!vm.alive) return;
           const packed = hostValueToHandle(vm, result);
           deferred.resolve(packed.handle);
           if (packed.owned) {
@@ -495,6 +496,7 @@ function injectFs(vm, sandboxFs) {
           }
         })
         .catch((err) => {
+          if (!vm.alive) return;
           const msg = err instanceof Error ? err.message : String(err);
           const errH = vm.newError(msg);
           deferred.reject(errH);
@@ -505,6 +507,7 @@ function injectFs(vm, sandboxFs) {
           }
         })
         .finally(() => {
+          if (!vm.alive) return;
           deferred.settled.then(() => {
             try {
               vm.runtime.executePendingJobs();
@@ -546,6 +549,7 @@ function injectSys(vm, sys) {
         return hostCall(op, params && typeof params === 'object' ? params : {});
       })
       .then((result) => {
+        if (!vm.alive) return;
         const packed = hostValueToHandle(vm, result);
         deferred.resolve(packed.handle);
         if (packed.owned) {
@@ -557,8 +561,12 @@ function injectSys(vm, sys) {
         }
       })
       .catch((err) => {
+        if (!vm.alive) return;
         const msg = err instanceof Error ? err.message : String(err);
         const errH = vm.newError(msg);
+        const codeH = vm.newString(String(err?.code || 'SYS_FAILED'));
+        vm.setProp(errH, 'code', codeH);
+        codeH.dispose();
         deferred.reject(errH);
         try {
           errH.dispose();
@@ -567,6 +575,7 @@ function injectSys(vm, sys) {
         }
       })
       .finally(() => {
+        if (!vm.alive) return;
         deferred.settled.then(() => {
           try {
             vm.runtime.executePendingJobs();
@@ -585,6 +594,7 @@ function injectSys(vm, sys) {
         var help = ${JSON.stringify(SYS_HELP)};
         globalThis.sys = {
           help: function () { return help; },
+          capabilities: function () { return __pw_sys_call('capabilities', {}); },
           eval: function (opts) { return __pw_sys_call('eval', opts || {}); },
           fetch: function (opts) { return __pw_sys_call('fetch', opts || {}); },
           cdp: function (opts) { return __pw_sys_call('cdp', opts || {}); },
@@ -714,9 +724,10 @@ async function raceVmPromise(vm, promiseHandle, timeoutMs, signal) {
       })
     : null;
 
+  let pump = null;
   const resolveNative = (async () => {
     // Pump jobs while waiting
-    const pump = setInterval(() => {
+    pump = setInterval(() => {
       try {
         vm.runtime.executePendingJobs();
       } catch {
@@ -748,6 +759,7 @@ async function raceVmPromise(vm, promiseHandle, timeoutMs, signal) {
     if (abortPromise) racers.push(abortPromise);
     return await Promise.race(racers);
   } finally {
+    if (pump) clearInterval(pump);
     if (timer) clearTimeout(timer);
     if (signal && onAbort) signal.removeEventListener('abort', onAbort);
   }

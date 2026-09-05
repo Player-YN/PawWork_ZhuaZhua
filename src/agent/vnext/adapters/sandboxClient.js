@@ -46,8 +46,11 @@ export function createSandboxCodeClient(iframe) {
 
     if (msg.type === 'fs-request') {
       const run = runs.get(msg.runId);
-      if (!run) return;
       const target = guestWindow();
+      if (!run) {
+        rejectMissingRun(target, msg, 'fs-response');
+        return;
+      }
       if (!target) return;
       try {
         const method = normalizeFsMethod(msg.method);
@@ -70,8 +73,11 @@ export function createSandboxCodeClient(iframe) {
 
     if (msg.type === 'sys-request') {
       const run = runs.get(msg.runId);
-      if (!run) return;
       const target = guestWindow();
+      if (!run) {
+        rejectMissingRun(target, msg, 'sys-response');
+        return;
+      }
       if (!target) return;
       try {
         const call = run.sys?.call;
@@ -85,6 +91,7 @@ export function createSandboxCodeClient(iframe) {
           runId: msg.runId,
           requestId: msg.requestId,
           ok: false,
+          code: typeof error?.code === 'string' ? error.code : 'SYS_FAILED',
           error: error instanceof Error ? error.message : String(error)
         }, '*');
       }
@@ -154,6 +161,23 @@ export function createSandboxCodeClient(iframe) {
       }
     }
   };
+}
+
+function rejectMissingRun(target, msg, type) {
+  if (!target) return;
+  try {
+    target.postMessage({
+      channel: CHANNEL,
+      type,
+      runId: msg.runId,
+      requestId: msg.requestId,
+      ok: false,
+      code: 'SYS_ABORTED',
+      error: 'run is no longer active'
+    }, '*');
+  } catch {
+    /* frame gone */
+  }
 }
 
 function normalizeFsMethod(name) {

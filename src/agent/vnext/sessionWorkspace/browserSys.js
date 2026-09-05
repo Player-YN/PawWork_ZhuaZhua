@@ -11,6 +11,7 @@ export const SYS_EVAL_SOURCE_MAX = 100_000;
 
 export const SYS_OPS = Object.freeze([
   'help',
+  'capabilities',
   'tabs.list',
   'tabs.current',
   'tabs.frames',
@@ -32,8 +33,9 @@ export const SYS_HELP = Object.freeze({
     'Program the browser machine from run(). chrome / window / document are absent on purpose. Return values must JSON-serialize. Worlds: MAIN = page JS heap + page cookies; USER = own world + DOM, no page JS. sys.cdp is the Chrome DevTools Protocol pipe — not a product feature.',
   ops: {
     'sys.help': 'This catalog (sync).',
+    'sys.capabilities': 'Live browser capability probe: userScripts availability/reason, debugger, capture, downloads and transfer limits. Check this before choosing an execution route.',
     'sys.tabs.list': 'Open tabs: id, url, title, active, audible, groupId, injectable.',
-    'sys.tabs.current': 'Focus tab for this turn (or the Chrome active tab).',
+    'sys.tabs.current': 'Focus tab for this turn (tabId/defaultTabId), else the Chrome active tab.',
     'sys.tabs.frames': '{ tabId? } → frames in that tab (webNavigation).',
     'sys.tabs.open': '{ url, active? } — http(s) or about:blank.',
     'sys.tabs.navigate': '{ url, tabId? }',
@@ -43,14 +45,14 @@ export const SYS_HELP = Object.freeze({
     'sys.eval':
       '{ code, world?: "MAIN"|"USER", tabId?, frameId? }. code is an async function body; return a JSON value.',
     'sys.fetch':
-      '{ as: "page"|"extension", url, tabId?, init? }. page = that tab MAIN-world fetch (cookies). extension = SW fetch, no page cookies.',
+      '{ as: "page"|"extension", url, tabId?, init?, saveTo? }. page = MAIN-world fetch (cookies); extension = no cookies. saveTo writes bytes directly to /scratch or /artifacts and returns a file receipt instead of base64.',
     'sys.cdp':
       'CDP pipe. Send: { method, params?, tabId?, targetId? } (auto-attach). Session: { action: "attach"|"detach"|"events"|"targets", tabId?, targetId?, clear? }. Bodies of already-fired requests need attach + Network.enable first, then action:"events" + Network.getResponseBody.',
     'sys.download': '{ url } or { base64, filename, mimeType? }. Existing downloads permission — not a downloader product.',
-    'sys.screenshot': '{ tabId?, format?: "png"|"jpeg" } — visible tab composite (captureVisibleTab).'
+    'sys.screenshot': '{ tabId?, format?: "png"|"jpeg", saveTo? } — target must be visible; otherwise TAB_NOT_VISIBLE. saveTo writes to guest FS.'
   },
   walls: [
-    'chrome:// and other-extension pages are not injectable',
+    'chrome://, extension pages (including preview editors), and other-extension pages are not injectable',
     'Widevine frames are not readable',
     'eval/fetch/cdp results larger than the cap are TOO_LARGE',
     'DOM nodes / functions are NOT_CLONEABLE',
@@ -63,14 +65,16 @@ export const SYS_HELP = Object.freeze({
 export const SYS_MODEL_HINT = [
   'Guest globals: await fs.readFile/writeFile/readdir/... and sys (no chrome/window/document).',
   'sys.help() or inspect view=sys → full catalog (pawwork-sys-v1).',
+  'await sys.capabilities() → live browser availability and limits.',
   'sys.tabs.list|current|frames({tabId?})',
   'sys.tabs.open({url,active?}) sys.tabs.navigate({url,tabId?}) sys.tabs.reload({tabId?}) sys.tabs.close({tabId?}) sys.tabs.focus({tabId?})',
-  'sys.eval({world:"MAIN"|"USER", code, tabId?, frameId?}) — code is an async function body; return JSON.',
-  'sys.fetch({as:"page"|"extension", url, tabId?, init?})',
+  'sys.eval({world:"MAIN"|"USER", code, tabId?, frameId?}) — async function body on http(s) pages only; return JSON.',
+  'sys.fetch({as:"page"|"extension", url, tabId?, init?, saveTo?}) — use saveTo:"/scratch/data.csv" or "/artifacts/file.pdf" to keep binary data out of model context.',
   'sys.cdp({method, params?, tabId?, targetId?}) auto-attach send. sys.cdp({action:"attach"|"detach"|"events"|"targets", tabId?, targetId?, clear?})',
   'Already-fired HTTP bodies: cdp attach + Network.enable, then action:"events", then Network.getResponseBody({requestId}).',
   'sys.download({url}) or sys.download({base64, filename, mimeType?})',
-  'sys.screenshot({tabId?, format?})'
+  'sys.screenshot({tabId?, format?, saveTo?}) — visible target only.',
+  'Errors carry e.code. SYS_ABORTED/SYS_TIMEOUT can mean an already dispatched action has completed: inspect state before retrying.'
 ].join(' ');
 
 /**
@@ -80,10 +84,18 @@ export const SYS_MODEL_HINT = [
  */
 export function createGuestSys(opts = {}) {
   const host = opts.hostSys;
+  const writtenFiles = new Set();
   const defaultTabId = opts.defaultTabId != null ? Number(opts.defaultTabId) : null;
 
   async function call(op, params = {}) {
+    opts.signal?.throwIfAborted();
     const name = String(op || '');
+    const saveTo = params?.saveTo;
+    if (saveTo != null && (!['fetch', 'screenshot'].includes(name) ||
+      typeof saveTo !== 'string' || !/^\/(scratch|artifacts)\/.+/.test(saveTo) ||
+      saveTo.split('/').includes('..') || saveTo.includes('\\') || typeof opts.fs?.writeFile !== 'function')) {
+      throw Object.assign(new Error('saveTo requires a writable /scratch/ or /artifacts/ file path'), { code: 'BAD_INPUT' });
+    }
     if (name === 'help') return SYS_HELP;
     if (typeof host !== 'function') {
       const err = new Error('SYS_DENIED: browser sys has no host in this runtime');
@@ -94,7 +106,7 @@ export function createGuestSys(opts = {}) {
       params && typeof params === 'object'
         ? { ...params, defaultTabId: params.tabId != null ? params.tabId : defaultTabId }
         : { defaultTabId };
-    const res = await host(name, payload);
+    const res = await host(name, payload, { signal: opts.signal, deadline: opts.deadline });
     if (res == null) {
       const err = new Error('SYS_DENIED: no response from browser host');
       err.code = 'SYS_DENIED';
@@ -105,10 +117,22 @@ export function createGuestSys(opts = {}) {
       err.code = res.code || 'SYS_FAILED';
       throw err;
     }
-    return res.result !== undefined ? res.result : res;
+    const value = res.result !== undefined ? res.result : res;
+    if (saveTo != null) {
+      opts.signal?.throwIfAborted();
+      if (value.ok === false) throw Object.assign(new Error(`HTTP ${value.status}: response was not saved`), { code: 'HTTP_ERROR' });
+      if (typeof value.base64 !== 'string') throw Object.assign(new Error('host returned no binary data'), { code: 'SYS_FAILED' });
+      const binary = atob(value.base64);
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      await opts.fs.writeFile(saveTo, bytes, { mimeType: value.contentType });
+      writtenFiles.add(saveTo);
+      const { base64, ...receipt } = value;
+      return { ...receipt, path: saveTo, bytes: bytes.byteLength };
+    }
+    return value;
   }
 
-  return wrapSysFromCall(call);
+  return { ...wrapSysFromCall(call), writtenFiles };
 }
 
 /**
@@ -118,6 +142,7 @@ export function wrapSysFromCall(call) {
   return {
     call,
     help: () => SYS_HELP,
+    capabilities: () => call('capabilities', {}),
     eval: (params) => call('eval', params && typeof params === 'object' ? params : {}),
     fetch: (params) => call('fetch', params && typeof params === 'object' ? params : {}),
     cdp: (params) => call('cdp', params && typeof params === 'object' ? params : {}),

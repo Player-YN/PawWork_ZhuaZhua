@@ -79,6 +79,10 @@ let fileName = 'sheet.csv';
 let mimeType = 'text/csv';
 let saveTimer = 0;
 let saving = false;
+let savePromise = null;
+let saveRequested = false;
+let editRevision = 0;
+let artifactRevision = 0;
 let applying = false;
 let dirty = false;
 /** @type {Array<{ id: string, params?: unknown, at: number }>} */
@@ -505,20 +509,34 @@ async function bytesForPersist() {
 }
 
 async function saveNow(reason = 'save') {
-  if (!univerAPI || saving) return;
+  if (!univerAPI) return { ok: false, error: 'spreadsheet is not ready' };
+  saveRequested = true;
+  if (saving) return savePromise;
   saving = true;
+  savePromise = drainSaves(reason);
+  return savePromise;
+}
+
+async function drainSaves(reason) {
   setSaveState('is-busy', '写入中…');
   setStatus('写入中…');
   try {
-    const bytes = await bytesForPersist();
-    await workspaceRpc('updateArtifact', {
-      sessionId,
-      artifactId,
-      mimeType,
-      name: fileName,
-      base64: bytesToBase64(bytes)
-    });
-    dirty = false;
+    while (saveRequested) {
+      saveRequested = false;
+      const revision = editRevision;
+      const bytes = await bytesForPersist();
+      const saved = await workspaceRpc('updateArtifact', {
+        sessionId,
+        artifactId,
+        expectedRevision: artifactRevision,
+        mimeType,
+        name: fileName,
+        base64: bytesToBase64(bytes)
+      });
+      artifactRevision = Number(saved?.artifact?.revision) || artifactRevision;
+      dirty = editRevision !== revision;
+      if (dirty) saveRequested = true;
+    }
     setStatus(reason === 'autosave' ? '已自动保存' : `已写入工作区 · ${fileName}`);
     setSaveState('is-done', '已写入');
     try {
@@ -532,9 +550,12 @@ async function saveNow(reason = 'save') {
       /* sidepanel may be closed */
     }
     window.setTimeout(() => setSaveState('', '保存'), 1400);
+    return { ok: true };
   } catch (e) {
+    dirty = true;
     setSaveState('', '保存');
     setStatus(e instanceof Error ? e.message : '写入失败');
+    return { ok: false, error: e instanceof Error ? e.message : '写入失败' };
   } finally {
     saving = false;
   }
@@ -542,7 +563,9 @@ async function saveNow(reason = 'save') {
 
 function scheduleSave() {
   if (applying) return;
+  editRevision += 1;
   dirty = true;
+  if (saving) saveRequested = true;
   setStatus('未保存');
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => void saveNow('autosave'), 900);
@@ -794,8 +817,7 @@ async function applyPromptSnapshot(sheets, snapshot) {
     if (existing?.dispose) existing.dispose();
     univerAPI.createWorkbook({ ...snapshot, id: snapshot.id || unitId() });
     rememberDurable(workbookDataToSheets(snapshot));
-    await saveNow('autosave');
-    return;
+    return saveNow('autosave');
   }
   if (!sheets?.length) return;
   rememberDurable(sheets);
@@ -804,7 +826,7 @@ async function applyPromptSnapshot(sheets, snapshot) {
   for (const name of liveSheetNames()) {
     if (!keep.has(name)) deleteSheetByName(name);
   }
-  await saveNow('autosave');
+  return saveNow('autosave');
 }
 
 async function undoLastAgentEdit() {
@@ -826,7 +848,8 @@ async function undoLastAgentEdit() {
         setStatus(sheetUiLang() === 'en' ? 'Nothing to undo' : '没有可撤销的提问');
         return;
       }
-      await applyPromptSnapshot(moved.restore.sheets, moved.restore.snapshot);
+      const saved = await applyPromptSnapshot(moved.restore.sheets, moved.restore.snapshot);
+      if (!saved?.ok) return;
       showAgentUndoToast('undone');
       setStatus(tPaw('undoDone', '已撤销这次提问'));
     });
@@ -854,7 +877,8 @@ async function redoLastAgentEdit() {
         setStatus(sheetUiLang() === 'en' ? 'Nothing to redo' : '没有可重做的提问');
         return;
       }
-      await applyPromptSnapshot(moved.restore.sheets, moved.restore.snapshot);
+      const saved = await applyPromptSnapshot(moved.restore.sheets, moved.restore.snapshot);
+      if (!saved?.ok) return;
       showAgentUndoToast('redone');
       setStatus(tPaw('redoDone', '已重做这次提问'));
     });
@@ -1341,7 +1365,8 @@ async function executeSheetRpc(msg) {
         };
       }
       const drawn = await applyLiveDrawings(commands, snap.draft?.sheet || snap.readback?.sheet);
-      await saveNow('autosave');
+      const saved = await saveNow('autosave');
+      if (!saved?.ok) return { ok: false, error: saved?.error || 'spreadsheet save failed', overview: reportState() };
       const mark = snap.readback;
       if (mark?.sheet) highlightA1(mark.sheet, mark.a1 || 'A1');
       paintDraftChrome();
@@ -1384,7 +1409,8 @@ async function executeSheetRpc(msg) {
       for (const name of leftover) deleteSheetByName(name);
       if (method === 'discardDraft' && pair?.draftName) deleteSheetByName(pair.draftName);
       if (method === 'mergeDraft' && pair?.draftName) deleteSheetByName(pair.draftName);
-      await saveNow('autosave');
+      const saved = await saveNow('autosave');
+      if (!saved?.ok) return { ok: false, error: saved?.error || 'spreadsheet save failed', overview: reportState() };
       paintDraftChrome();
       if (method === 'mergeDraft') setStatus('已用草稿覆盖原表');
       else setStatus('已丢弃草稿');
@@ -1777,6 +1803,7 @@ async function main() {
   wireBar();
   try {
     const rec = await workspaceRpc('readArtifact', { sessionId, artifactId });
+    artifactRevision = Number(rec?.artifact?.revision) || 0;
     const item = {
       artifactId,
       name: rec?.artifact?.name || rec?.name || artifactId,

@@ -3,7 +3,7 @@
  * Guest never sees chrome.*. This file is the syscall implementation.
  */
 
-import { isInjectableTabUrl, isPawWorkTabUrl } from '../sessionWorkspace/pageContext.js';
+import { isInjectableTabUrl } from '../sessionWorkspace/pageContext.js';
 import { SYS_EVAL_JSON_MAX, SYS_EVAL_SOURCE_MAX, SYS_FETCH_BYTES_MAX, SYS_HELP } from '../sessionWorkspace/browserSys.js';
 
 const SYS_TIMEOUT_MS = 20000;
@@ -15,16 +15,73 @@ const CDP_PROTOCOL = '1.3';
 
 /** @type {Set<string>} */
 const cdpAttached = new Set();
+const cdpAttaching = new Map();
 /** @type {Map<string, Array<{ method: string, params: unknown, ts: number }>>} */
 const cdpEventBuf = new Map();
 
 installCdpHooks();
 
+const sysCalls = new Map();
+const cancelledCalls = new Map();
+
 export async function handleWorkspaceSys(request = {}) {
+  const now = Date.now();
+  for (const [id, expiry] of cancelledCalls) if (expiry <= now) cancelledCalls.delete(id);
+  const callId = String(request.callId || crypto.randomUUID());
+  const owner = `${request.sessionId || ''}:${request.executionId || ''}`;
+  if (request.op === 'cancel') {
+    const active = sysCalls.get(callId);
+    if (active && active.owner !== owner) return { ok: false, code: 'SYS_DENIED', error: 'call owner mismatch' };
+    cancelledCalls.set(`${owner}:${callId}`, now + 120000);
+    if (cancelledCalls.size > 512) cancelledCalls.delete(cancelledCalls.keys().next().value);
+    active?.controller.abort();
+    return { ok: true, result: { callId, cancelled: true, outcome: 'unknown' } };
+  }
+  if (cancelledCalls.has(`${owner}:${callId}`)) return { ok: false, code: 'SYS_ABORTED', error: 'call cancelled before dispatch' };
+  if (sysCalls.has(callId)) return { ok: false, code: 'SYS_BUSY', error: 'call already in flight' };
+  if (sysCalls.size >= 128) return { ok: false, code: 'SYS_BUSY', error: 'too many browser calls' };
+  const controller = new AbortController();
+  const maximum = request.op === 'cdp' ? SYS_CDP_TIMEOUT_MS : SYS_TIMEOUT_MS;
+  const remaining = Number.isFinite(request.deadline) ? request.deadline - now : maximum;
+  if (remaining <= 0) return { ok: false, code: 'SYS_TIMEOUT', error: 'call deadline expired before dispatch' };
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, Math.min(maximum, remaining));
+  sysCalls.set(callId, { owner, controller });
+  const aborted = new Promise((resolve) => controller.signal.addEventListener('abort', () => resolve({
+    ok: false, code: timedOut ? 'SYS_TIMEOUT' : 'SYS_ABORTED',
+    error: 'Browser call stopped; already dispatched page actions may have completed. Verify state before retrying.',
+    callId, outcome: 'unknown'
+  }), { once: true }));
+  try {
+    const result = await Promise.race([
+      dispatchWorkspaceSys({ ...request, params: { ...(request.params || {}), _signal: controller.signal } }),
+      aborted
+    ]);
+    return { ...result, callId };
+  } finally {
+    clearTimeout(timer);
+    sysCalls.delete(callId);
+    controller.abort();
+  }
+}
+
+async function dispatchWorkspaceSys(request = {}) {
   const op = String(request.op || '');
   const params = request.params && typeof request.params === 'object' ? request.params : {};
   try {
     if (op === 'help') return { ok: true, result: SYS_HELP };
+    if (op === 'capabilities') {
+      const denied = await userScriptsDenied();
+      return { ok: true, result: {
+        abi: SYS_HELP.abi,
+        userScripts: { available: !denied, reason: denied?.error || null },
+        debugger: typeof chrome.debugger?.attach === 'function',
+        screenshot: typeof chrome.tabs?.captureVisibleTab === 'function',
+        download: typeof chrome.downloads?.download === 'function',
+        limits: { fetchBytes: SYS_FETCH_BYTES_MAX, evalChars: SYS_EVAL_JSON_MAX, cdpChars: SYS_CDP_RESULT_MAX },
+        cancellation: 'Extension fetch is abortable; dispatched page/CDP side effects may have completed. Verify state before retrying.'
+      } };
+    }
     if (op === 'tabs.list') return { ok: true, result: await sysTabsList() };
     if (op === 'tabs.current') return { ok: true, result: await sysTabsCurrent(params) };
     if (op === 'tabs.frames') return { ok: true, result: await sysTabsFrames(params) };
@@ -42,7 +99,7 @@ export async function handleWorkspaceSys(request = {}) {
   } catch (error) {
     return {
       ok: false,
-      code: error?.code || 'SYS_FAILED',
+      code: sysFailureCode(error),
       error: error instanceof Error ? error.message : String(error)
     };
   }
@@ -54,7 +111,7 @@ async function sysTabsList() {
 }
 
 async function sysTabsCurrent(params) {
-  const tab = await resolveTab(params);
+  const tab = await resolveTab(params, { fallback: 'active' });
   return publicTab(tab);
 }
 
@@ -135,12 +192,17 @@ async function sysDownload(params) {
 
 async function sysScreenshot(params) {
   const tab = await resolveTab(params);
+  const [active] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+  if (active?.id !== tab.id) return { ok: false, code: 'TAB_NOT_VISIBLE', error: 'Target tab is not visible. Focus it first or use CDP Page.captureScreenshot.' };
+  params._signal?.throwIfAborted();
   const format = String(params.format || 'png').toLowerCase() === 'jpeg' ? 'jpeg' : 'png';
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
     format,
     quality: format === 'jpeg' ? 90 : undefined
   });
   const parsed = splitDataUrl(dataUrl);
+  const [after] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+  if (after?.id !== tab.id) return { ok: false, code: 'TARGET_CHANGED', error: 'Active tab changed during capture; discard this screenshot.' };
   if (!parsed) return { ok: false, code: 'SYS_FAILED', error: 'screenshot produced no image' };
   if (parsed.base64.length > SYS_CDP_RESULT_MAX) {
     return { ok: false, code: 'TOO_LARGE', error: 'screenshot exceeds cap', bytes: parsed.base64.length };
@@ -200,6 +262,7 @@ async function sysCdp(params) {
     return { ok: false, code: 'BAD_INPUT', error: 'sys.cdp method required' };
   }
   await ensureCdpAttached(debuggee);
+  params._signal?.throwIfAborted();
   const cdpParams = params.params && typeof params.params === 'object' ? params.params : {};
   let raw;
   try {
@@ -211,7 +274,7 @@ async function sysCdp(params) {
   } catch (error) {
     return {
       ok: false,
-      code: 'CDP_FAILED',
+      code: sysFailureCode(error, 'CDP_FAILED'),
       error: error instanceof Error ? error.message : String(error),
       method,
       ...publicDebuggee(debuggee)
@@ -245,12 +308,35 @@ function installCdpHooks() {
   });
   chrome.debugger.onDetach.addListener((source) => {
     const key = debuggeeKey(source);
-    if (key) cdpAttached.delete(key);
+    if (key) {
+      cdpAttached.delete(key);
+      cdpEventBuf.delete(key);
+    }
   });
 }
 
 async function resolveDebuggee(params) {
-  if (params.targetId) return { targetId: String(params.targetId) };
+  if (params.targetId) {
+    const id = String(params.targetId);
+    if (!id || id.length > 200) {
+      const err = new Error('invalid targetId');
+      err.code = 'BAD_INPUT';
+      throw err;
+    }
+    const targets = await chrome.debugger.getTargets();
+    const target = (targets || []).find((item) => item.id === id);
+    if (!target) {
+      const err = new Error(`unknown target ${id}`);
+      err.code = 'NEED_PAGE';
+      throw err;
+    }
+    if (!isCdpAttachableUrl(target.url)) {
+      const err = new Error(`target is not attachable: ${target.url || '(no url)'}`);
+      err.code = 'NEED_PAGE';
+      throw err;
+    }
+    return { targetId: id };
+  }
   const tab = await resolveTab(params);
   if (!isCdpAttachableUrl(tab.url)) {
     const err = new Error(`tab is not attachable: ${tab.url || '(no url)'}`);
@@ -263,14 +349,21 @@ async function resolveDebuggee(params) {
 async function ensureCdpAttached(debuggee) {
   const key = debuggeeKey(debuggee);
   if (cdpAttached.has(key)) return;
+  if (cdpAttaching.has(key)) return cdpAttaching.get(key);
+  const pending = attachCdp(debuggee, key);
+  cdpAttaching.set(key, pending);
+  try { await pending; }
+  finally { cdpAttaching.delete(key); }
+}
+
+async function attachCdp(debuggee, key) {
   try {
     await chrome.debugger.attach(debuggee, CDP_PROTOCOL);
     cdpAttached.add(key);
     if (!cdpEventBuf.has(key)) cdpEventBuf.set(key, []);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    if (/already attached/i.test(msg)) {
-      cdpAttached.add(key);
+    if (/Another debugger|already attached|attached/i.test(msg) && await reclaimAttachedDebugger(debuggee, key)) {
       return;
     }
     const err = new Error(msg);
@@ -279,14 +372,31 @@ async function ensureCdpAttached(debuggee) {
   }
 }
 
+/** SW memory can forget an attach that Chrome still holds. sendCommand succeeding means this extension owns the pipe. */
+async function reclaimAttachedDebugger(debuggee, key) {
+  try {
+    await chrome.debugger.sendCommand(debuggee, 'Runtime.evaluate', {
+      expression: 'void 0',
+      returnByValue: true
+    });
+    cdpAttached.add(key);
+    if (!cdpEventBuf.has(key)) cdpEventBuf.set(key, []);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function detachCdp(debuggee) {
   const key = debuggeeKey(debuggee);
+  if (cdpAttaching.has(key)) await cdpAttaching.get(key).catch(() => {});
   try {
     await chrome.debugger.detach(debuggee);
   } catch {
     /* already detached */
   }
   cdpAttached.delete(key);
+  cdpEventBuf.delete(key);
 }
 
 function debuggeeKey(debuggee) {
@@ -365,8 +475,9 @@ async function sysEval(params) {
     return { ok: false, code: 'NEED_PAGE', error: `tab is not injectable: ${tab.url || '(no url)'}` };
   }
   const world = normalizeWorld(params.world);
-  const denied = userScriptsDenied();
+  const denied = await userScriptsDenied();
   if (denied) return denied;
+  params._signal?.throwIfAborted();
   const frameId = params.frameId == null ? undefined : Number(params.frameId);
   const target = { tabId: tab.id };
   if (Number.isFinite(frameId)) target.frameIds = [frameId];
@@ -416,8 +527,9 @@ async function sysFetchAsPage(params) {
   }
   const init = sanitizeFetchInit(params.init);
   const source = wrapPageFetchSource(url.href, init);
-  const denied = userScriptsDenied();
+  const denied = await userScriptsDenied();
   if (denied) return denied;
+  params._signal?.throwIfAborted();
   const frameId = params.frameId == null ? undefined : Number(params.frameId);
   const target = { tabId: tab.id };
   if (Number.isFinite(frameId)) target.frameIds = [frameId];
@@ -450,18 +562,15 @@ async function sysFetchAsExtension(params) {
   }
   const init = sanitizeFetchInit(params.init);
   const method = String(init.method || 'GET').toUpperCase();
-  const res = await withTimeout(
-    fetch(parsed.href, {
+  const res = await fetch(parsed.href, {
       method,
       headers: init.headers,
       body: init.body,
       credentials: 'omit',
-      redirect: 'follow'
-    }),
-    SYS_TIMEOUT_MS,
-    'sys.fetch(extension) timed out'
-  );
-  const bytes = method === 'HEAD' ? new Uint8Array() : new Uint8Array(await res.arrayBuffer());
+      redirect: 'follow',
+      signal: params._signal
+    });
+  const bytes = method === 'HEAD' ? new Uint8Array() : await readResponseBytes(res, SYS_FETCH_BYTES_MAX);
   if (bytes.byteLength > SYS_FETCH_BYTES_MAX) {
     return {
       ok: false,
@@ -486,24 +595,33 @@ async function sysFetchAsExtension(params) {
   };
 }
 
-async function resolveTab(params) {
+async function resolveTab(params, opts = {}) {
+  params._signal?.throwIfAborted();
   const id = Number(params.tabId ?? params.defaultTabId);
   if (Number.isFinite(id) && id > 0) {
     try {
-      return await chrome.tabs.get(id);
+      const tab = await chrome.tabs.get(id);
+      params._signal?.throwIfAborted();
+      return tab;
     } catch {
       const err = new Error(`unknown tab ${id}`);
       err.code = 'NEED_PAGE';
       throw err;
     }
   }
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!tab?.id) {
-    const err = new Error('no active tab');
-    err.code = 'NEED_PAGE';
-    throw err;
+  if (opts.fallback === 'active') {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    params._signal?.throwIfAborted();
+    if (!tab?.id) {
+      const err = new Error('no active tab');
+      err.code = 'NEED_PAGE';
+      throw err;
+    }
+    return tab;
   }
-  return tab;
+  const err = new Error('tabId required');
+  err.code = 'NEED_PAGE';
+  throw err;
 }
 
 function publicTab(tab) {
@@ -525,18 +643,10 @@ function publicTab(tab) {
 }
 
 export function isSysInjectableUrl(url) {
-  const s = String(url || '');
-  if (isInjectableTabUrl(s)) return true;
-  if (!isPawWorkTabUrl(s)) return false;
-  try {
-    const u = new URL(s);
-    return u.protocol === 'chrome-extension:' && u.hostname === chrome.runtime.id;
-  } catch {
-    return false;
-  }
+  return isInjectableTabUrl(url);
 }
 
-function userScriptsDenied() {
+async function userScriptsDenied() {
   try {
     if (typeof chrome.userScripts?.getScripts !== 'function') {
       return {
@@ -545,7 +655,7 @@ function userScriptsDenied() {
         error: 'chrome.userScripts unavailable (need userScripts permission and Chrome 120+; execute needs 135+)'
       };
     }
-    chrome.userScripts.getScripts();
+    await chrome.userScripts.getScripts();
   } catch {
     return {
       ok: false,
@@ -600,15 +710,14 @@ function wrapPageFetchSource(href, init) {
   });
   return [
     '(async function() {',
+    '  var controller = new AbortController();',
+    `  var timer = setTimeout(function() { controller.abort(); }, ${SYS_TIMEOUT_MS});`,
     '  try {',
     `    var url = ${hrefJson};`,
     `    var init = ${initJson};`,
+    '    init.signal = controller.signal;',
     '    var res = await fetch(url, init);',
-    '    var buf = await res.arrayBuffer();',
-    `    if (buf.byteLength > ${SYS_FETCH_BYTES_MAX}) {`,
-    '      return { ok: false, code: "TOO_LARGE", status: res.status, bytes: buf.byteLength };',
-    '    }',
-    '    var bytes = new Uint8Array(buf);',
+    `    var bytes = await (${readResponseBytes.toString()})(res, ${SYS_FETCH_BYTES_MAX});`,
     '    var binary = "";',
     '    var chunk = 0x8000;',
     '    for (var i = 0; i < bytes.length; i += chunk) {',
@@ -622,8 +731,8 @@ function wrapPageFetchSource(href, init) {
     '      headers: headers, base64: btoa(binary), bytes: bytes.byteLength',
     '    }};',
     '  } catch (e) {',
-    '    return { ok: false, code: "FETCH_FAILED", error: String(e && e.message || e) };',
-    '  }',
+    '    return { ok: false, code: e.code || (controller.signal.aborted ? "SYS_TIMEOUT" : "FETCH_FAILED"), error: String(e && e.message || e) };',
+    '  } finally { clearTimeout(timer); }',
     '})()'
   ].join('\n');
 }
@@ -663,11 +772,49 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+// Self-contained: also serialized into the page-world fetch wrapper.
+export async function readResponseBytes(response, limit) {
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        throw Object.assign(new Error(`Response exceeds ${limit} bytes`), { code: 'TOO_LARGE' });
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return bytes;
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function isAbortLike(error) {
+  return error?.name === 'AbortError' || error?.name === 'TimeoutError';
+}
+
+function sysFailureCode(error, fallback = 'SYS_FAILED') {
+  if (isAbortLike(error)) return 'SYS_ABORTED';
+  if (typeof error?.code === 'string' && error.code) return error.code;
+  return fallback;
+}
+
 function withTimeout(promise, ms, message) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       const err = new Error(message);
-      err.code = 'SYS_FAILED';
+      err.code = 'SYS_TIMEOUT';
       reject(err);
     }, ms);
     Promise.resolve(promise)

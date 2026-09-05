@@ -18,6 +18,21 @@ import {
 
 const PAWWORK_OFFSCREEN_URL = 'src/offscreen/runtime.html';
 let pawworkOffscreenCreating = null;
+
+function isPawWorkOffscreenSender(sender) {
+  if (!sender || sender.id !== chrome.runtime.id) return false;
+  const expected = chrome.runtime.getURL(PAWWORK_OFFSCREEN_URL);
+  const actual = String(sender.url || '');
+  if (actual === expected) return true;
+  try {
+    const a = new URL(actual);
+    const e = new URL(expected);
+    return a.origin === e.origin && a.pathname === e.pathname;
+  } catch {
+    return false;
+  }
+}
+
 async function ensurePawWorkOffscreen() {
   if (!chrome.offscreen) throw new Error('chrome.offscreen unavailable');
   const offscreenUrl = chrome.runtime.getURL(PAWWORK_OFFSCREEN_URL);
@@ -42,12 +57,11 @@ async function ensurePawWorkOffscreen() {
   return pawworkOffscreenCreating;
 }
 function isTransientOffscreenRpcError(err, response) {
-  if (response == null) return true;
+  if (!err) return false;
   const msg = String(err?.message || err || response?.error || '');
   return (
     /Receiving end does not exist/i.test(msg) ||
-    /Could not establish connection/i.test(msg) ||
-    /The message port closed/i.test(msg)
+    /Could not establish connection/i.test(msg)
   );
 }
 
@@ -64,7 +78,8 @@ async function forwardWorkspaceRpc(request) {
     try {
       const response = await chrome.runtime.sendMessage(payload);
       if (response && typeof response === 'object') return response;
-      lastErr = new Error('empty offscreen rpc response');
+      // A missing result is not proof that a write or agent turn never ran.
+      throw Object.assign(new Error('Workspace RPC result is unknown; inspect state before retrying.'), { code: 'RPC_OUTCOME_UNKNOWN' });
     } catch (err) {
       lastErr = err;
       if (!isTransientOffscreenRpcError(err, null)) throw err;
@@ -1358,16 +1373,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request?.target === 'pawwork-background' && request?.action === 'workspace_sys') {
+    if (!isPawWorkOffscreenSender(sender)) {
+      sendResponse({ ok: false, code: 'SYS_DENIED', error: 'browser sys requires the offscreen runtime' });
+      return false;
+    }
     handleWorkspaceSys(request)
       .then((result) => sendResponse(result))
-      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error), code: error?.code || 'SYS_FAILED' }));
+      .catch((error) => sendResponse({
+        ok: false,
+        error: error?.message || String(error),
+        code: typeof error?.code === 'string' ? error.code : 'SYS_FAILED'
+      }));
     return true;
   }
 
   if (request?.target === 'pawwork-background' && request?.action === 'workspace_rpc') {
     forwardWorkspaceRpc(request)
       .then((result) => sendResponse(result))
-      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
+      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error), code: error?.code || 'WORKSPACE_FAILED' }));
     return true;
   }
 

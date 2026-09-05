@@ -15,6 +15,7 @@ const DEFAULT_DB_NAME = 'pawwork-session-workspace-v1';
 const IDB_STORE = 'state';
 const STATE_KEY = 'session-workspace';
 const META_KEY = 'workspace-meta';
+const BLOBS_KEY = 'workspace-inline-blobs';
 const COLLECTION_NAMES = [
   'sessions',
   'groups',
@@ -67,6 +68,7 @@ export class DurableSessionWorkspaceStore extends SessionWorkspaceStore {
       if (loaded?.snapshot) {
         this.importSnapshot(loaded.snapshot);
         this._blobManifest = loaded.blobManifest || {};
+        if (loaded.legacy) for (const name of COLLECTION_NAMES) this._dirtyCollections.add(name);
       }
     } else {
       const snap = memoryBackends.get(this.dbName);
@@ -184,7 +186,10 @@ export class DurableSessionWorkspaceStore extends SessionWorkspaceStore {
     if (this._flushTimer) clearTimeout(this._flushTimer);
     this._flushTimer = setTimeout(() => {
       this._flushTimer = null;
-      void this.flush();
+      void this.flush().catch((error) => {
+        // Keep pending mutations for an explicit retry or the next edit.
+        console.error('[workspace] background persistence failed', error);
+      });
     }, 40);
   }
 
@@ -197,66 +202,96 @@ export class DurableSessionWorkspaceStore extends SessionWorkspaceStore {
       clearTimeout(this._flushTimer);
       this._flushTimer = null;
     }
-    this._flushPromise = this._flushPromise.then(async () => {
+    this._flushPromise = this._flushPromise.catch(() => {}).then(async () => {
       const snapshot = this.exportSnapshot();
+      for (const name of COLLECTION_NAMES) snapshot[name] = structuredCloneSafe(snapshot[name]);
+      const snapshotBlobs = new Map(snapshot.blobs);
       const dirtyCols = takeSet(this._dirtyCollections);
-
-      if (this._db) {
-        /** @type {Record<string, any>} */
-        let blobManifest = { ...this._blobManifest };
-        const dirty = takeSet(this._dirtyBlobs);
-        const deleted = takeSet(this._deletedBlobs);
-
-        if (this._opfs) {
-          for (const key of dirty) {
-            const rec = super.getBlob(key);
-            if (!rec) {
-              delete blobManifest[key];
-              continue;
+      const dirty = takeSet(this._dirtyBlobs);
+      const deleted = takeSet(this._deletedBlobs);
+      const createdPaths = [];
+      const retiredPaths = [];
+      try {
+        if (this._db) {
+          /** @type {Record<string, any>} */
+          let blobManifest = { ...this._blobManifest };
+          if (this._opfs) {
+            // Migrate inline/legacy bytes too; never discard them when OPFS returns.
+            for (const [key] of snapshot.blobs) {
+              if (!blobManifest[key] && !dirty.includes(key)) dirty.push(key);
             }
-            const path = blobManifest[key]?.path || `session-blobs/${encodeKey(key)}.bin`;
-            await writeOpfsFile(this._opfs, path, rec.bytes);
-            blobManifest[key] = {
-              path,
-              mimeType: rec.mimeType,
-              size: rec.bytes.byteLength
-            };
+            for (const key of dirty) {
+              const saved = snapshotBlobs.get(key);
+              const rec = saved && { ...saved, bytes: new Uint8Array(saved.bytes) };
+              if (!rec) {
+                delete blobManifest[key];
+                continue;
+              }
+              const previous = blobManifest[key]?.path;
+              const path = `session-blobs/${encodeKey(key)}-${crypto.randomUUID()}.bin`;
+              createdPaths.push(path);
+              await writeOpfsFile(this._opfs, path, rec.bytes);
+              if (previous) retiredPaths.push(previous);
+              blobManifest[key] = {
+                path,
+                mimeType: rec.mimeType,
+                size: rec.bytes.byteLength
+              };
+            }
+            for (const key of deleted) {
+              const old = this._blobManifest[key];
+              if (old?.path) retiredPaths.push(old.path);
+              delete blobManifest[key];
+            }
+            snapshot.blobs = [];
+          } else {
+            // Preserve unavailable OPFS references instead of silently erasing them.
+            // New/changed bytes are saved inline until OPFS becomes available again.
+            for (const key of [...dirty, ...deleted]) delete blobManifest[key];
           }
-          for (const key of deleted) {
-            const old = this._blobManifest[key];
-            if (old?.path) await removeOpfsFile(this._opfs, old.path).catch(() => {});
-            delete blobManifest[key];
+          const records = [];
+          const names = dirtyCols.length ? dirtyCols : COLLECTION_NAMES;
+          for (const name of names) {
+            if (!COLLECTION_NAMES.includes(name)) continue;
+            records.push([collectionKey(name), snapshot[name] || []]);
           }
-          snapshot.blobs = [];
+          records.push([BLOBS_KEY, snapshot.blobs]);
+          records.push([META_KEY, {
+            format: 2,
+            version: 2,
+            savedAt: Date.now(),
+            blobManifest
+          }]);
+          await idbCommit(this._db, records, [STATE_KEY]);
           this._blobManifest = blobManifest;
         } else {
-          blobManifest = {};
-          this._blobManifest = {};
+          // Node / test memory backend — full snapshot including blob bytes
+          memoryBackends.set(this.dbName, structuredCloneSafe(snapshot));
         }
 
-        const names = dirtyCols.length ? dirtyCols : COLLECTION_NAMES;
-        for (const name of names) {
-          if (!COLLECTION_NAMES.includes(name)) continue;
-          await idbPut(this._db, collectionKey(name), snapshot[name] || []);
+        this._dirty = Boolean(this._dirtyCollections.size || this._dirtyBlobs.size || this._deletedBlobs.size);
+      } catch (error) {
+        for (const name of dirtyCols) this._dirtyCollections.add(name);
+        for (const key of dirty) if (!this._deletedBlobs.has(key)) this._dirtyBlobs.add(key);
+        for (const key of deleted) if (!this._dirtyBlobs.has(key)) this._deletedBlobs.add(key);
+        this._dirty = true;
+        if (this._opfs) {
+          await Promise.all(createdPaths.map((path) => removeOpfsFile(this._opfs, path).catch(() => {})));
         }
-        await idbPut(this._db, META_KEY, {
-          format: 2,
-          version: 2,
-          savedAt: Date.now(),
-          blobManifest
-        });
-        await idbDelete(this._db, STATE_KEY).catch(() => {});
-      } else {
-        // Node / test memory backend — full snapshot including blob bytes
-        memoryBackends.set(this.dbName, structuredCloneSafe(snapshot));
+        throw error;
       }
-
-      this._dirty = false;
+      // Old bytes remain valid until the metadata transaction has committed.
+      if (this._opfs) {
+        await Promise.all(retiredPaths.map((path) => removeOpfsFile(this._opfs, path).catch(() => {})));
+      }
     });
     return this._flushPromise;
   }
 
   async clearDurable() {
+    if (this._flushTimer) clearTimeout(this._flushTimer);
+    this._flushTimer = null;
+    await this._flushPromise.catch(() => {});
     super.importSnapshot({
       sessions: [],
       groups: [],
@@ -271,12 +306,9 @@ export class DurableSessionWorkspaceStore extends SessionWorkspaceStore {
     this._blobManifest = {};
     this._dirtyBlobs.clear();
     this._deletedBlobs.clear();
+    this._dirtyCollections.clear();
     if (this._db) {
-      await idbDelete(this._db, STATE_KEY).catch(() => {});
-      await idbDelete(this._db, META_KEY).catch(() => {});
-      for (const name of COLLECTION_NAMES) {
-        await idbDelete(this._db, collectionKey(name)).catch(() => {});
-      }
+      await idbCommit(this._db, [], [STATE_KEY, META_KEY, BLOBS_KEY, ...COLLECTION_NAMES.map(collectionKey)]);
     }
     memoryBackends.delete(this.dbName);
     if (this._opfs) await removeOpfsTree(this._opfs, 'session-blobs').catch(() => {});
@@ -316,11 +348,12 @@ async function loadIdbWorkspace(db) {
       const rows = await idbGet(db, collectionKey(name));
       if (Array.isArray(rows)) snapshot[name] = rows;
     }
+    snapshot.blobs = (await idbGet(db, BLOBS_KEY)) || [];
     return { snapshot, blobManifest: meta.blobManifest || {} };
   }
   const legacy = await idbGet(db, STATE_KEY);
   if (legacy?.snapshot) {
-    return { snapshot: legacy.snapshot, blobManifest: legacy.blobManifest || {} };
+    return { snapshot: legacy.snapshot, blobManifest: legacy.blobManifest || {}, legacy: true };
   }
   return null;
 }
@@ -356,22 +389,20 @@ function idbGet(db, key) {
   });
 }
 
-function idbPut(db, key, value) {
+function idbCommit(db, records, deletedKeys = []) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, 'readwrite');
-    tx.objectStore(IDB_STORE).put(value, key);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error || new Error('IndexedDB put failed'));
     tx.onabort = () => reject(tx.error || new Error('IndexedDB put aborted'));
-  });
-}
-
-function idbDelete(db, key) {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(IDB_STORE, 'readwrite');
-    tx.objectStore(IDB_STORE).delete(key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error || new Error('IndexedDB delete failed'));
+    try {
+      const target = tx.objectStore(IDB_STORE);
+      for (const [key, value] of records) target.put(value, key);
+      for (const key of deletedKeys) target.delete(key);
+    } catch (error) {
+      tx.abort();
+      reject(error);
+    }
   });
 }
 

@@ -34,6 +34,8 @@ Desktop.ini
 # Logs / caches
 *.log
 .cache/
+output/playwright/*-profile/
+.playwright-cli/
 
 # If someone later runs a pack script, keep output out of git
 artifacts/

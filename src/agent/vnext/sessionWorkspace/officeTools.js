@@ -507,6 +507,7 @@ export function createOfficeTools(env) {
             ) {
               if (body.json) {
                 updateArtifactContent(store, fs, sessionId, artifactId, body.json, {
+                  expectedRevision: Number(rec.revision) || 0,
                   mimeType: 'application/json'
                 });
               }
@@ -582,7 +583,7 @@ export function createOfficeTools(env) {
             clean
           );
         }
-        updateArtifactContent(store, fs, sessionId, artifactId, applied.json, { mimeType: 'application/json' });
+        updateArtifactContent(store, fs, sessionId, artifactId, applied.json, { mimeType: 'application/json', expectedRevision: Number(rec.revision) || 0 });
         if (onEvent) {
           try {
             onEvent({ type: 'html_canvas_updated', sessionId, artifactId });
@@ -713,7 +714,7 @@ export function createOfficeTools(env) {
         );
       }
       const payload = serializeUniverDoc(applied.univer);
-      updateArtifactContent(store, fs, sessionId, artifactId, payload, { mimeType: 'application/json' });
+      updateArtifactContent(store, fs, sessionId, artifactId, payload, { mimeType: 'application/json', expectedRevision: Number(rec.revision) || 0 });
       return speakOfficeApplyResult(
         {
           ok: true,
@@ -889,7 +890,7 @@ export function createOfficeTools(env) {
       if (applied.ok === false) {
         return speakOfficeApplyResult({ ...applied, artifactId }, commands);
       }
-      updateArtifactContent(store, fs, sessionId, artifactId, applied.html, { mimeType: 'text/html' });
+      updateArtifactContent(store, fs, sessionId, artifactId, applied.html, { mimeType: 'text/html', expectedRevision: Number(rec.revision) || 0 });
       if (onEvent) {
         try {
           onEvent({ type: 'html_canvas_updated', sessionId, artifactId });
@@ -1256,6 +1257,7 @@ function persistWorkbook(store, fs, sessionId, artifactId, rec, applied, kind) {
   const delim = kind === 'tsv' ? '\t' : ',';
   const rows = applied.sheets?.[0]?.rows || [];
   updateArtifactContent(store, fs, sessionId, artifactId, aoaToCsv(rows, delim), {
+    expectedRevision: Number(rec.revision) || 0,
     mimeType: rec.mimeType
   });
 }

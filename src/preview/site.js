@@ -61,6 +61,9 @@ const sessionId = qs('sessionId');
 const artifactId = qs('artifactId') || (qs('ids') || '').split(',')[0] || '';
 
 let lastHtml = '';
+let savedHtml = '';
+let artifactRevision = 0;
+let saveQueue = Promise.resolve();
 let selectedIds = [];
 let fileName = 'site.html';
 let ignorePatchUntil = 0;
@@ -335,11 +338,19 @@ function bootMotion(doc) {
   }
 }
 
-async function persistNow() {
+function persistNow() {
+  const html = lastHtml;
+  saveQueue = saveQueue.catch(() => false).then(() => persistHtml(html));
+  return saveQueue;
+}
+
+async function persistHtml(html) {
   if (!sessionId || !artifactId) return false;
   ignorePatchUntil = Date.now() + 2500;
   try {
-    const saved = await workspaceRpc('updateArtifact', { sessionId, artifactId, content: lastHtml });
+    const saved = await workspaceRpc('updateArtifact', { sessionId, artifactId, content: html, expectedRevision: artifactRevision });
+    artifactRevision = Number(saved?.artifact?.revision) || artifactRevision;
+    savedHtml = html;
     canUndo = saved?.artifact?.canUndo !== false;
     setUndoChrome();
     setStatus('已保存');
@@ -363,11 +374,13 @@ function downloadHtml() {
 async function loadFromStore() {
   if (!sessionId || !artifactId) throw new Error('缺少 sessionId 或交付物 id');
   const rec = await workspaceRpc('readArtifact', { sessionId, artifactId });
+  artifactRevision = Number(rec?.artifact?.revision) || 0;
   fileName = rec?.artifact?.name || rec?.name || 'site.html';
   const titleEl = document.getElementById('title');
   if (titleEl) titleEl.textContent = fileName;
   document.title = `${fileName} · 网页`;
   const raw = rec?.content != null ? String(rec.content) : '';
+  savedHtml = raw;
   canUndo = rec?.artifact?.canUndo === true;
   setUndoChrome();
   const stamped = stampSiteHtml(raw);
@@ -379,6 +392,10 @@ async function loadFromStore() {
 async function applyPatchFromStore() {
   if (!sessionId || !artifactId) return false;
   if (Date.now() < ignorePatchUntil) return true;
+  if (lastHtml !== savedHtml) {
+    setStatus('有未保存的本地修改；请先下载副本，再重新载入。');
+    return false;
+  }
   try {
     const rec = await workspaceRpc('readArtifact', { sessionId, artifactId });
     const raw = rec?.content != null ? String(rec.content) : '';
@@ -386,9 +403,15 @@ async function applyPatchFromStore() {
     canUndo = rec?.artifact?.canUndo === true;
     setUndoChrome();
     const stamped = stampSiteHtml(raw);
-    if (stamped === lastHtml) return true;
+    if (stamped === lastHtml) {
+      artifactRevision = Number(rec?.artifact?.revision) || 0;
+      savedHtml = stamped;
+      return true;
+    }
     const painted = await rewriteForPreview(stamped);
     renderHtml(stamped, painted);
+    artifactRevision = Number(rec?.artifact?.revision) || 0;
+    savedHtml = stamped;
     return true;
   } catch (e) {
     setStatus(e instanceof Error ? e.message : '同步失败');

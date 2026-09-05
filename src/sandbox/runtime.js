@@ -61,7 +61,7 @@ window.addEventListener('message', async (event) => {
     if (!pending) return;
     sysPending.delete(msg.requestId);
     if (msg.ok) pending.resolve(msg.value);
-    else pending.reject(new Error(msg.error || 'sys request failed'));
+    else pending.reject(Object.assign(new Error(msg.error || 'sys request failed'), { code: msg.code || 'SYS_FAILED' }));
     return;
   }
 
@@ -97,6 +97,13 @@ window.addEventListener('message', async (event) => {
     }, '*');
   } finally {
     controllers.delete(msg.runId);
+    for (const pendingMap of [fsPending, sysPending]) {
+      for (const [id, pending] of pendingMap) {
+        if (!id.startsWith(`${msg.runId}:`)) continue;
+        pendingMap.delete(id);
+        pending.reject(Object.assign(new Error('run finished'), { code: 'SYS_ABORTED' }));
+      }
+    }
   }
 });
 

@@ -53,6 +53,7 @@ import {
 } from '../sessionWorkspace/skillStore.js';
 import { getSkill, listPackagedSkillCatalog } from '../skills/registry.js';
 import { answerClarify, abortSessionClarifies } from '../sessionWorkspace/clarifyGate.js';
+import { callBrowserSys } from '../host/sysClient.js';
 import { createUserStopError } from '../host/userStop.js';
 import {
   allocateLabelN,
@@ -658,6 +659,9 @@ export class SessionWorkspaceService {
     reasoning = null
   } = {}) {
     this.ensureSession(sessionId);
+    if (this._activeBySession.has(sessionId)) {
+      throw Object.assign(new Error('This session already has an active execution.'), { code: 'SESSION_BUSY' });
+    }
     if (role === 'user' && Array.isArray(attachments) && attachments.length) {
       // Attachments: create/bind group so inspect can authorize + multimodal works
       let gid = this._sessionActiveGroupId(sessionId);
@@ -789,16 +793,16 @@ export class SessionWorkspaceService {
             sessionId,
             url
           }),
-        hostSys: (op, params) =>
-          chrome.runtime.sendMessage({
-            target: 'pawwork-background',
-            action: 'workspace_sys',
+        hostSys: (op, params, context = {}) =>
+          callBrowserSys({
             sessionId,
+            executionId: this._activeBySession.get(sessionId)?.executionId,
+            signal: context.signal || controller.signal,
+            deadline: context.deadline,
             op,
             params: {
               ...(params && typeof params === 'object' ? params : {}),
-              tabId: params?.tabId ?? activeTab?.tabId ?? activeTab?.id,
-              defaultTabId: params?.defaultTabId ?? activeTab?.tabId ?? activeTab?.id
+              defaultTabId: params?.defaultTabId ?? params?.tabId ?? activeTab?.tabId ?? activeTab?.id
             }
           }),
         signal: controller.signal,
@@ -827,7 +831,7 @@ export class SessionWorkspaceService {
       await this._persist();
       return result;
     } finally {
-      this._activeBySession.delete(sessionId);
+      if (this._activeBySession.get(sessionId)?.controller === controller) this._activeBySession.delete(sessionId);
       for (const [eid, c] of [...this._activeByExecution.entries()]) {
         if (c === controller) this._activeByExecution.delete(eid);
       }
@@ -1014,7 +1018,7 @@ export class SessionWorkspaceService {
     return out;
   }
 
-  async updateArtifact({ sessionId = 'default', artifactId, content, mimeType, base64, name } = {}) {
+  async updateArtifact({ sessionId = 'default', artifactId, content, mimeType, base64, name, expectedRevision } = {}) {
     this.ensureSession(sessionId);
     const fs = createSessionGuestFs(this.runtime.store, { sessionId, executionId: null });
     const rec = updateArtifactContent(
@@ -1023,7 +1027,7 @@ export class SessionWorkspaceService {
       sessionId,
       artifactId,
       bytesFromRpcContent({ content, base64 }),
-      { mimeType, name }
+      { mimeType, name, expectedRevision }
     );
     await this._persist();
     return { ok: true, artifact: rec };

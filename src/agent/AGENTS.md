@@ -41,6 +41,7 @@ sidepanel workspaceRpc('sendMessage')
 | 调用 | 作用 |
 |------|------|
 | `sys.help()` / `inspect view=sys` | ABI 目录（`pawwork-sys-v1`） |
+| `sys.capabilities()` | 实时探测用户脚本、debugger、截图、下载可用性与大小限制 |
 | `sys.tabs.list` / `current` / `frames` | 标签与 frame（进程表） |
 | `sys.tabs.open` / `navigate` / `reload` / `close` / `focus` | 进程控制（已有 `tabs` 权限） |
 | `sys.eval({ world, code, tabId, frameId })` | `code` 是 async 函数体。`MAIN` = 页面 JS 堆；`USER` = 自有世界 + DOM |
@@ -48,7 +49,11 @@ sidepanel workspaceRpc('sendMessage')
 | `sys.cdp` | CDP 管道：`{ method, params }` 自动 attach；`action: attach\|detach\|events\|targets` |
 | `sys.download` / `sys.screenshot` | 下载出口与视口合成截图（已有权限） |
 
-`eval` / page `fetch` 走 `chrome.userScripts.execute`。`sys.cdp` 走 `chrome.debugger`（一条管道，不是网络/PDF 产品）。DevTools 已挂上时会 `CDP_BUSY`。返回值必须能 JSON 序列化。
+`eval` / page `fetch` 走 `chrome.userScripts.execute`。`sys.cdp` 走 `chrome.debugger`（一条管道，不是网络/PDF 产品）。DevTools 已挂上时会 `CDP_BUSY`。返回值必须能 JSON 序列化。`eval` / page `fetch` / `cdp` 只允许 http(s) 可注入页；扩展预览页返回 `NEED_PAGE`（MAIN world 不能碰到 `chrome.*`）。除 `tabs.current` 外，未带 `tabId`/`defaultTabId` 也是 `NEED_PAGE`。`SYS_ABORTED` / `SYS_TIMEOUT` 表示等待结束，不表示副作用已撤销。可见标签截图失败为 `TAB_NOT_VISIBLE` / `TARGET_CHANGED`。`targetId` 会先经 `getTargets` 校验 URL。
+
+`sys.fetch` / `sys.screenshot` 可传 `saveTo: '/scratch/…' | '/artifacts/…'`：宿主写入 guest FS，返回文件回执；`run` 登记交付物。调用携带身份与截止时间，错误保留 `code`。停止可中止扩展 fetch，但已派发的页面/CDP 副作用可能已发生，超时后需查证状态。
+
+Artifact 具有 `revision`；`updateArtifact` 可携带 `expectedRevision`，不同内容的过期写入返回 `ARTIFACT_CONFLICT`。四种编辑器与常用 office 写入路径已接入；raw guest 写主文件推进 revision，但仍不是带读版本的条件写入。
 
 模型可见面：没有单独的 `sys` 工具。ISA 写在 `run` 的 description / `code` 字段说明（`SYS_MODEL_HINT`）、`inspect.view` enum 含 `sys`、每轮 world 有 `browserSys=pawwork-sys-v1`。完整目录仍是 `inspect view=sys` 或 guest `sys.help()`。
 

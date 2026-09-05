@@ -67,6 +67,7 @@ export function createArtifact(store, fs, input) {
     mimeType,
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    revision: 1,
     size: bytes.byteLength
   };
   const displayLabel = String(input.displayLabel || '').trim();
@@ -115,7 +116,7 @@ export function writePackageFile(store, fs, input) {
  * @param {string} sessionId
  * @param {string} artifactId
  * @param {string|Uint8Array|number[]} content
- * @param {{ mimeType?: string, name?: string }} [opts]
+ * @param {{ mimeType?: string, name?: string, expectedRevision?: number }} [opts]
  */
 export function updateArtifactContent(store, fs, sessionId, artifactId, content, opts = {}) {
   const gate = assertArtifactOwned(store, sessionId, artifactId);
@@ -128,6 +129,17 @@ export function updateArtifactContent(store, fs, sessionId, artifactId, content,
   const bytes = coerceBytes(content);
   const name = String(opts.name || rec.name || artifactId);
   const mimeType = opts.mimeType || rec.mimeType;
+  const revision = Number(rec.revision) || 0;
+  if (opts.expectedRevision != null && Number(opts.expectedRevision) !== revision) {
+    // A previous write may have committed but lost its response. Identical
+    // retries are safe, including retrying persistence after a disk failure.
+    const current = fs.readFileBytes(rec.primaryPath);
+    if (name === rec.name && mimeType === rec.mimeType && current.length === bytes.length &&
+      current.every((value, i) => value === bytes[i])) return rec;
+    throw Object.assign(new Error(`ARTIFACT_CONFLICT: expected revision ${opts.expectedRevision}, current ${revision}. Local edits were not written; reopen or save a copy before resolving.`), {
+      code: 'ARTIFACT_CONFLICT', expectedRevision: opts.expectedRevision, actualRevision: revision
+    });
+  }
   const check = validateArtifactBytes(name, bytes, mimeType);
   if (!check.valid) {
     const err = new Error(`ARTIFACT_TRUTH: ${check.error}`);
@@ -147,7 +159,8 @@ export function updateArtifactContent(store, fs, sessionId, artifactId, content,
     mimeType: check.mimeType,
     updatedAt: Date.now(),
     size: bytes.byteLength,
-    canUndo: true
+    canUndo: true,
+    revision: revision + 1
   };
   store.put('artifacts', artifactId, next);
   reindexArtifacts(store, rec.sessionId);
@@ -200,7 +213,8 @@ export function revertArtifactContent(store, fs, sessionId, artifactId) {
     ...rec,
     updatedAt: Date.now(),
     size: blob.bytes.byteLength,
-    canUndo: !!(current && current.byteLength)
+    canUndo: !!(current && current.byteLength),
+    revision: (Number(rec.revision) || 0) + 1
   };
   store.put('artifacts', artifactId, next);
   reindexArtifacts(store, rec.sessionId);

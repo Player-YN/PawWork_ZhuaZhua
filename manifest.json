@@ -88,5 +88,5 @@
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
     "sandbox": "sandbox allow-scripts; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; object-src 'self';"
   },
-  "minimum_chrome_version": "115"
+  "minimum_chrome_version": "135"
 }

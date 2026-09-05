@@ -86,7 +86,8 @@ export async function repairSessionToolCall(model, opts = {}) {
           .join('\n')
       }
     ],
-    tools
+    tools,
+    abortSignal: opts.abortSignal
   });
   const repaired = Array.isArray(result?.toolCalls) ? result.toolCalls[0] : null;
   if (!repaired) return null;
@@ -154,7 +155,7 @@ export async function runSessionToolLoopAgent(args) {
     instructions: args.system || '',
     tools: sdkTools,
     stopWhen: neverStopOnStepCount,
-    repairToolCall: (opts) => repairSessionToolCall(model, opts),
+    repairToolCall: (opts) => repairSessionToolCall(model, { ...opts, abortSignal: args.signal }),
     onError: ({ error }) => {
       emitSerializedError(error);
     },

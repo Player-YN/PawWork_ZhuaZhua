@@ -49,6 +49,10 @@ let fileName = 'document.html';
 let mimeType = DOC_MIME;
 let saveTimer = 0;
 let saving = false;
+let savePromise = null;
+let saveRequested = false;
+let editRevision = 0;
+let artifactRevision = 0;
 let applying = false;
 let dirty = false;
 /** @type {{ title: string, blocks: object[] }} */
@@ -176,22 +180,35 @@ function currentOverview() {
 }
 
 async function saveNow(reason = 'save') {
-  if (saving) return;
+  saveRequested = true;
+  if (saving) return savePromise;
   saving = true;
+  savePromise = drainSaves(reason);
+  return savePromise;
+}
+
+async function drainSaves(reason) {
   setSaveState('is-busy', '写入中…');
   setStatus('写入中…');
   try {
-    const data = normalizeUniverDoc(await durableLiveDocument(), { id: unitId(), title: fileName });
-    if (!data.id) data.id = unitId();
-    durableData = data;
-    durableSnapshot = univerDataToSnapshot(data, { title: data.title || fileName });
-    await workspaceRpc('updateArtifact', {
-      sessionId,
-      artifactId,
-      mimeType: 'application/json',
-      content: serializeUniverDoc(data)
-    });
-    dirty = false;
+    while (saveRequested) {
+      saveRequested = false;
+      const revision = editRevision;
+      const data = normalizeUniverDoc(await durableLiveDocument(), { id: unitId(), title: fileName });
+      if (!data.id) data.id = unitId();
+      durableData = data;
+      durableSnapshot = univerDataToSnapshot(data, { title: data.title || fileName });
+      const saved = await workspaceRpc('updateArtifact', {
+        sessionId,
+        artifactId,
+        expectedRevision: artifactRevision,
+        mimeType: 'application/json',
+        content: serializeUniverDoc(data)
+      });
+      artifactRevision = Number(saved?.artifact?.revision) || artifactRevision;
+      dirty = editRevision !== revision;
+      if (dirty) saveRequested = true;
+    }
     setStatus(reason === 'autosave' ? '已自动保存' : `已写入工作区 · ${fileName}`);
     setSaveState('is-done', '已写入');
     try {
@@ -205,9 +222,12 @@ async function saveNow(reason = 'save') {
       /* sidepanel may be closed */
     }
     window.setTimeout(() => setSaveState('', '保存'), 1400);
+    return { ok: true };
   } catch (e) {
+    dirty = true;
     setSaveState('', '保存');
     setStatus(e instanceof Error ? e.message : '写入失败');
+    return { ok: false, error: e instanceof Error ? e.message : '写入失败' };
   } finally {
     saving = false;
   }
@@ -215,7 +235,9 @@ async function saveNow(reason = 'save') {
 
 function scheduleSave() {
   if (applying) return;
+  editRevision += 1;
   dirty = true;
+  if (saving) saveRequested = true;
   setStatus('未保存');
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => void saveNow('autosave'), 900);
@@ -281,7 +303,8 @@ async function executeDocsRpc(msg) {
         return { ok: false, error: snap.error || 'apply failed', overview: reportState() };
       }
       paintSnapshot(snap.snapshot);
-      await saveNow('autosave');
+      const saved = await saveNow('autosave');
+      if (!saved?.ok) return { ok: false, error: saved?.error || 'document save failed', overview: reportState() };
       const overview = reportState();
       return {
         ok: true,
@@ -568,6 +591,7 @@ async function main() {
   wireBar();
   try {
     const rec = await workspaceRpc('readArtifact', { sessionId, artifactId });
+    artifactRevision = Number(rec?.artifact?.revision) || 0;
     fileName = String(rec?.artifact?.name || rec?.name || artifactId);
     mimeType = rec?.mimeType || rec?.artifact?.mimeType || DOC_MIME;
     document.title = `${fileName} · 文档`;
