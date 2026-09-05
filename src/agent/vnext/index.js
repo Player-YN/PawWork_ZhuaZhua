@@ -1,8 +1,8 @@
 /**
  * Paw Work Runtime — public API barrel.
  *
- * ★ Product path only: Session Workspace Runtime (runSession.product.js).
- * See docs/SESSION_WORKSPACE_RUNTIME.md
+ * Product path: Session Workspace Runtime (runSession.product.js).
+ * See ../AGENTS.md (runtime) and ../../AGENTS.md (product map).
  */
 
 export {

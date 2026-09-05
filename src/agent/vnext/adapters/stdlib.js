@@ -55,6 +55,7 @@ export const PAWWORK_STDLIB_MODULES = Object.freeze({
   `,
   'pawwork:stdlib/runtime': `
     export const fs = globalThis.fs;
+    export const sys = globalThis.sys;
     export async function writeJson(path, value, spacing = 2) {
       await fs.writeFile(path, JSON.stringify(value, null, spacing));
     }

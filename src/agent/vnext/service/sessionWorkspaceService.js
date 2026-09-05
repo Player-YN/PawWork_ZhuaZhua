@@ -789,6 +789,18 @@ export class SessionWorkspaceService {
             sessionId,
             url
           }),
+        hostSys: (op, params) =>
+          chrome.runtime.sendMessage({
+            target: 'pawwork-background',
+            action: 'workspace_sys',
+            sessionId,
+            op,
+            params: {
+              ...(params && typeof params === 'object' ? params : {}),
+              tabId: params?.tabId ?? activeTab?.tabId ?? activeTab?.id,
+              defaultTabId: params?.defaultTabId ?? activeTab?.tabId ?? activeTab?.id
+            }
+          }),
         signal: controller.signal,
         fetchImpl,
         onExecutionBegin: ({ executionId }) => {

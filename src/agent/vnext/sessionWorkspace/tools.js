@@ -4,7 +4,7 @@
  *
  * HARD: SelectionGroups / WebItems / sessionBindings are NOT mutable via tools.
  * Only user/UI RPC (createGroup, bindGroups, syncTabSelection, …) may change them.
- * Guest run(code) has guest FS only — no store, no chrome, no group APIs.
+ * Guest run(code) has guest FS + sys (browser ABI). No store, no chrome.*, no group APIs.
  */
 
 import { acquireLease } from './execution.js';
@@ -119,6 +119,7 @@ import {
   sheetKindFromArtifact
 } from '../../../preview/sheetCodec.js';
 import { pageBytes, pageTextByCodePoint } from './textPage.js';
+import { createGuestSys, SYS_HELP, SYS_MODEL_HINT } from './browserSys.js';
 
 /**
  * @param {object} env
@@ -345,11 +346,16 @@ export function createSessionTools(env) {
   const inspect = {
     name: 'inspect',
     description:
-      'Read session context: bound page captures, workspace files, skill playbooks, workbook/range samples, and HTML/canvas structure. Views: groups, group, item, artifacts, files, skill, workbook, range, html. File reads (view=files + path to a file): offset is a Unicode code-point offset and maxChars bounds the returned slice; response includes offset, nextOffset, totalChars, eof. Listing pagination (directories) still uses offset/limit.',
+      'Read session context: bound page captures, workspace files, skill playbooks, workbook/range samples, HTML/canvas structure, and the browser sys ABI. Views: groups, group, item, artifacts, files, skill, workbook, range, html, sys. File reads (view=files + path to a file): offset is a Unicode code-point offset and maxChars bounds the returned slice; response includes offset, nextOffset, totalChars, eof. Listing pagination (directories) still uses offset/limit.',
     parameters: {
       type: 'object',
       properties: {
-        view: { type: 'string', description: 'groups | group | item | artifacts | files | skill | workbook | range | html' },
+        view: {
+          type: 'string',
+          enum: ['groups', 'group', 'item', 'artifacts', 'files', 'skill', 'workbook', 'range', 'html', 'sys'],
+          description:
+            'groups | group | item | artifacts | files | skill | workbook | range | html | sys. view=sys returns the browser machine ABI (tabs/eval/fetch/cdp/download/screenshot).'
+        },
         plateId: { type: 'string', description: 'HTML plate id (view=html)' },
         slotId: { type: 'string', description: 'HTML slot id (view=html)' },
         a1: { type: 'string', description: 'A1 range (view=range)' },
@@ -374,6 +380,9 @@ export function createSessionTools(env) {
     },
     async execute(input = {}) {
       const view = String(input.view || 'groups');
+      if (view === 'sys') {
+        return { ok: true, view, ...SYS_HELP };
+      }
       if (view === 'groups') {
         return { ok: true, view, groups: getBoundGroupsCompact(store, sessionId) };
       }
@@ -689,7 +698,7 @@ export function createSessionTools(env) {
         ok: false,
         error: `unknown view ${view}`,
         code: 'BAD_INPUT',
-        hint: 'use inspect view=groups|item|files|workbook|range|skill|html'
+        hint: 'use inspect view=groups|item|files|workbook|range|skill|html|sys'
       };
     },
     /**
@@ -876,11 +885,17 @@ export function createSessionTools(env) {
   const run = {
     name: 'run',
     description:
-      'Execute sandboxed JS/TS and create durable session artifacts: files, workbooks, Design/Slides canvases, documents, sites, and PDF ingest. Guest code reads session files with await fs.readFile(path) (/context ro, /artifacts, /scratch). createScene / fromPage / fromRaster compile a canvas. createScene may pass path|from to /scratch|/artifacts frames JSON instead of inline frames. Default is fail-closed reuse: an open/selected/explicit deck is updated; with no deck the first createScene may create one; further same-kind creates in this turn bind to that artifact. Two or more matching canvases and no target returns AMBIGUOUS_CANVAS — pass artifactId. createWorkbook reuses the open or only workbook (artifactMode:"new" is the only way to create a second book; two books and no target returns AMBIGUOUS_WORKBOOK). artifactMode:"new" is the only way to create a second same-kind visual (at most one extra per kind per turn). write_artifact cannot create pawCanvas. Empty createScene is rejected. Visual scenes prefer themeId + frames[{layoutId,slots}] (host compiles geometry); slots.visual accepts {kind:icon|motif|chart|image} without x/y/w/h. Search icons via deck act=read catalog="icons". Image brief via deck act=read catalog="image-brief" layoutId themeId subject — then acquire action=image; compile does not generate images. raw frames[].nodes remains a freeform escape hatch. Daily field edits use deck. op=shelf sets deliverable-rail folders the user sees.',
+      'Execute sandboxed JS/TS. Guest programs the browser machine via sys (not chrome.*). Also creates durable artifacts: files, workbooks, Design/Slides, documents, sites, PDF ingest. ' +
+      SYS_MODEL_HINT +
+      ' createScene / fromPage / fromRaster compile a canvas. createScene may pass path|from to /scratch|/artifacts frames JSON instead of inline frames. Default is fail-closed reuse: an open/selected/explicit deck is updated; with no deck the first createScene may create one; further same-kind creates in this turn bind to that artifact. Two or more matching canvases and no target returns AMBIGUOUS_CANVAS — pass artifactId. createWorkbook reuses the open or only workbook (artifactMode:"new" is the only way to create a second book; two books and no target returns AMBIGUOUS_WORKBOOK). artifactMode:"new" is the only way to create a second same-kind visual (at most one extra per kind per turn). write_artifact cannot create pawCanvas. Empty createScene is rejected. Visual scenes prefer themeId + frames[{layoutId,slots}] (host compiles geometry); slots.visual accepts {kind:icon|motif|chart|image} without x/y/w/h. Search icons via deck act=read catalog="icons". Image brief via deck act=read catalog="image-brief" layoutId themeId subject — then acquire action=image; compile does not generate images. raw frames[].nodes remains a freeform escape hatch. Daily field edits use deck. op=shelf sets deliverable-rail folders the user sees.',
     parameters: {
       type: 'object',
       properties: {
-        code: { type: 'string', description: 'JavaScript/TypeScript source to execute in sandbox' },
+        code: {
+          type: 'string',
+          description:
+            'JavaScript/TypeScript to run in the sandbox. ' + SYS_MODEL_HINT
+        },
         entry: { type: 'string' },
         entryFile: { type: 'string' },
         files: { type: 'object', additionalProperties: { type: 'string' } },
@@ -960,17 +975,21 @@ export function createSessionTools(env) {
       if (!sheetFirst && input.code != null && String(input.code).trim() !== '') {
         await hydrateSkillScriptsIntoGuest(fs);
         const codeText = String(input.code);
-        if (codeText.length > 8000) {
+        if (codeText.length > 24000) {
           return {
             ok: false,
             op: 'code',
             error:
-              'code exceeds 8000 chars. For spreadsheet transforms use the sheet tool (reshapeSplit / applyGrid); do not embed the grid in code.'
+              'code exceeds 24000 chars. For spreadsheet transforms use the sheet tool (reshapeSplit / applyGrid); do not embed the grid in code.'
           };
         }
         const codeFs = createCodeFsBridge(fs);
+        const sys = createGuestSys({
+          hostSys: typeof env.hostSys === 'function' ? env.hostSys : null,
+          defaultTabId: env.activeTab?.tabId ?? env.activeTab?.id ?? null
+        });
         const result = await runCodePrimitive(
-          { fs: codeFs, signal, timeoutMs: input.timeoutMs },
+          { fs: codeFs, sys, signal, timeoutMs: input.timeoutMs },
           {
             code: String(input.code),
             entry: input.entry,

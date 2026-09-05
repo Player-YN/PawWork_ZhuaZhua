@@ -3,10 +3,11 @@
  */
 
 import { runCode } from '../adapters/codeRuntime.js';
+import { SYS_MODEL_HINT } from '../sessionWorkspace/browserSys.js';
 
 /**
  * @param {object} ctx
- * @param {{ fs?: object, signal?: AbortSignal, timeoutMs?: number, runCode?: typeof runCode }} [ctx]
+ * @param {{ fs?: object, sys?: object, signal?: AbortSignal, timeoutMs?: number, runCode?: typeof runCode }} [ctx]
  * @param {{ code: string, entry?: string, entryFile?: string, files?: Record<string,string>, timeoutMs?: number }} input
  */
 export async function run(ctx, input = {}) {
@@ -28,6 +29,7 @@ export async function run(ctx, input = {}) {
   const timeoutMs = input.timeoutMs ?? ctx.timeoutMs;
   const signal = ctx.signal;
   const fs = ctx.fs || null;
+  const sys = ctx.sys || null;
   const exec = typeof ctx.runCode === 'function' ? ctx.runCode : runCode;
 
   return exec({
@@ -37,23 +39,25 @@ export async function run(ctx, input = {}) {
     files,
     signal,
     timeoutMs,
-    fs
+    fs,
+    sys
   });
 }
 
 /**
  * AI-SDK-shaped tool. Only run — no acquire.
- * @param {{ fs?: object, signal?: AbortSignal, timeoutMs?: number, runCode?: Function }} ctx
+ * @param {{ fs?: object, sys?: object, signal?: AbortSignal, timeoutMs?: number, runCode?: Function }} ctx
  */
 export function createRunTool(ctx) {
   return {
     name: 'run',
     description:
-      'Execute JavaScript in the task sandbox with workspace fs (/input ro, /work + /output rw). No chrome/window/document. Write deliverables under /output.',
+      'Execute JavaScript in the task sandbox with workspace fs and sys (browser ABI). No chrome/window/document. ' +
+      SYS_MODEL_HINT,
     parameters: {
       type: 'object',
       properties: {
-        code: { type: 'string', description: 'JavaScript source to execute' },
+        code: { type: 'string', description: 'JavaScript source to execute. ' + SYS_MODEL_HINT },
         entry: { type: 'string', description: 'Optional entry function name' },
         entryFile: { type: 'string', description: 'Optional virtual project entry filename' },
         files: {

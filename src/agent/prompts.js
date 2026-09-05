@@ -1,16 +1,11 @@
 /**
- * PageWand Browser Agent — system constitution + OpenAI-style tool schemas
- *
- * Industrial layout (stable prefix for prompt caching):
- *   system  = thin constitution only (fixed string per product version)
- *   tools[] = Session inspect/acquire/run schemas (not this file)
- *   user    = optional mode/skill lines + page + selection + request
+ * Leftover PageWand constitution helpers (sidepanel still imports SYSTEM_CONSTITUTION_VERSION).
+ * Product instructions: sessionWorkspace/prompt.js.
+ * Product tools: sessionWorkspace/tools.js (inspect / acquire / run / clarify / action / sheet / deck / doc / web).
+ * Guest browser ABI is sys on run (not a tool; catalog: inspect view=sys). TOOL_DEFINITIONS is empty on purpose.
  *
  * Do NOT put tool menus, anti-pattern patches, or plan essays in system.
  * Tool-specific contracts live in each tool's description (Anthropic/OpenAI practice).
- *
- * @see Anthropic: Effective context engineering; Writing effective tools for agents
- * @see OpenAI: Prompt caching — static prefix first, dynamic content last
  */
 
 /** Product constitution version — bump when system text changes (cache key / docs). */

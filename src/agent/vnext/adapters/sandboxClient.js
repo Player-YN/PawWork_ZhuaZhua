@@ -2,9 +2,8 @@
  * Host-side client for the manifest sandboxed code runtime.
  *
  * Generated source is executed only in the sandboxed extension page, which has
- * no extension APIs. Filesystem calls are relayed to the current task FS held
- * by the offscreen host. The sandbox never receives chrome.*, DOM handles, or
- * a reference to Workspace storage.
+ * no extension APIs. Filesystem and sys calls are relayed to the offscreen host.
+ * The sandbox never receives chrome.*, DOM handles, or a reference to Workspace storage.
  */
 const CHANNEL = 'pawwork-code-sandbox-v1';
 
@@ -69,6 +68,29 @@ export function createSandboxCodeClient(iframe) {
       return;
     }
 
+    if (msg.type === 'sys-request') {
+      const run = runs.get(msg.runId);
+      if (!run) return;
+      const target = guestWindow();
+      if (!target) return;
+      try {
+        const call = run.sys?.call;
+        if (typeof call !== 'function') throw new Error('SYS_DENIED: browser sys has no host in this runtime');
+        const value = await call.call(run.sys, msg.op, msg.params || {});
+        target.postMessage({ channel: CHANNEL, type: 'sys-response', runId: msg.runId, requestId: msg.requestId, ok: true, value }, '*');
+      } catch (error) {
+        target.postMessage({
+          channel: CHANNEL,
+          type: 'sys-response',
+          runId: msg.runId,
+          requestId: msg.requestId,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        }, '*');
+      }
+      return;
+    }
+
     if (msg.type === 'run-result') {
       const run = runs.get(msg.runId);
       if (!run) return;
@@ -106,7 +128,7 @@ export function createSandboxCodeClient(iframe) {
           cleanupRun(runId, run);
           reject(new Error(`sandbox host timeout after ${timeoutMs + 2000}ms`));
         }, timeoutMs + 2000);
-        runs.set(runId, { resolve, reject, fs: opts.fs, signal: opts.signal, onAbort, timer });
+        runs.set(runId, { resolve, reject, fs: opts.fs, sys: opts.sys, signal: opts.signal, onAbort, timer });
         opts.signal?.addEventListener('abort', onAbort, { once: true });
         target.postMessage({
           channel: CHANNEL,

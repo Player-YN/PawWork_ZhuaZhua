@@ -157,6 +157,7 @@ export {
   htmlKindFromMarkup
 } from './htmlArtboard.js';
 export { createSessionTools, toOpenAiToolsArray, createCodeFsBridge } from './tools.js';
+export { createGuestSys, wrapSysFromCall, SYS_HELP, SYS_OPS, SYS_MODEL_HINT } from './browserSys.js';
 export {
   inventoryFromSession,
   classifyCanvasKind,

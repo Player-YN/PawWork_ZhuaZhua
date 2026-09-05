@@ -1,8 +1,9 @@
-/** Manifest-sandboxed guest host. No chrome.* APIs are available here. */
+/** Manifest-sandboxed guest host. No chrome.* — FS and sys are postMessage RPCs. */
 import { runCode } from '../agent/vnext/adapters/codeRuntime.js';
 
 const CHANNEL = 'pawwork-code-sandbox-v1';
 const fsPending = new Map();
+const sysPending = new Map();
 const controllers = new Map();
 let requestSeq = 0;
 
@@ -11,6 +12,14 @@ function callHostFs(runId, method, args) {
   return new Promise((resolve, reject) => {
     fsPending.set(requestId, { resolve, reject });
     parent.postMessage({ channel: CHANNEL, type: 'fs-request', runId, requestId, method, args }, '*');
+  });
+}
+
+function callHostSys(runId, op, params) {
+  const requestId = `${runId}:${++requestSeq}`;
+  return new Promise((resolve, reject) => {
+    sysPending.set(requestId, { resolve, reject });
+    parent.postMessage({ channel: CHANNEL, type: 'sys-request', runId, requestId, op, params }, '*');
   });
 }
 
@@ -27,6 +36,12 @@ function createFs(runId) {
   };
 }
 
+function createSys(runId) {
+  return {
+    call: (op, params) => callHostSys(runId, op, params)
+  };
+}
+
 window.addEventListener('message', async (event) => {
   if (event.source !== parent) return;
   const msg = event.data;
@@ -38,6 +53,15 @@ window.addEventListener('message', async (event) => {
     fsPending.delete(msg.requestId);
     if (msg.ok) pending.resolve(msg.value);
     else pending.reject(new Error(msg.error || 'filesystem request failed'));
+    return;
+  }
+
+  if (msg.type === 'sys-response') {
+    const pending = sysPending.get(msg.requestId);
+    if (!pending) return;
+    sysPending.delete(msg.requestId);
+    if (msg.ok) pending.resolve(msg.value);
+    else pending.reject(new Error(msg.error || 'sys request failed'));
     return;
   }
 
@@ -59,6 +83,7 @@ window.addEventListener('message', async (event) => {
       memoryLimitBytes: msg.payload?.memoryLimitBytes,
       signal: controller.signal,
       fs: createFs(msg.runId),
+      sys: createSys(msg.runId),
       runtime: 'local-quickjs'
     });
     parent.postMessage({ channel: CHANNEL, type: 'run-result', runId: msg.runId, ok: true, result }, '*');

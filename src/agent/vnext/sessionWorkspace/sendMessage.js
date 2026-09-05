@@ -244,6 +244,7 @@ export async function sendMessage(store, input) {
     hostPageCapture: typeof input.hostPageCapture === 'function' ? input.hostPageCapture : null,
     hostPageAction: typeof input.hostPageAction === 'function' ? input.hostPageAction : null,
     hostFindTab: typeof input.hostFindTab === 'function' ? input.hostFindTab : null,
+    hostSys: typeof input.hostSys === 'function' ? input.hostSys : null,
     activeTab: input.activeTab || pages.activeTab,
     focusPage: pages.focusPage,
     promptId: message.messageId || execution.executionId

@@ -1,5 +1,6 @@
 /**
- * acquire primitive — import external read-only information into /work/sources.
+ * acquire primitive — import external read-only information.
+ * Writes `/work/sources/...` (legacy path). Session guest remaps `/work` → `/scratch`.
  * search: Tavily (default), Brave, or site-read API search when that is the only key.
  * fetch: site-read scrape when configured, else anonymous public GET.
  * map / crawl: site-read API only (host-capped).
@@ -215,7 +216,7 @@ export function createAcquireTool(ctx) {
   return {
     name: 'acquire',
     description:
-      'Import external read-only information into /work/sources. action=search needs query (not url). action=fetch|map|crawl need url. map query is an optional in-site filter. crawl is host-capped. Never mutates Selection Groups.',
+      'Import external read-only information (session guest sees /scratch/sources; this primitive still writes /work/sources and the host remaps). action=search needs query (not url). action=fetch|map|crawl need url. map query is an optional in-site filter. crawl is host-capped. Never mutates Selection Groups.',
     parameters: {
       type: 'object',
       properties: {

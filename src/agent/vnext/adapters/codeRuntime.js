@@ -4,14 +4,14 @@
  * Isolation guarantees:
  * - Guest code runs in a separate QuickJS WASM heap (no host globalThis).
  * - No chrome / window / document (including via globalThis / Function tricks).
- * - Injected: console + async fs RPC for task workspace paths only.
+ * - Injected: console + async fs RPC + sys (browser ABI via host).
  * - timeout + AbortSignal interrupt.
  *
  * Soft AsyncFunction path is emergency-only:
  *   opts.runtime === 'soft'  OR  process.env.PAW_SOFT_SANDBOX=1
  *
  * Interface:
- *   runCode({ code, entry?, signal?, timeoutMs?, fs, runtime? }) → RunResult
+ *   runCode({ code, entry?, signal?, timeoutMs?, fs, sys, runtime? }) → RunResult
  *   codeRuntimeKind() → 'quickjs' | 'function-sandbox'
  */
 
@@ -26,6 +26,8 @@
  * @property {unknown} [value]
  * @property {string} [runtime]  // 'quickjs' | 'soft'
  */
+
+import { SYS_HELP } from '../sessionWorkspace/browserSys.js';
 
 /** @type {'quickjs' | 'function-sandbox'} */
 let _activeKind = 'quickjs';
@@ -251,6 +253,7 @@ async function runQuickJS(opts) {
   try {
     injectConsole(vm, stdout, stderr);
     injectFs(vm, sandboxFs);
+    injectSys(vm, opts.sys);
     // Harden: privileged host APIs are absent. Access throws so adversarial
     // probes fail closed (exitStatus !== 0) rather than silently returning host data.
     // (QuickJS has its own globalThis — host chrome/window/document never leak.)
@@ -520,6 +523,87 @@ function injectFs(vm, sandboxFs) {
 
   vm.setProp(vm.global, 'fs', fsHandle);
   fsHandle.dispose();
+}
+
+/**
+ * Inject sys — one host RPC plus a guest wrapper. help() is sync catalog.
+ * @param {import('quickjs-emscripten').QuickJSContext} vm
+ * @param {{ call?: Function }|null|undefined} sys
+ */
+function injectSys(vm, sys) {
+  const hostCall = typeof sys?.call === 'function' ? sys.call.bind(sys) : null;
+  const fnHandle = vm.newFunction('__pw_sys_call', (...argHandles) => {
+    const op = String(safeDump(vm, argHandles[0]) || '');
+    const params = argHandles.length > 1 ? safeDump(vm, argHandles[1]) : {};
+    const deferred = vm.newPromise();
+    Promise.resolve()
+      .then(() => {
+        if (!hostCall) {
+          const err = new Error('SYS_DENIED: browser sys has no host in this runtime');
+          err.code = 'SYS_DENIED';
+          throw err;
+        }
+        return hostCall(op, params && typeof params === 'object' ? params : {});
+      })
+      .then((result) => {
+        const packed = hostValueToHandle(vm, result);
+        deferred.resolve(packed.handle);
+        if (packed.owned) {
+          try {
+            packed.handle.dispose();
+          } catch {
+            /* ignore */
+          }
+        }
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        const errH = vm.newError(msg);
+        deferred.reject(errH);
+        try {
+          errH.dispose();
+        } catch {
+          /* ignore */
+        }
+      })
+      .finally(() => {
+        deferred.settled.then(() => {
+          try {
+            vm.runtime.executePendingJobs();
+          } catch {
+            /* ignore */
+          }
+        });
+      });
+    return deferred.handle;
+  });
+  vm.setProp(vm.global, '__pw_sys_call', fnHandle);
+  fnHandle.dispose();
+  vm.unwrapResult(
+    vm.evalCode(`
+      (function () {
+        var help = ${JSON.stringify(SYS_HELP)};
+        globalThis.sys = {
+          help: function () { return help; },
+          eval: function (opts) { return __pw_sys_call('eval', opts || {}); },
+          fetch: function (opts) { return __pw_sys_call('fetch', opts || {}); },
+          cdp: function (opts) { return __pw_sys_call('cdp', opts || {}); },
+          download: function (opts) { return __pw_sys_call('download', opts || {}); },
+          screenshot: function (opts) { return __pw_sys_call('screenshot', opts || {}); },
+          tabs: {
+            list: function (opts) { return __pw_sys_call('tabs.list', opts || {}); },
+            current: function (opts) { return __pw_sys_call('tabs.current', opts || {}); },
+            frames: function (opts) { return __pw_sys_call('tabs.frames', opts || {}); },
+            open: function (opts) { return __pw_sys_call('tabs.open', opts || {}); },
+            navigate: function (opts) { return __pw_sys_call('tabs.navigate', opts || {}); },
+            reload: function (opts) { return __pw_sys_call('tabs.reload', opts || {}); },
+            close: function (opts) { return __pw_sys_call('tabs.close', opts || {}); },
+            focus: function (opts) { return __pw_sys_call('tabs.focus', opts || {}); }
+          }
+        };
+      })();
+    `)
+  ).dispose();
 }
 
 /**
@@ -941,7 +1025,8 @@ async function runSoftSandbox(opts) {
     }
   };
 
-  const extraGlobals = opts.globals && typeof opts.globals === 'object' ? opts.globals : {};
+  const extraGlobals = opts.globals && typeof opts.globals === 'object' ? { ...opts.globals } : {};
+  if (opts.sys && extraGlobals.sys == null) extraGlobals.sys = opts.sys;
 
   try {
     const value = await runInSoftSandbox({
@@ -1108,7 +1193,8 @@ function raceTimeout(promise, timeoutMs, signal) {
 // ── FS bind + utils ─────────────────────────────────────────────────────────
 
 /**
- * Bind task fs; track writes under /work and /output.
+ * Bind task fs; track written paths. Session guest roots are /artifacts and /scratch
+ * (legacy /work and /output are remapped by the host bridge).
  * @param {object|null|undefined} fs
  * @param {string[]} writtenFiles
  */

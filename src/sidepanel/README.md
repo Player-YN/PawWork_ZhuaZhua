@@ -1,5 +1,7 @@
 # Side panel modules (vanilla)
 
+产品分层见根 [AGENTS.md](../../AGENTS.md)；宿主 RPC 见 [../AGENTS.md](../AGENTS.md)。
+
 Production UI entry remains **`src/sidepanel.html`** → **`src/sidepanel.js`** (orchestrator).
 
 ## CSS load order

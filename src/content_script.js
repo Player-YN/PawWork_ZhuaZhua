@@ -1,4 +1,5 @@
-// PageWand Content Script - Multi-Select DOM Picker & Tab-Context Data URL Image Engine
+// Content script: 伸爪 picker + live-page `action` (snapshot/mutate) per frame.
+// Page JS evaluation is not here — guest `sys.eval` / page fetch go through SW userScripts.
 // Classic script: executeScript injects this as a non-module. Wrap in IIFE so
 // re-inject after Reload does not redeclare top-level const.
 

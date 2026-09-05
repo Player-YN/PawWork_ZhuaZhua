@@ -3,6 +3,7 @@
 import { loadLlmSettings } from './agent/llm.js';
 import { sheetTabMatches, htmlTabMatches } from './sidepanel/sessionIsolation.js';
 import { previewEntryForItem } from './agent/vnext/sessionWorkspace/openClassify.js';
+import { handleWorkspaceSys } from './agent/vnext/host/browserSysHost.js';
 import {
   isPawWorkPageUrl,
   isPawLockableWorkPageUrl,
@@ -1353,6 +1354,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     handleWorkspaceFetch(request)
       .then((result) => sendResponse(result))
       .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
+    return true;
+  }
+
+  if (request?.target === 'pawwork-background' && request?.action === 'workspace_sys') {
+    handleWorkspaceSys(request)
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error), code: error?.code || 'SYS_FAILED' }));
     return true;
   }
 
