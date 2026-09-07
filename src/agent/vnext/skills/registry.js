@@ -23,11 +23,18 @@ import { skill as sheetNl } from './sheet-nl/index.js';
 import { skill as listingSheet } from './listing-sheet/index.js';
 import { skill as briefingDeck } from './briefing-deck/index.js';
 import { skill as remakePoster } from './remake-poster/index.js';
+import { skill as userscript } from './userscript/index.js';
+import { skill as pageRestyle } from './page-restyle/index.js';
+import { skill as pageExtract } from './page-extract/index.js';
+import { skill as formAutopilot } from './form-autopilot/index.js';
+import { skill as siteHotkeys } from './site-hotkeys/index.js';
+import { skill as autoPager } from './auto-pager/index.js';
 
 /** Permanent id aliases so inspect / skillStore overlays keyed by old ids still resolve. */
 export const SKILL_ID_ALIASES = Object.freeze({
   'html-deck': 'slides',
-  'html-poster': 'poster'
+  'html-poster': 'poster',
+  'page-script': 'userscript'
 });
 
 /** @type {Map<string, SkillDef>} */
@@ -189,7 +196,13 @@ for (const pack of [
   sheetNl,
   listingSheet,
   briefingDeck,
-  remakePoster
+  remakePoster,
+  userscript,
+  pageRestyle,
+  pageExtract,
+  formAutopilot,
+  siteHotkeys,
+  autoPager
 ]) {
   registerSkill({ ...pack, root: pack.id });
 }

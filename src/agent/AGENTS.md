@@ -95,7 +95,7 @@ BYOK：`llm.js` → `pagewand_providers`。`run`：`vnext/adapters`（QuickJS / 
 
 `vnext/skills/<id>/`：`SKILL.md` + 打包进扩展的 `skillSource.js` + `index.js`。注册表：`skills/registry.js`。
 
-已注册：`html-preview` `slides` `poster` `html-site` `compose-image` `visual-compile` `sheet-nl` `listing-sheet` `briefing-deck` `remake-poster`。别名：`html-deck` → `slides`，`html-poster` → `poster`。正文用 `inspect view=skill`。
+已注册：`html-preview` `slides` `poster` `html-site` `compose-image` `visual-compile` `sheet-nl` `listing-sheet` `briefing-deck` `remake-poster` `userscript` `page-restyle` `page-extract` `form-autopilot` `site-hotkeys` `auto-pager`。别名：`html-deck` → `slides`，`html-poster` → `poster`，`page-script` → `userscript`。正文用 `inspect view=skill`。
 
 用户自定义 skill（侧栏固化）走 `agent/skills.js`，与打包 playbook 分开存。
 
