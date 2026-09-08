@@ -142,6 +142,8 @@ How to build and test: [CONTRIBUTING.md](CONTRIBUTING.md).
 Nothing runs without them. Configure in the sidepanel settings.
 
 - **Chat** — any OpenAI-compatible HTTPS endpoint (base URL + key + model).
+- **Atlas Cloud** — choose the built-in template, enter your API key, and probe
+  the live model catalog before saving.
 - **Image** (optional) — its own base URL / key / model; empty fields inherit chat. OpenRouter’s image origin is filled by the template.
 - **Web search / fetch** (optional) — your search or crawl keys. Without them, fetch can still do an anonymous GET.
 - **tldraw license** (optional) — removes the Design/Slides watermark; see Limitations.

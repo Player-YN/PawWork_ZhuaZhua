@@ -16,6 +16,9 @@ export const DEFAULT_BASE = 'https://api.deepseek.com/v1';
 /** Canonical OpenRouter OpenAI-compatible origin (chat + dedicated POST /images). */
 export const OPENROUTER_API_BASE = 'https://openrouter.ai/api/v1';
 
+/** Canonical Atlas Cloud OpenAI-compatible chat origin. */
+export const ATLASCLOUD_API_BASE = 'https://api.atlascloud.ai/v1';
+
 /** MiniMax-oriented image-gen defaults (path is relative to image base / chat origin). */
 export const DEFAULT_IMAGE_PROTOCOL = 'minimax-image';
 export const DEFAULT_IMAGE_PATH = '/image_generation';
@@ -68,6 +71,13 @@ export const PROVIDER_PRESETS = [
       model: DEFAULT_OPENROUTER_IMAGE_MODEL,
       baseURL: OPENROUTER_API_BASE
     }
+  },
+  {
+    id: 'atlas-cloud',
+    name: 'Atlas Cloud',
+    baseURL: ATLASCLOUD_API_BASE,
+    model: 'deepseek-ai/deepseek-v4-flash',
+    apiKeyPlaceholder: 'API key'
   },
   {
     id: 'minimax',

@@ -19,6 +19,7 @@ import {
   normalizeProvider,
   applyProviderImageModel,
   PROVIDER_PRESETS,
+  ATLASCLOUD_API_BASE,
   OPENROUTER_API_BASE
 } from '../../src/agent/llm.js';
 import { isLikelyImageGenModel, parseModelsResponse } from '../../src/agent/modelCatalog.js';
@@ -114,6 +115,16 @@ const orSettings = {
   assert.equal(or.image.baseURL, OPENROUTER_API_BASE);
   assert.equal(or.image.path, '/images');
   assert.equal(or.image.protocol, 'openrouter-image');
+}
+
+// Atlas Cloud template uses its OpenAI-compatible chat endpoint and a live catalog model id.
+{
+  const atlas = PROVIDER_PRESETS.find((p) => p.id === 'atlas-cloud');
+  assert.ok(atlas);
+  assert.equal(atlas.name, 'Atlas Cloud');
+  assert.equal(atlas.baseURL, ATLASCLOUD_API_BASE);
+  assert.equal(atlas.model, 'deepseek-ai/deepseek-v4-flash');
+  assert.equal(atlas.image, undefined);
 }
 
 // image baseUrl empty → inherits chat; apiKey empty → inherits chat key

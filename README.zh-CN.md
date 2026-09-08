@@ -142,6 +142,7 @@ npm run pack:extension
 没有密钥什么都跑不起来。在侧栏设置里配置。
 
 - **对话** — 任意 OpenAI 兼容的 HTTPS 端点（Base URL + 密钥 + 模型）。
+- **Atlas Cloud** — 选择内置模板，填入 API 密钥，并在保存前探测实时模型目录。
 - **生图**（可选）— 可以有自己的 Base URL / 密钥 / 模型；留空则沿用对话。OpenRouter 生图 origin 写在模板里。
 - **网页搜索 / 抓取**（可选）— 你自己的搜索或抓取密钥。没有密钥时，抓取仍可走匿名 GET。
 - **tldraw 许可**（可选）— 去掉 Design/Slides 水印，见「已知限制」。
