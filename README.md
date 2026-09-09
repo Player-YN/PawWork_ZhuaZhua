@@ -15,7 +15,7 @@ Chrome MV3 unpacked 扩展。加载根就是本文件夹（有 `manifest.json`�
 
 直接改 `src/`，然后在 `chrome://extensions` 点本扩展的 **重新加载**。无 `package.json`。
 
-技术分层见 [AGENTS.md](AGENTS.md)。本轮实现与后续方向见 [BROWSER_COMPUTER.md](BROWSER_COMPUTER.md)。本地 Git 无 remote，不执行 push。
+技术分层见 [AGENTS.md](AGENTS.md)。本轮实现与后续方向见 [BROWSER_COMPUTER.md](BROWSER_COMPUTER.md)。GitHub：`https://github.com/Player-YN/PawWork_ZhuaZhua`。
 
 ## 回归验证
 

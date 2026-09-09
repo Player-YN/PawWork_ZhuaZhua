@@ -1,4 +1,4 @@
-This file is a review brief for one ABI wave, not durable product law.
+This file is a **closed 2026-09-05 snapshot** of one sys-ABI review wave, not durable product law. The wave is committed; tests now live under `tests/`; Design/Slides (tldraw) was later removed. Current facts: [AGENTS.md](AGENTS.md).
 
 # REVIEW_BRIEF
 

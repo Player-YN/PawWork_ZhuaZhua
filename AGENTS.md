@@ -15,6 +15,8 @@ Chrome MV3 **unpacked** 扩展：把已登录浏览器当成可编程层（live-
 | [src/agent/AGENTS.md](src/agent/AGENTS.md) | Session Workspace：store、工具循环、工具契约、skills、guest FS、`sys` ABI | 改模型循环、工具、prompt、持久化领域 |
 | [src/preview/AGENTS.md](src/preview/AGENTS.md) | 画布标签页（Univer / site） | 改 sheet / docs / site 预览 |
 | [src/sidepanel/README.md](src/sidepanel/README.md) | 侧栏 UI 模块与滚动契约 | 改对话面板布局 / i18n |
+| [BROWSER_COMPUTER.md](BROWSER_COMPUTER.md) | 实现进展与未做边界 | 改持久化 / sys / 长任务方向时 |
+| [REVIEW_BRIEF.md](REVIEW_BRIEF.md) · [ACTION_REPORT.md](ACTION_REPORT.md) · [TECHNICAL_REVIEW.md](TECHNICAL_REVIEW.md) | 2026-09-05 审查快照，不是当前产品法 | 只当需要当时的审查问题；现状以本文件与 nested AGENTS 为准 |
 
 事实以仓库代码为准。历史名 **PageWand** 仍出现在 `chrome.storage.local` 键（`pagewand_*`）和部分注释里；消息 `target` 用 `pawwork-*`。
 
@@ -36,8 +38,8 @@ Chrome MV3 **unpacked** 扩展：把已登录浏览器当成可编程层（live-
    │ workspace_rpc             │ 打开 chrome-extension:// 标签
    ▼                           ▼
 ┌─ Offscreen  src/offscreen/ ─┐  ┌─ Preview  src/preview/ ──┐
-│ SessionWorkspaceService     │  │ sheet / design / docs /  │
-│ IDB + OPFS 会话仓库         │  │ site / artifactPreview   │
+│ SessionWorkspaceService     │  │ sheet / docs / site /    │
+│ IDB + OPFS 会话仓库         │  │ artifactPreview          │
 │ AI SDK ToolLoopAgent        │  │ Univer / site 运行时     │
 │ iframe → sandbox QuickJS    │  └──────────────────────────┘
 └──────────────▲──────────────┘
@@ -121,5 +123,6 @@ src/
 - 改代码 → `chrome://extensions` 点本扩展 **重新加载**。offscreen / SW 会重建；`action` 的 `rev` 在 SW 内存，重载后需重新 `snapshot`。
 - 权限见 `manifest.json`：`sidePanel` `activeTab` `tabs` `scripting` `storage` `downloads` `offscreen` `tabGroups` `webNavigation` `userScripts` `debugger`；`host_permissions: <all_urls>`。`userScripts` / `debugger` 只服务 guest `sys`（[src/AGENTS.md](src/AGENTS.md)）。
 - 命令：`toggle-picker` = Alt+Shift+S；`capture-screenshot` = Alt+Shift+C。
-- Git：本地 `main`，当前无 remote。不要 `git push`，不要改 `git config`。
+- Git：本地 `main`；`origin` = `https://github.com/Player-YN/PawWork_ZhuaZhua.git`。不要改 `git config`。不要 force-push `main`。
+- 逻辑回归：`node --test tests/runtime-regression.test.mjs`。实机：`node tests/browser-smoke.cjs`（需本机 Playwright；证据在 `output/playwright/`，不入库）。
 - BYOK：侧栏填 Key → `pagewand_providers`。无 Key 时 offscreen 仍可启动，`sendMessage` 时再解析模型。

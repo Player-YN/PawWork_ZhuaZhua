@@ -37,6 +37,9 @@ Desktop.ini
 output/playwright/*-profile/
 .playwright-cli/
 
+# Local Playwright / smoke evidence (not product)
+output/
+
 # If someone later runs a pack script, keep output out of git
 artifacts/
 dist/

@@ -7,7 +7,7 @@
 - 文件替换采用新 OPFS 路径，元数据一次 IDB 事务提交成功后才回收旧文件；失败保留待保存修改，后续可重试。
 - OPFS 不可用时，新的文件字节写入 IDB；恢复 OPFS 后可迁移。已有 OPFS 引用不会因暂时不可用而被清空。
 - 文档与表格保存排队，保存期间的新编辑会接续落盘；失败返回 office RPC。画布与网站保存串行化，成功后才推进已保存基线。
-- 四种编辑器的保存携带 expectedRevision，宿主同步校验后写入。常用 office 工具也携带其读取版本；raw guest 对已有交付物主文件的写入会推进版本。过期的不同内容被拒绝，相同内容的重试可安全确认。
+- 三种画布（sheet / Univer doc / site HTML）的保存携带 expectedRevision，宿主同步校验后写入。常用 office 工具也携带其读取版本；raw guest 对已有交付物主文件的写入会推进版本。过期的不同内容被拒绝，相同内容的重试可安全确认。Design/Slides（tldraw）已从产品面删除。
 - sandbox 仅在运行时监听器已安装后报告 ready，删除了过早宣告就绪的旧脚本。guest 错误码可跨运输层保留。
 - 浏览器调用具有 callId、sessionId、executionId 和 deadline。停止/超时可取消扩展 fetch；对于已派发的页面代码/CDP，返回结果未知，不声称副作用已撤销。
 - 网络正文流式累计字节，超过限额取消；截止时间涵盖扩展 fetch 正文读取。页面 fetch 也具有内部读取上限和超时。

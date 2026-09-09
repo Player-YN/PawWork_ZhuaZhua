@@ -49,6 +49,8 @@ src/sidepanel/
   density.js         # data-density=compact via ResizeObserver
   i18n.js            # I18N tables + createT / getDict / translate
   trajectoryUi.js    # mountTaskTrajectoryButton + downloadTaskTrajectory
+  sessionIsolation.js # session-scoped broadcast / plan-card / preview-tab match
+  executionSync.js   # parse offscreen activeExecution (live run vs leftover store rows)
   README.md
 ```
 

@@ -1,6 +1,6 @@
 # 产品技术审查 · 2026-09-05
 
-审查基线：`cfe218c`；sys 增量：`6cd4176..cfe218c`。开始审查时工作树干净。未修改产品代码。
+审查基线：`cfe218c`；sys 增量：`6cd4176..cfe218c`。开始审查时工作树干净。未修改产品代码。**快照说明：** 审查时产品仍含 tldraw Design/Slides；该线已删除。缺陷列表不代表当前状态，见 [BROWSER_COMPUTER.md](BROWSER_COMPUTER.md) 与 [AGENTS.md](AGENTS.md)。
 
 ## 判断
 
