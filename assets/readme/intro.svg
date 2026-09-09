@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc">
+  <title id="title">爪爪 · 完全解放版 — Chrome is the computer</title>
+  <desc id="desc">A Chrome window is the machine. The side panel agent docks onto it after you load the unpacked folder.</desc>
+  <rect id="base-frame" width="1200" height="440" fill="#050506"/>
+
+  <g id="stage-chrome">
+    <text x="48" y="42" fill="#F43F8C" font-family="Consolas, Cascadia Mono, monospace" font-size="15">BROWSER = OS</text>
+    <text x="48" y="78" fill="#F5F2F4" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="28" font-weight="700">爪爪 sits inside the logged-in Chrome</text>
+    <rect x="48" y="100" width="720" height="300" rx="16" fill="#121214" stroke="#2A2A30" stroke-width="1.5"/>
+    <circle cx="76" cy="124" r="6" fill="#FB7185"/>
+    <circle cx="96" cy="124" r="6" fill="#FBBF24"/>
+    <circle cx="116" cy="124" r="6" fill="#34D399"/>
+    <rect x="148" y="112" width="120" height="24" rx="8" fill="#1A1A1F"/>
+    <rect x="156" y="119" width="10" height="10" rx="2" fill="#A39AA3"/>
+    <text x="172" y="129" fill="#A39AA3" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="12">mail</text>
+    <rect x="276" y="112" width="132" height="24" rx="8" fill="#0C0C0F" stroke="#F43F8C" stroke-width="1"/>
+    <rect x="284" y="119" width="10" height="10" rx="2" fill="#F43F8C"/>
+    <text x="300" y="129" fill="#F5F2F4" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="12">shop (logged in)</text>
+    <rect x="416" y="112" width="88" height="24" rx="8" fill="#1A1A1F"/>
+    <text x="432" y="129" fill="#A39AA3" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="12">docs</text>
+    <rect x="72" y="148" width="672" height="28" rx="8" fill="#0C0C0F"/>
+    <circle cx="90" cy="162" r="6" fill="none" stroke="#34D399" stroke-width="1.5"/>
+    <text x="104" y="167" fill="#6B636B" font-family="Consolas, Cascadia Mono, monospace" font-size="13">https://store.example/orders</text>
+  </g>
+
+  <g id="page-scene">
+    <rect x="72" y="188" width="672" height="196" rx="8" fill="#1A1A1F"/>
+    <rect x="88" y="204" width="200" height="16" rx="4" fill="#F43F8C"/>
+    <rect x="88" y="230" width="280" height="10" rx="3" fill="#3A3A42"/>
+    <rect x="88" y="248" width="240" height="10" rx="3" fill="#2A2A30"/>
+    <rect x="400" y="204" width="228" height="88" rx="8" fill="#121214"/>
+    <rect x="416" y="220" width="80" height="56" rx="6" fill="#2A1020"/>
+    <rect x="508" y="224" width="100" height="8" rx="3" fill="#A39AA3"/>
+    <rect x="508" y="240" width="72" height="8" rx="3" fill="#6B636B"/>
+    <rect x="508" y="260" width="48" height="16" rx="4" fill="#F43F8C"/>
+    <rect x="88" y="292" width="160" height="28" rx="6" fill="#0C0C0F" stroke="#3A3A42"/>
+    <rect x="100" y="302" width="90" height="8" rx="3" fill="#6B636B"/>
+    <rect x="260" y="292" width="160" height="28" rx="6" fill="#0C0C0F" stroke="#3A3A42"/>
+    <rect x="272" y="302" width="70" height="8" rx="3" fill="#6B636B"/>
+    <rect x="436" y="292" width="88" height="28" rx="6" fill="#F43F8C"/>
+    <text x="456" y="311" fill="#050506" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="13" font-weight="700">Pay</text>
+    <rect x="88" y="336" width="40" height="28" rx="6" fill="#2A1020"/>
+    <circle cx="99.2" cy="340.1" r="3.2725000000000004" fill="#F43F8C"/><circle cx="105.8" cy="337.9" r="3.8500000000000005" fill="#F43F8C"/><circle cx="112.4" cy="339.0" r="3.4650000000000007" fill="#F43F8C"/><circle cx="117.9" cy="343.4" r="2.8875" fill="#F43F8C"/><ellipse cx="108" cy="353.3" rx="9.9" ry="7.700000000000001" fill="#F43F8C"/>
+  </g>
+
+  <g id="side-panel">
+    <rect x="792" y="100" width="360" height="300" rx="16" fill="#0C0C0F" stroke="#F43F8C" stroke-width="1.5"/>
+    <rect x="808" y="116" width="328" height="36" rx="8" fill="#121214"/>
+    <circle cx="820.8" cy="125.9" r="2.6774999999999998" fill="#F43F8C"/><circle cx="826.2" cy="124.1" r="3.15" fill="#F43F8C"/><circle cx="831.6" cy="125.0" r="2.835" fill="#F43F8C"/><circle cx="836.1" cy="128.6" r="2.3625" fill="#F43F8C"/><ellipse cx="828" cy="136.7" rx="8.1" ry="6.3" fill="#F43F8C"/>
+    <text x="848" y="140" fill="#F5F2F4" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="16" font-weight="700">爪爪</text>
+    <text x="980" y="140" fill="#6B636B" font-family="Consolas, Cascadia Mono, monospace" font-size="12">side panel</text>
+    <rect x="820" y="168" width="220" height="44" rx="10" fill="#121214"/>
+    <text x="834" y="196" fill="#A39AA3" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="13">Load unpacked folder</text>
+    <rect x="900" y="224" width="228" height="52" rx="10" fill="#1A1020" stroke="#F43F8C"/>
+    <text x="914" y="246" fill="#F5F2F4" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="14">Agent on this machine.</text>
+    <text x="914" y="266" fill="#A39AA3" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="13">Cookies stay in Chrome.</text>
+    <rect x="808" y="352" width="328" height="32" rx="8" fill="#121214"/>
+    <text x="822" y="373" fill="#6B636B" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="13">Send a task on this tab</text>
+    <circle cx="1120" cy="368" r="8" fill="#F43F8C"/>
+  </g>
+
+  <g id="claw-link">
+    <path d="M748 250 C770 250 780 248 792 220" fill="none" stroke="#F43F8C" stroke-width="2.5"/>
+    <path d="M748 270 C772 274 782 280 792 300" fill="none" stroke="#F43F8C" stroke-width="2" opacity="0.55"/>
+    <path d="M748 230 C768 220 778 200 792 168" fill="none" stroke="#E879F9" stroke-width="1.5" opacity="0.7"/>
+  </g>
+</svg>

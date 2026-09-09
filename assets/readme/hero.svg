@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="title desc">
+  <title id="title">爪爪 · 完全解放版</title>
+  <desc id="desc">Treat the already-logged-in Chrome as a programmable computer. 爪爪 is the agent on that machine.</desc>
+  <rect width="1200" height="320" rx="26" fill="#050506"/>
+  <rect x="36" y="24" width="1128" height="272" rx="18" fill="#0C0C0F" stroke="#2A2A30"/>
+  <text x="64" y="64" fill="#F43F8C" font-family="Consolas, Cascadia Mono, monospace" font-size="16">pawwork-sys-v1  /  unpacked  /  BYOK</text>
+  <text x="64" y="124" fill="#F5F2F4" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="48" font-weight="700">爪爪 · 完全解放版</text>
+  <text x="64" y="168" fill="#A39AA3" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="20">The browser is the computer. 爪爪 is the agent inside it.</text>
+  <g transform="translate(64 200)">
+    <rect width="168" height="56" rx="10" fill="#121214" stroke="#F43F8C"/>
+    <text x="16" y="24" fill="#6B636B" font-family="Consolas, Cascadia Mono, monospace" font-size="12">01 PANEL</text>
+    <text x="16" y="44" fill="#F5F2F4" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="16">sidepanel</text>
+    <rect x="184" width="168" height="56" rx="10" fill="#121214"/>
+    <text x="200" y="24" fill="#6B636B" font-family="Consolas, Cascadia Mono, monospace" font-size="12">02 SW</text>
+    <text x="200" y="44" fill="#F5F2F4" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="16">background</text>
+    <rect x="368" width="200" height="56" rx="10" fill="#121214" stroke="#34D399"/>
+    <text x="384" y="24" fill="#6B636B" font-family="Consolas, Cascadia Mono, monospace" font-size="12">03 OFFSCREEN</text>
+    <text x="384" y="44" fill="#F5F2F4" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="16">ToolLoopAgent</text>
+    <rect x="584" width="168" height="56" rx="10" fill="#121214"/>
+    <text x="600" y="24" fill="#6B636B" font-family="Consolas, Cascadia Mono, monospace" font-size="12">04 PAGE</text>
+    <text x="600" y="44" fill="#F5F2F4" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="16">action</text>
+    <rect x="768" width="296" height="56" rx="10" fill="#121214"/>
+    <text x="784" y="24" fill="#6B636B" font-family="Consolas, Cascadia Mono, monospace" font-size="12">05 CANVAS</text>
+    <text x="784" y="44" fill="#F5F2F4" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="16">sheet / doc / site</text>
+  </g>
+  <circle cx="1114.4" cy="40.7" r="5.0575" fill="#F43F8C"/><circle cx="1124.6" cy="37.3" r="5.95" fill="#F43F8C"/><circle cx="1134.8" cy="39.0" r="5.355" fill="#F43F8C"/><circle cx="1143.3" cy="45.8" r="4.4625" fill="#F43F8C"/><ellipse cx="1128" cy="61.1" rx="15.299999999999999" ry="11.9" fill="#F43F8C"/>
+</svg>

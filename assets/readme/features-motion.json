@@ -1,0 +1,68 @@
+{
+  "width": 1200,
+  "fps": 30,
+  "duration": 5.8,
+  "colors": 256,
+  "dither": "none",
+  "clip_to_base_alpha": true,
+  "max_size_mb": 2.6,
+  "layers": [
+    {
+      "id": "action-hl",
+      "enter": {
+        "start": 0.25,
+        "end": 1.05,
+        "from": [
+          0,
+          16
+        ]
+      },
+      "exit": {
+        "start": 4.9,
+        "end": 5.7,
+        "to": [
+          0,
+          10
+        ]
+      }
+    },
+    {
+      "id": "fetch-pipe",
+      "enter": {
+        "start": 0.7,
+        "end": 1.5,
+        "from": [
+          20,
+          0
+        ]
+      },
+      "exit": {
+        "start": 4.9,
+        "end": 5.7,
+        "to": [
+          12,
+          0
+        ]
+      }
+    },
+    {
+      "id": "plan-card",
+      "enter": {
+        "start": 1.4,
+        "end": 2.2,
+        "from": [
+          0,
+          18
+        ]
+      },
+      "exit": {
+        "start": 4.9,
+        "end": 5.7,
+        "to": [
+          0,
+          12
+        ]
+      }
+    }
+  ]
+}
