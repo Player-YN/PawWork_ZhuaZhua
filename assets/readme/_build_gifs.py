@@ -219,7 +219,7 @@ features = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500"
     <rect x="56" y="414" width="14" height="14" rx="3" fill="none" stroke="#F43F8C" stroke-width="2"/>
     <rect x="60" y="418" width="6" height="6" rx="1" fill="#F43F8C"/>
     <text x="82" y="426" fill="#F5F2F4" font-family="{SANS}" font-size="16" font-weight="600">Plan card  /  this session only</text>
-    <text x="82" y="450" fill="#A39AA3" font-family="{SANS}" font-size="14">clarify pauses the turn. acquire brings public web in. No Design/Slides.</text>
+    <text x="82" y="450" fill="#A39AA3" font-family="{SANS}" font-size="14">clarify pauses the turn. acquire brings public web in. sheet / doc / site.</text>
     {paw(1120, 434, "#F43F8C", 0.7)}
   </g>
 </svg>
@@ -249,7 +249,7 @@ write(
 # ── Use cases ──────────────────────────────────────────────────────────────
 usecases = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
   <title id="title">Userscript-class jobs on a logged-in browser</title>
-  <desc id="desc">Restyle, logged-in scrape, form fill, page-identity download, tab batch, reading aid on an SPA. No userscript store. No tldraw.</desc>
+  <desc id="desc">Restyle, logged-in scrape, form fill, page-identity download, tab batch, reading aid on an SPA. No userscript store.</desc>
   <rect id="base-frame" width="1200" height="520" fill="#050506"/>
   <text x="40" y="40" fill="#F43F8C" font-family="{MONO}" font-size="15">USERSCRIPT-CLASS</text>
   <text x="40" y="74" fill="#F5F2F4" font-family="{SANS}" font-size="26" font-weight="700">Same jobs. Agent instead of a script list.</text>

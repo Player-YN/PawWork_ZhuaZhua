@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
   <title id="title">Userscript-class jobs on a logged-in browser</title>
-  <desc id="desc">Restyle, logged-in scrape, form fill, page-identity download, tab batch, reading aid on an SPA. No userscript store. No tldraw.</desc>
+  <desc id="desc">Restyle, logged-in scrape, form fill, page-identity download, tab batch, reading aid on an SPA. No userscript store.</desc>
   <rect id="base-frame" width="1200" height="520" fill="#050506"/>
   <text x="40" y="40" fill="#F43F8C" font-family="Consolas, Cascadia Mono, monospace" font-size="15">USERSCRIPT-CLASS</text>
   <text x="40" y="74" fill="#F5F2F4" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="26" font-weight="700">Same jobs. Agent instead of a script list.</text>

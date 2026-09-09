@@ -94,7 +94,7 @@
     <rect x="56" y="414" width="14" height="14" rx="3" fill="none" stroke="#F43F8C" stroke-width="2"/>
     <rect x="60" y="418" width="6" height="6" rx="1" fill="#F43F8C"/>
     <text x="82" y="426" fill="#F5F2F4" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="16" font-weight="600">Plan card  /  this session only</text>
-    <text x="82" y="450" fill="#A39AA3" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="14">clarify pauses the turn. acquire brings public web in. No Design/Slides.</text>
+    <text x="82" y="450" fill="#A39AA3" font-family="Microsoft YaHei, Segoe UI, sans-serif" font-size="14">clarify pauses the turn. acquire brings public web in. sheet / doc / site.</text>
     <circle cx="1108.8" cy="421.4" r="4.164999999999999" fill="#F43F8C"/><circle cx="1117.2" cy="418.6" r="4.8999999999999995" fill="#F43F8C"/><circle cx="1125.6" cy="420.0" r="4.409999999999999" fill="#F43F8C"/><circle cx="1132.6" cy="425.6" r="3.675" fill="#F43F8C"/><ellipse cx="1120" cy="438.2" rx="12.6" ry="9.799999999999999" fill="#F43F8C"/>
   </g>
 </svg>

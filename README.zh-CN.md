@@ -54,7 +54,6 @@
 |---|---|
 | CWS 安装 | 没有。只能未打包加载。 |
 | 托管模型 | 没有。自己带 Key。 |
-| Design / Slides | 没了。 |
 | 油猴脚本目录 | 没有。打包 skill 只有 `page-restyle`。 |
 | `chrome://` / 网上应用店页 | `NEED_PAGE`。 |
 
@@ -72,8 +71,6 @@
 - 用页面身份下载（`sys.download` 或页面 fetch）
 - 批量标签 / `navigate` 之后停在 SPA 上
 - 在同一标签注入阅读辅助
-
-Design / Slides / tldraw **已删除**。不要找演示文稿画布。
 
 ## 机制
 

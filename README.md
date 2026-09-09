@@ -54,7 +54,6 @@ Need Chrome 135+. Chrome 138+: extension details → **Allow User Scripts** if y
 |---|---|
 | CWS install | No. Unpacked only. |
 | Hosted model | No. BYOK. |
-| Design / Slides | Gone. |
 | A Tampermonkey catalog | No. Skill: `page-restyle`. |
 | `chrome://` / Web Store pages | `NEED_PAGE`. |
 
@@ -72,8 +71,6 @@ Tried and plausible — not a benchmark list, not a store.
 - Download with page identity (`sys.download` or page fetch)
 - Batch tabs / sit on an SPA after `navigate`
 - Inject a reading aid on the same tab
-
-Design / Slides / tldraw are **removed**. Do not look for a pitch-deck canvas.
 
 ## Mechanism
 
