@@ -14,7 +14,7 @@ Treat the already-logged-in **[Chrome as a programmable computer](README.md#what
 
 *sidepanel → service worker → offscreen agent · tools: `action` · `run`+`sys` · `sheet` / `doc` / `web`*
 
-[What you get](#what-you-get) · [Mechanism](#mechanism) · [Run it](#run-it) · [Use cases](#use-cases) · [Limits](#limits) · [Next](#next)
+[What you get](#what-you-get) · [Run it](#run-it) · [Limits](#limits) · [Use cases](#use-cases) · [Mechanism](#mechanism) · [Next](#next)
 
 </div>
 
@@ -34,23 +34,6 @@ An unpacked side-panel agent that can operate the current tab, run guest JS agai
 
 Anything a Tampermonkey userscript could do is in scope. There is no userscript store. One packaged playbook ships: `page-restyle`.
 
-## Mechanism
-
-<p align="center">
-  <img src="./assets/readme/features.gif" width="100%" alt="Live-page action snapshot with ref chips, run plus sys.fetch as page writing a CSV, and sheet, doc, and site canvases. Plan card is session-only.">
-</p>
-
-Side panel → service worker → offscreen `SessionWorkspaceService` → AI SDK `ToolLoopAgent`.
-
-| You call | It does |
-|---|---|
-| `action` | Live tab. `snapshot`, then mutate with that generation’s `ref` + `rev` |
-| `run` | Sandbox JS. Guest `sys`: tabs, eval, fetch, cdp, download, screenshot |
-| `sheet` / `doc` / `web` | Univer table, Univer document, `data-paw-kind=site` |
-| `inspect` / `acquire` / `clarify` | Read the session, bring public web in, pause for a question or plan |
-
-`sys` is **not** a model tool. Login / cookies / captcha: `sys.fetch({ as: "page" })` inside `run`.
-
 ## Run it
 
 You should see a side-panel agent named **爪爪 · 完全解放版**. There is no Chrome Web Store listing.
@@ -59,13 +42,21 @@ You should see a side-panel agent named **爪爪 · 完全解放版**. There is 
 2. Chrome → `chrome://extensions` → Developer mode → **Load unpacked** → select that folder (`manifest.json` is at its root)
 3. Open the side panel → paste a BYOK key (`pagewand_providers`) → send a task on a normal `http(s)` page
 
-Need Chrome 135+. Chrome 138+: extension details → **Allow User Scripts** if you need `sys.eval` / page fetch. Close F12 on the target tab before CDP (`CDP_BUSY`). Restricted pages (`chrome://`, Web Store) return `NEED_PAGE`.
-
 After you edit files in the load folder, click **重新加载** on the extension card. No daily `npm`.
 
-```text
-node --test tests/runtime-regression.test.mjs
-```
+## Limits
+
+These change whether you load it, and what the first task can touch.
+
+Need Chrome 135+. Chrome 138+: extension details → **Allow User Scripts** if you need `sys.eval` / page fetch. Close F12 on the target tab before CDP (`CDP_BUSY`). Restricted pages (`chrome://`, Web Store) return `NEED_PAGE`.
+
+| If you wanted | What exists |
+|---|---|
+| CWS install | No. Unpacked only. |
+| Hosted model | No. BYOK. |
+| Design / Slides | Gone. |
+| A Tampermonkey catalog | No. Skill: `page-restyle`. |
+| `chrome://` / Web Store pages | `NEED_PAGE`. |
 
 ## Use cases
 
@@ -84,16 +75,31 @@ Tried and plausible — not a benchmark list, not a store.
 
 Design / Slides / tldraw are **removed**. Do not look for a pitch-deck canvas.
 
-## Limits
+## Mechanism
 
-| If you wanted | What exists |
+<p align="center">
+  <img src="./assets/readme/features.gif" width="100%" alt="Live-page action snapshot with ref chips, run plus sys.fetch as page writing a CSV, and sheet, doc, and site canvases. Plan card is session-only.">
+</p>
+
+Side panel → service worker → offscreen `SessionWorkspaceService` → AI SDK `ToolLoopAgent`.
+
+| You call | It does |
 |---|---|
-| CWS install | No. Unpacked only. |
-| Hosted model | No. BYOK. |
-| Design / Slides | Gone. |
-| A Tampermonkey catalog | No. Skill: `page-restyle`. |
-| `chrome://` / Web Store pages | `NEED_PAGE`. |
+| `action` | Live tab. `snapshot`, then mutate with that generation’s `ref` + `rev` |
+| `run` | Sandbox JS. Guest `sys`: tabs, eval, fetch, cdp, download, screenshot |
+| `sheet` / `doc` / `web` | Univer table, Univer document, `data-paw-kind=site` |
+| `inspect` / `acquire` / `clarify` | Read the session, bring public web in, pause for a question or plan |
+
+`sys` is **not** a model tool. Login / cookies / captcha: `sys.fetch({ as: "page" })` inside `run`.
 
 ## Next
 
 Architecture and tool contracts: [AGENTS.md](AGENTS.md). 中文首页：[README.zh-CN.md](README.zh-CN.md).
+
+```text
+node --test tests/runtime-regression.test.mjs
+```
+
+## License
+
+[MIT](LICENSE).

@@ -14,7 +14,7 @@
 
 *侧栏 → Service Worker → offscreen agent · 工具：`action` · `run`+`sys` · `sheet` / `doc` / `web`*
 
-[你得到什么](#你得到什么) · [机制](#机制) · [运行](#运行) · [用例](#用例) · [边界](#边界) · [下一步](#下一步)
+[你得到什么](#你得到什么) · [运行](#运行) · [边界](#边界) · [用例](#用例) · [机制](#机制) · [下一步](#下一步)
 
 </div>
 
@@ -34,23 +34,6 @@
 
 油猴类 userscript 能干的事都在范围内。没有脚本商店。打包 playbook 目前只有 `page-restyle`。
 
-## 机制
-
-<p align="center">
-  <img src="./assets/readme/features.gif" width="100%" alt="当前页 action 快照与 ref 标签、run 里用页面身份 fetch 写入 CSV，以及表格、文档、站点三块画布。计划卡只属于本会话。">
-</p>
-
-侧栏 → Service Worker → offscreen `SessionWorkspaceService` → AI SDK `ToolLoopAgent`。
-
-| 你调用 | 它做什么 |
-|---|---|
-| `action` | 当前活页。先 `snapshot`，再用同一代 `ref` + `rev` 点/填 |
-| `run` | 沙箱 JS。访客 `sys`：标签、eval、fetch、cdp、下载、截图 |
-| `sheet` / `doc` / `web` | Univer 表、Univer 文档、`data-paw-kind=site` |
-| `inspect` / `acquire` / `clarify` | 读会话、把公开网带进来、暂停提问或出计划卡 |
-
-`sys` **不是**模型工具。要登录态 / cookie / 验证码：在 `run` 里写 `sys.fetch({ as: "page" })`。
-
 ## 运行
 
 加载后侧栏标题应是 **爪爪 · 完全解放版**。没有 Chrome 网上应用店安装包。
@@ -59,13 +42,21 @@
 2. Chrome → `chrome://extensions` → 开发者模式 → **加载已解压的扩展程序** → 选那个文件夹（根上就是 `manifest.json`）
 3. 打开侧栏 → 填 BYOK Key（`pagewand_providers`）→ 在普通 `http(s)` 页面发一条任务
 
-需要 Chrome 135+。Chrome 138+ 若要用 `sys.eval` / 页面身份 fetch：扩展详情打开 **允许运行用户脚本**。用 CDP 前关掉目标标签的 F12（否则 `CDP_BUSY`）。限制页（`chrome://`、网上应用店）会 `NEED_PAGE`。
-
 改完加载文件夹里的文件后，到扩展卡片点 **重新加载**。日常不跑 `npm`。
 
-```text
-node --test tests/runtime-regression.test.mjs
-```
+## 边界
+
+这些会改变你要不要加载，以及第一条任务能碰什么。
+
+需要 Chrome 135+。Chrome 138+ 若要用 `sys.eval` / 页面身份 fetch：扩展详情打开 **允许运行用户脚本**。用 CDP 前关掉目标标签的 F12（否则 `CDP_BUSY`）。限制页（`chrome://`、网上应用店）会 `NEED_PAGE`。
+
+| 如果你想要 | 实际有的 |
+|---|---|
+| CWS 安装 | 没有。只能未打包加载。 |
+| 托管模型 | 没有。自己带 Key。 |
+| Design / Slides | 没了。 |
+| 油猴脚本目录 | 没有。打包 skill 只有 `page-restyle`。 |
+| `chrome://` / 网上应用店页 | `NEED_PAGE`。 |
 
 ## 用例
 
@@ -84,16 +75,31 @@ node --test tests/runtime-regression.test.mjs
 
 Design / Slides / tldraw **已删除**。不要找演示文稿画布。
 
-## 边界
+## 机制
 
-| 如果你想要 | 实际有的 |
+<p align="center">
+  <img src="./assets/readme/features.gif" width="100%" alt="当前页 action 快照与 ref 标签、run 里用页面身份 fetch 写入 CSV，以及表格、文档、站点三块画布。计划卡只属于本会话。">
+</p>
+
+侧栏 → Service Worker → offscreen `SessionWorkspaceService` → AI SDK `ToolLoopAgent`。
+
+| 你调用 | 它做什么 |
 |---|---|
-| CWS 安装 | 没有。只能未打包加载。 |
-| 托管模型 | 没有。自己带 Key。 |
-| Design / Slides | 没了。 |
-| 油猴脚本目录 | 没有。打包 skill 只有 `page-restyle`。 |
-| `chrome://` / 网上应用店页 | `NEED_PAGE`。 |
+| `action` | 当前活页。先 `snapshot`，再用同一代 `ref` + `rev` 点/填 |
+| `run` | 沙箱 JS。访客 `sys`：标签、eval、fetch、cdp、下载、截图 |
+| `sheet` / `doc` / `web` | Univer 表、Univer 文档、`data-paw-kind=site` |
+| `inspect` / `acquire` / `clarify` | 读会话、把公开网带进来、暂停提问或出计划卡 |
+
+`sys` **不是**模型工具。要登录态 / cookie / 验证码：在 `run` 里写 `sys.fetch({ as: "page" })`。
 
 ## 下一步
 
 分层与工具契约见 [AGENTS.md](AGENTS.md)。English homepage: [README.md](README.md).
+
+```text
+node --test tests/runtime-regression.test.mjs
+```
+
+## 许可
+
+[MIT](LICENSE)。
