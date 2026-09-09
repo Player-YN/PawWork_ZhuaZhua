@@ -13,7 +13,7 @@ Chrome MV3 **unpacked** 扩展：把已登录浏览器当成可编程层（live-
 | 本文件 | 产品边界、进程分层、领域对象、目录地图 | 任何任务的第一站 |
 | [src/AGENTS.md](src/AGENTS.md) | Chrome 宿主：SW / offscreen / 侧栏 / content script / 消息总线 / `action` 运输 | 改扩展壳、RPC、标签、选区 |
 | [src/agent/AGENTS.md](src/agent/AGENTS.md) | Session Workspace：store、工具循环、工具契约、skills、guest FS、`sys` ABI | 改模型循环、工具、prompt、持久化领域 |
-| [src/preview/AGENTS.md](src/preview/AGENTS.md) | 画布标签页（Univer / tldraw / site） | 改 sheet / design / docs / site 预览 |
+| [src/preview/AGENTS.md](src/preview/AGENTS.md) | 画布标签页（Univer / site） | 改 sheet / docs / site 预览 |
 | [src/sidepanel/README.md](src/sidepanel/README.md) | 侧栏 UI 模块与滚动契约 | 改对话面板布局 / i18n |
 
 事实以仓库代码为准。历史名 **PageWand** 仍出现在 `chrome.storage.local` 键（`pagewand_*`）和部分注释里；消息 `target` 用 `pawwork-*`。
@@ -38,7 +38,7 @@ Chrome MV3 **unpacked** 扩展：把已登录浏览器当成可编程层（live-
 ┌─ Offscreen  src/offscreen/ ─┐  ┌─ Preview  src/preview/ ──┐
 │ SessionWorkspaceService     │  │ sheet / design / docs /  │
 │ IDB + OPFS 会话仓库         │  │ site / artifactPreview   │
-│ AI SDK ToolLoopAgent        │  │ Univer / tldraw 运行时   │
+│ AI SDK ToolLoopAgent        │  │ Univer / site 运行时     │
 │ iframe → sandbox QuickJS    │  └──────────────────────────┘
 └──────────────▲──────────────┘
                │ workspaceRpc(method, params)
@@ -67,7 +67,7 @@ Chrome MV3 **unpacked** 扩展：把已登录浏览器当成可编程层（live-
        beginExecution
        createSessionTools + inventoryFromSession（瞄准，不藏工具）
        AI SDK 7 ToolLoopAgent（sessionAgent.js，toolChoice=auto）
-       工具：inspect / acquire / run / clarify / action / sheet / deck / doc / web
+       工具：inspect / acquire / run / clarify / action / sheet / doc / web
        （sys 不是工具；在 run 代码里调，目录：inspect view=sys）
        settleExecution
   → session_workspace_event 广播回侧栏
@@ -83,12 +83,12 @@ Chrome MV3 **unpacked** 扩展：把已登录浏览器当成可编程层（live-
 |------|--------|------|
 | **Session** | 一轮任务：messages、title、绑定的 group ids | UI RPC + `sendMessage` |
 | **Group + WebItem** | 用户拥有的环境上下文（伸爪选区、剪贴板钉、页面条目） | **仅 UI RPC**。工具禁止 mutate SelectionGroup |
-| **Artifact** | 会话交付物（表 / Paw Canvas / Univer 文档 / site HTML / 文件） | 工具 `run` / office 工具 / UI 创建 |
+| **Artifact** | 会话交付物（表 / Univer 文档 / site HTML / 文件） | 工具 `run` / office 工具 / UI 创建 |
 | **Execution** | 单次用户 turn 的租约与 `/scratch`；崩溃后作废 | `sendMessage` |
 | **Guest FS** | 访客可见 `/context`（只读）· `/artifacts`（持久）· `/scratch`（本轮） | `run` 沙箱 |
 | **sys** | 浏览器机器 ABI（tabs / eval / fetch / **cdp** / download / screenshot）。guest 无 `chrome.*` | `run` → SW `workspace_sys` |
 
-画布种类（inventory 瞄准，工具始终在）：`sheet` · `deck`/`poster`（tldraw Paw Canvas）· `doc` · `web`（`data-paw-kind=site`）。
+画布种类（inventory 瞄准，工具始终在）：`sheet` · `doc` · `web`（`data-paw-kind=site`）。没有 Design/Slides（tldraw）。
 
 ## 加载根树
 
@@ -114,7 +114,7 @@ src/
     vnext/skills/          # playbook（不是工具）
 ```
 
-`src/preview/vendor/{sheet,docs,design}-runtime.*` 是已跟踪的 Univer / tldraw 包，unpacked 加载需要，勿从 `.gitignore` 排除。
+`src/preview/vendor/{sheet,docs}-runtime.*` 是已跟踪的 Univer 包，unpacked 加载需要，勿从 `.gitignore` 排除。
 
 ## 日常约定
 

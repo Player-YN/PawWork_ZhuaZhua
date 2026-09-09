@@ -170,6 +170,7 @@ async function sysTabsFocus(params) {
   return { ok: true, result: publicTab(updated || tab) };
 }
 
+/** chrome.downloads.download: this profile's cookie jar + this-machine IP. No tab Referer. Not credentials:omit. */
 async function sysDownload(params) {
   let url = String(params.url || '').trim();
   if (params.base64 != null && String(params.base64)) {
@@ -504,6 +505,7 @@ async function sysEval(params) {
   return { ok: true, result: { world, tabId: tab.id, frameId: first?.frameId ?? frameId ?? 0, value: payload ?? null } };
 }
 
+/** Omit as → extension (credentials:omit). Model should pass as:"page" for user session URLs. */
 async function sysFetch(params) {
   const as = String(params.as || 'extension').toLowerCase();
   if (as === 'page') return sysFetchAsPage(params);

@@ -1,7 +1,7 @@
 /**
  * Generic artifact viewer — open HTML/PDF-as-HTML as a page, raster images as
  * images, opaque bytes as a downloadable file card.
- * Not a layout editor. Design lives on design.html; websites on site.html.
+ * Not a layout editor. Websites on site.html; leftover json-canvas stays here.
  */
 import { classifyOpenArtifact, previewEntryForKind, previewEntryForItem, previewViewForItem } from '../agent/vnext/sessionWorkspace/openClassify.js';
 import { pdfBytesToHtml, bytesForPdfPreview } from '../agent/vnext/sessionWorkspace/pdfIngest.js';
@@ -271,12 +271,12 @@ async function boot() {
     if (titleEl) titleEl.textContent = fileName;
     document.title = `${fileName} · 预览`;
     const routed = previewEntryForItem(item);
-    const dest = routed.entry || previewEntryForKind(classifyOpenArtifact(item).kind);
+    let dest = routed.entry || previewEntryForKind(classifyOpenArtifact(item).kind);
+    if (dest === 'design.html') dest = 'artifactPreview.html';
     if (dest !== 'artifactPreview.html') {
       const q = new URLSearchParams();
       q.set('sessionId', sessionId);
       q.set('artifactId', artifactId);
-      if (dest === 'design.html') q.set('shell', routed.shell || 'design');
       location.replace(`./${dest}?${q.toString()}`);
       return;
     }

@@ -20,10 +20,4 @@ They package Univer Docs OSS (`preset-docs-core` + drawing + hyper-link + thread
 
 # Design / Slides runtime bundle
 
-`design-runtime.js` / `design-runtime.css` are generated:
-
-```text
-npm run build:design
-```
-
-They package tldraw for `src/preview/design.html`. Gitignored. Do not import `tldraw` from `node_modules` in extension pages.
+Removed. tldraw `design-runtime.*` and `design.html` are no longer shipped.

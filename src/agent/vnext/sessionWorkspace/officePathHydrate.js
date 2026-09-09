@@ -92,13 +92,6 @@ function isEmptyObject(value) {
   return !value || typeof value !== 'object' || (Array.isArray(value) ? value.length === 0 : !Object.keys(value).length);
 }
 
-function isEmptySlots(slots) {
-  if (slots == null) return true;
-  if (typeof slots !== 'object') return true;
-  if (Array.isArray(slots)) return slots.length === 0;
-  return !Object.keys(slots).length;
-}
-
 function emptyPayloadError(label) {
   return {
     ok: false,
@@ -142,59 +135,6 @@ function commandsFromDocJson(value) {
   return { ok: false, code: 'BAD_INPUT', error: 'doc JSON needs commands, blocks, or text', hint: 'pass path to doc JSON' };
 }
 
-function commandsFromDeckJson(value, input = {}) {
-  if (Array.isArray(value)) {
-    if (!value.length) return emptyPayloadError('deck');
-    if (value.every((c) => c && typeof c === 'object' && String(c.op || c.type || '').trim())) {
-      return { ok: true, commands: value };
-    }
-    return {
-      ok: true,
-      commands: value.map((f) => ({
-        op: 'replacePlate',
-        plateId: f.id || f.plateId || f.frameId,
-        frameId: f.frameId,
-        layoutId: f.layoutId || input.layoutId,
-        themeId: f.themeId || input.themeId,
-        variant: f.variant || input.variant,
-        slots: f.slots
-      }))
-    };
-  }
-  if (!value || typeof value !== 'object') {
-    return {
-      ok: false,
-      code: 'BAD_INPUT',
-      error: 'deck JSON must be slots, frames[], or commands[]',
-      hint: 'pass path to semantic deck JSON'
-    };
-  }
-  if (Array.isArray(value.commands) && value.commands.length) {
-    return { ok: true, commands: value.commands };
-  }
-  if (Array.isArray(value.frames) && value.frames.length) {
-    return commandsFromDeckJson(value.frames, { ...input, ...value });
-  }
-  if (!isEmptySlots(value.slots) || value.layoutId) {
-    return {
-      ok: true,
-      commands: [
-        {
-          op: 'replacePlate',
-          plateId: input.plateId || value.plateId || value.frameId,
-          frameId: input.frameId || value.frameId,
-          nodeId: input.nodeId || value.nodeId,
-          layoutId: value.layoutId || input.layoutId,
-          themeId: value.themeId || input.themeId,
-          variant: value.variant || input.variant,
-          slots: value.slots
-        }
-      ]
-    };
-  }
-  return emptyPayloadError('deck');
-}
-
 function commandsFromWebJson(value) {
   if (Array.isArray(value)) {
     if (!value.length) return emptyPayloadError('web');
@@ -220,14 +160,11 @@ function commandsFromWebJson(value) {
 
 /**
  * Top-level path/from on an office write. Image refs stay on the command; JSON/HTML becomes commands.
- * @param {'doc'|'deck'|'web'} surface
+ * @param {'doc'|'web'} surface
  */
 export function resolveOfficeWriteInput(fs, input = {}, surface = 'doc') {
   const src = input && typeof input === 'object' ? input : {};
   if (Array.isArray(src.commands) && src.commands.length) {
-    return { ok: true, input: src };
-  }
-  if (surface === 'deck' && !isEmptySlots(src.slots)) {
     return { ok: true, input: src };
   }
   if (surface === 'doc' && (src.text != null || src.src || src.item)) {
@@ -251,11 +188,7 @@ export function resolveOfficeWriteInput(fs, input = {}, surface = 'doc') {
   if (json.ok) {
     if (isEmptyObject(json.value) && typeof json.value !== 'string') return emptyPayloadError(surface);
     const mapped =
-      surface === 'doc'
-        ? commandsFromDocJson(json.value)
-        : surface === 'deck'
-          ? commandsFromDeckJson(json.value, src)
-          : commandsFromWebJson(json.value);
+      surface === 'doc' ? commandsFromDocJson(json.value) : commandsFromWebJson(json.value);
     if (!mapped.ok) return mapped;
     return { ok: true, input: { ...stripConsumedPath(src), commands: mapped.commands } };
   }
@@ -306,68 +239,6 @@ export function hydrateDocCommands(fs, commands) {
   return { ok: true, commands: out };
 }
 
-export function hydrateDeckCommands(fs, commands) {
-  const list = Array.isArray(commands) ? commands : commands && typeof commands === 'object' ? [commands] : [];
-  const out = [];
-  for (const cmd of list) {
-    if (!cmd || typeof cmd !== 'object') {
-      out.push(cmd);
-      continue;
-    }
-    const op = String(cmd.op || cmd.type || '').trim();
-    const p = officePayloadPath(cmd);
-    if (op === 'replacePlate' && isEmptySlots(cmd.slots) && p) {
-      const loaded = readGuestJson(fs, p, 'deck');
-      if (!loaded.ok) return loaded;
-      const mapped = commandsFromDeckJson(loaded.value, cmd);
-      if (!mapped.ok) return mapped;
-      const seed = mapped.commands[0] || {};
-      out.push({
-        ...cmd,
-        layoutId: cmd.layoutId || seed.layoutId,
-        themeId: cmd.themeId || seed.themeId,
-        variant: cmd.variant || seed.variant,
-        slots: seed.slots
-      });
-      continue;
-    }
-    out.push(cmd);
-  }
-  return { ok: true, commands: out };
-}
-
-export function hydrateSceneCreateInput(fs, cmd = {}) {
-  const raw = cmd && typeof cmd === 'object' ? { ...cmd } : {};
-  if (Array.isArray(raw.frames) && raw.frames.length) return { ok: true, input: raw };
-  const op = String(raw.op || raw.source || '').trim();
-  if (op && op !== 'createScene' && op !== 'html') return { ok: true, input: raw };
-  const p = officePayloadPath(raw);
-  if (!p) return { ok: true, input: raw };
-  if (looksLikeRemoteOrBoundImage(p) || looksLikeImageFile(p) || /\.html?$/i.test(p)) return { ok: true, input: raw };
-  const loaded = readGuestJson(fs, p, 'deck');
-  if (!loaded.ok) return loaded;
-  const value = loaded.value;
-  const frames = Array.isArray(value) ? value : value && typeof value === 'object' ? value.frames : null;
-  if (!Array.isArray(frames) || !frames.length) {
-    return {
-      ok: false,
-      code: 'BAD_INPUT',
-      error: 'createScene path JSON needs frames[]',
-      hint: 'write {themeId, frames:[{layoutId,slots}]} via run, then pass that path'
-    };
-  }
-  return {
-    ok: true,
-    input: {
-      ...raw,
-      frames,
-      themeId: raw.themeId || value.themeId,
-      kind: raw.kind || value.kind,
-      title: raw.title || value.title || value.name
-    }
-  };
-}
-
 export function malformedDocWriteError(commands) {
   const list = Array.isArray(commands) ? commands : commands && typeof commands === 'object' ? [commands] : [];
   const ops = new Set(['createDocument', 'insertParagraph', 'setText', 'insertImage', 'insertList']);
@@ -387,39 +258,6 @@ export function malformedDocWriteError(commands) {
         code: 'BAD_INPUT',
         error: op ? `unknown doc op "${op}"` : 'doc command is missing op',
         hint: 'each commands[] item needs op (setText / insertParagraph / createDocument / …)'
-      };
-    }
-  }
-  return null;
-}
-
-export function malformedDeckWriteError(commands, knownOps) {
-  const list = Array.isArray(commands) ? commands : commands && typeof commands === 'object' ? [commands] : [];
-  const allowed = knownOps instanceof Set ? knownOps : new Set(Array.isArray(knownOps) ? knownOps : []);
-  for (const cmd of list) {
-    if (!cmd || typeof cmd !== 'object') {
-      return {
-        ok: false,
-        code: 'BAD_INPUT',
-        error: 'deck command is missing op',
-        hint: 'each commands[] item needs op (replacePlate / setSlotText / …)'
-      };
-    }
-    const op = String(cmd.op || cmd.type || '').trim();
-    if (!op || (allowed.size && !allowed.has(op))) {
-      return {
-        ok: false,
-        code: 'BAD_INPUT',
-        error: op ? `unknown deck op "${op}"` : 'deck command is missing op',
-        hint: 'each commands[] item needs op (replacePlate / setSlotText / …)'
-      };
-    }
-    if (op === 'replacePlate' && isEmptySlots(cmd.slots) && !officePayloadPath(cmd) && !String(cmd.layoutId || '').trim()) {
-      return {
-        ok: false,
-        code: 'BAD_INPUT',
-        error: 'replacePlate needs slots or a guest path',
-        hint: 'pass slots, or path / from to /scratch or /artifacts JSON — do not retype'
       };
     }
   }

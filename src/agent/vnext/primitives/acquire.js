@@ -216,7 +216,7 @@ export function createAcquireTool(ctx) {
   return {
     name: 'acquire',
     description:
-      'Import external read-only information (session guest sees /scratch/sources; this primitive still writes /work/sources and the host remaps). action=search needs query (not url). action=fetch|map|crawl need url. map query is an optional in-site filter. crawl is host-capped. Never mutates Selection Groups.',
+      'Bring unknown public web into the guest (search / fetch / map / crawl). Anonymous — no user cookies. Session guest sees /scratch/sources; this primitive writes /work/sources and the host remaps. Not for an already-open tab or a login/cookie/captcha/IP-bound URL: that is sys.fetch as:"page". Never mutates Selection Groups.',
     parameters: {
       type: 'object',
       properties: {

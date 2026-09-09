@@ -4,7 +4,6 @@
  */
 
 import { alignBoxes, distributeBoxes } from './htmlArtboard.js';
-import { slideStripBox } from './slidesLayout.js';
 
 export const HTML_OPS = [
   'createDocument',
@@ -154,7 +153,6 @@ export function encodePlateNotes(raw) {
 export function defaultPasteboardBox(index, size, kind) {
   const w = Number(size?.w) > 0 ? Number(size.w) : kind === 'deck' ? 1920 : 720;
   const h = Number(size?.h) > 0 ? Number(size.h) : kind === 'deck' ? 1080 : 1080;
-  if (String(kind || '') === 'deck') return slideStripBox(index, { w, h });
   return { x: Math.round(Number(index || 0) * (w + 80)), y: 0, w, h };
 }
 

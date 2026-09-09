@@ -10,7 +10,7 @@ import { getBoundGroupsCompact } from './groups.js';
 import { listBoundItemIndex } from './itemLabel.js';
 import { getArtifactIndexCompact, listArtifacts } from './artifacts.js';
 import { compactShelfSnapshot } from './artifactShelf.js';
-import { compactCanvasOverview, isPawCanvasDoc } from './engineCanvas.js';
+import { isPawCanvasDoc } from './openClassify.js';
 import { buildSessionAgentInstructions, buildWorldStateBlock } from './prompt.js';
 import { userRequestedPlan } from './planContract.js';
 import { createSessionTools } from './tools.js';
@@ -152,14 +152,17 @@ export async function sendMessage(store, input) {
       const rec = (listArtifacts(store, sessionId) || []).find((a) => a.artifactId === activeHtml.artifactId);
       const raw = rec?.primaryPath ? fs.readFile(rec.primaryPath) : '';
       if (isPawCanvasDoc(raw)) {
-        const overview = compactCanvasOverview(raw, activeHtml.selections || activeHtml.overview?.selections);
-        if (overview) activeHtml = { ...activeHtml, overview: { ...(activeHtml.overview || {}), ...overview } };
+        activeHtml = {
+          ...activeHtml,
+          overview: { ...(activeHtml.overview || {}), kind: 'json-canvas', engine: 'removed' }
+        };
       }
     } catch {
       /* overview is a hint */
     }
   }
-  // Skills: description-based semantic routing by the model (no host keyword match)
+  // Skills: catalog only (id / name / description). Playbooks load via inspect view=skill.
+  // System prompt is identity + composition — do not duplicate tool schemas here.
   const durableSkills = await getDurableSkillStore().list();
   const skillCatalog = mergeSkillCatalog(listPackagedSkillCatalog(), durableSkills);
   const skillText = formatSkillsForSystemPrompt({
@@ -323,11 +326,13 @@ export async function sendMessage(store, input) {
       createdAt: Date.now(),
       contextWindow
     };
-    store.put('sessions', sessionId, {
-      ...store.get('sessions', sessionId),
-      compact: nextCompact,
-      updatedAt: Date.now()
-    });
+    if (store.has('sessions', sessionId)) {
+      store.put('sessions', sessionId, {
+        ...store.get('sessions', sessionId),
+        compact: nextCompact,
+        updatedAt: Date.now()
+      });
+    }
     try {
       onEvent({
         type: 'compact-done',
@@ -505,15 +510,17 @@ export async function sendMessage(store, input) {
       ratio: contextUsageRatio(promptTokens, contextWindow),
       updatedAt: Date.now()
     };
-    store.put('sessions', sessionId, {
-      ...sess2,
-      title: sessionTitle,
-      name: sessionTitle,
-      titleLocked: !!sess2?.titleLocked,
-      messages: [...(sess2.messages || []), assistant],
-      contextUsage,
-      updatedAt: Date.now()
-    });
+    if (sess2 && store.has('sessions', sessionId)) {
+      store.put('sessions', sessionId, {
+        ...sess2,
+        title: sessionTitle,
+        name: sessionTitle,
+        titleLocked: !!sess2?.titleLocked,
+        messages: [...(sess2.messages || []), assistant],
+        contextUsage,
+        updatedAt: Date.now()
+      });
+    }
     emitUsage({
       promptTokens: contextUsage.promptTokens,
       completionTokens: contextUsage.completionTokens
@@ -594,11 +601,13 @@ export async function sendMessage(store, input) {
         endedAt,
         createdAt: endedAt
       };
-      store.put('sessions', sessionId, {
-        ...sessFail,
-        messages: [...(sessFail.messages || []), failAssistant],
-        updatedAt: Date.now()
-      });
+      if (sessFail && store.has('sessions', sessionId)) {
+        store.put('sessions', sessionId, {
+          ...sessFail,
+          messages: [...(sessFail.messages || []), failAssistant],
+          updatedAt: Date.now()
+        });
+      }
     } catch {
       /* audit persist must not hide the original error */
     }

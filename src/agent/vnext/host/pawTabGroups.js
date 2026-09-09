@@ -4,7 +4,6 @@
  */
 
 export const PAW_WORK_PAGE_FILES = Object.freeze([
-  'design.html',
   'sheet.html',
   'docs.html',
   'site.html',
@@ -14,7 +13,6 @@ export const PAW_WORK_PAGE_FILES = Object.freeze([
 
 /** Live office canvases the agent may lock. Never live web / picker / artifactPreview. */
 export const PAW_LOCKABLE_PAGE_FILES = Object.freeze([
-  'design.html',
   'sheet.html',
   'docs.html',
   'site.html'

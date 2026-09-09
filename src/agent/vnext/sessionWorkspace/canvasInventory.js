@@ -5,17 +5,16 @@
 import { listArtifacts } from './artifacts.js';
 import { bytesToUtf8, isSheetArtifact } from '../../../preview/sheetCodec.js';
 import { classifyOpenArtifact, isUtf8OpenKind } from './openClassify.js';
-import { canvasKindFromDoc, isPawCanvasDoc } from './engineCanvas.js';
 
 export const KERNEL_TOOL_NAMES = ['inspect', 'acquire', 'run', 'clarify', 'action'];
-export const OFFICE_TOOL_NAMES = ['sheet', 'deck', 'doc', 'web'];
+export const OFFICE_TOOL_NAMES = ['sheet', 'doc', 'web'];
 /** Always-on model surface. Inventory aims tools; it does not hide them. */
 export const SESSION_TOOL_NAMES = [...KERNEL_TOOL_NAMES, ...OFFICE_TOOL_NAMES];
 
 /**
  * @param {object} rec
  * @param {string|Uint8Array|null|undefined} content
- * @returns {'sheet'|'deck'|'poster'|'doc'|'web'|null}
+ * @returns {'sheet'|'doc'|'web'|null}
  */
 export function classifyCanvasKind(rec = {}, content) {
   if (isSheetArtifact(rec)) return 'sheet';
@@ -33,9 +32,7 @@ export function classifyCanvasKind(rec = {}, content) {
   });
   if (opened.canvas === 'sheet') return 'sheet';
   if (opened.canvas === 'docs') return 'doc';
-  if (opened.kind === 'json-canvas' || opened.canvas === 'design') {
-    return classifyJsonCanvasKind(content);
-  }
+  if (opened.kind === 'json-canvas') return null;
   const text = contentToText(content);
   if (opened.kind === 'html-plates') {
     return null;
@@ -54,7 +51,6 @@ export function classifyCanvasKind(rec = {}, content) {
     try {
       const obj = JSON.parse(trimmed);
       if (obj && typeof obj === 'object') {
-        if (isPawCanvasDoc(obj)) return canvasKindFromDoc(obj);
         if (obj.body && typeof obj.body === 'object' && obj.body.dataStream != null) return 'doc';
         if (Array.isArray(obj.blocks) && !Array.isArray(obj.plates) && !obj.pages) return 'doc';
       }
@@ -72,7 +68,7 @@ export function classifyCanvasKind(rec = {}, content) {
  * @param {import('./store.js').SessionWorkspaceStore} store
  * @param {string} sessionId
  * @param {{ readFileBytes?: Function }|null} [fs]
- * @returns {{ sheet: string[], deck: string[], poster: string[], doc: string[], web: string[] }}
+ * @returns {{ sheet: string[], doc: string[], web: string[] }}
  */
 export function inventoryFromSession(store, sessionId, fs = null) {
   const out = emptyInventory();
@@ -93,25 +89,11 @@ export function inventoryFromSession(store, sessionId, fs = null) {
 }
 
 export function emptyInventory() {
-  return { sheet: [], deck: [], poster: [], doc: [], web: [] };
+  return { sheet: [], doc: [], web: [] };
 }
 
-export function inventoryHasVisual(inv) {
-  return !!(inv?.deck?.length || inv?.poster?.length);
-}
-
-function classifyJsonCanvasKind(content) {
-  const text = contentToText(content);
-  if (text.trim().startsWith('{')) {
-    try {
-      const obj = JSON.parse(text);
-      if (isPawCanvasDoc(obj)) return canvasKindFromDoc(obj);
-    } catch {
-      /* inventory reads a 12KB head; fat canvases with embedded plates still parse as json-canvas */
-    }
-  }
-  if (/"shell"\s*:\s*"slides"/i.test(text)) return 'deck';
-  return 'poster';
+export function inventoryHasVisual() {
+  return false;
 }
 
 function htmlKindAttr(html) {

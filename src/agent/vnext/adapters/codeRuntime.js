@@ -249,11 +249,12 @@ async function runQuickJS(opts) {
   runtime.setInterruptHandler(() => Boolean(signal?.aborted) || deadlineInterrupt());
 
   const vm = runtime.newContext();
+  const hostDeferreds = createHostDeferredBag();
 
   try {
     injectConsole(vm, stdout, stderr);
-    injectFs(vm, sandboxFs);
-    injectSys(vm, opts.sys);
+    injectFs(vm, sandboxFs, hostDeferreds);
+    injectSys(vm, opts.sys, hostDeferreds);
     // Harden: privileged host APIs are absent. Access throws so adversarial
     // probes fail closed (exitStatus !== 0) rather than silently returning host data.
     // (QuickJS has its own globalThis — host chrome/window/document never leak.)
@@ -339,6 +340,10 @@ async function runQuickJS(opts) {
       runtime: 'quickjs'
     };
   } finally {
+    // newPromise() holds resolve/reject until dispose. In-flight fs/sys RPCs
+    // must drop those handles before JS_FreeRuntime or WASM aborts on
+    // list_empty(&rt->gc_obj_list) and can take the offscreen renderer with it.
+    hostDeferreds.disposeAll();
     try {
       vm.dispose();
     } catch {
@@ -438,12 +443,47 @@ function injectConsole(vm, stdout, stderr) {
   consoleHandle.dispose();
 }
 
+/** Track QuickJS deferreds from host fs/sys so teardown can free them. */
+function createHostDeferredBag() {
+  /** @type {Set<{ dispose?: () => void }>} */
+  const pending = new Set();
+  return {
+    track(deferred) {
+      if (deferred) pending.add(deferred);
+      return deferred;
+    },
+    forget(deferred) {
+      pending.delete(deferred);
+    },
+    disposeAll() {
+      for (const deferred of pending) {
+        try {
+          deferred.dispose?.();
+        } catch {
+          /* already freed */
+        }
+      }
+      pending.clear();
+    }
+  };
+}
+
+function releaseHostDeferred(handles, deferred) {
+  handles?.forget?.(deferred);
+  try {
+    deferred?.dispose?.();
+  } catch {
+    /* already freed */
+  }
+}
+
 /**
  * Inject async fs object (RPC-style promises).
  * @param {import('quickjs-emscripten').QuickJSContext} vm
  * @param {object} sandboxFs
+ * @param {ReturnType<typeof createHostDeferredBag>} handles
  */
-function injectFs(vm, sandboxFs) {
+function injectFs(vm, sandboxFs, handles) {
   const fsHandle = vm.newObject();
 
   const methods = ['readFile', 'writeFile', 'readdir', 'mkdir', 'stat', 'exists', 'remove', 'rm'];
@@ -457,7 +497,7 @@ function injectFs(vm, sandboxFs) {
 
     const fnHandle = vm.newFunction(name, (...argHandles) => {
       const args = argHandles.map((h) => safeDump(vm, h));
-      const deferred = vm.newPromise();
+      const deferred = handles.track(vm.newPromise());
 
       if (!hostFn) {
         const errH = vm.newError(`${name} not available in this run`);
@@ -465,10 +505,11 @@ function injectFs(vm, sandboxFs) {
         errH.dispose();
         deferred.settled.then(() => {
           try {
-            vm.runtime.executePendingJobs();
+            if (vm.alive) vm.runtime.executePendingJobs();
           } catch {
             /* ignore */
           }
+          releaseHostDeferred(handles, deferred);
         });
         return deferred.handle;
       }
@@ -507,13 +548,18 @@ function injectFs(vm, sandboxFs) {
           }
         })
         .finally(() => {
-          if (!vm.alive) return;
+          const finish = () => releaseHostDeferred(handles, deferred);
+          if (!vm.alive) {
+            finish();
+            return;
+          }
           deferred.settled.then(() => {
             try {
               vm.runtime.executePendingJobs();
             } catch {
               /* ignore */
             }
+            finish();
           });
         });
 
@@ -532,13 +578,14 @@ function injectFs(vm, sandboxFs) {
  * Inject sys — one host RPC plus a guest wrapper. help() is sync catalog.
  * @param {import('quickjs-emscripten').QuickJSContext} vm
  * @param {{ call?: Function }|null|undefined} sys
+ * @param {ReturnType<typeof createHostDeferredBag>} handles
  */
-function injectSys(vm, sys) {
+function injectSys(vm, sys, handles) {
   const hostCall = typeof sys?.call === 'function' ? sys.call.bind(sys) : null;
   const fnHandle = vm.newFunction('__pw_sys_call', (...argHandles) => {
     const op = String(safeDump(vm, argHandles[0]) || '');
     const params = argHandles.length > 1 ? safeDump(vm, argHandles[1]) : {};
-    const deferred = vm.newPromise();
+    const deferred = handles.track(vm.newPromise());
     Promise.resolve()
       .then(() => {
         if (!hostCall) {
@@ -575,13 +622,18 @@ function injectSys(vm, sys) {
         }
       })
       .finally(() => {
-        if (!vm.alive) return;
+        const finish = () => releaseHostDeferred(handles, deferred);
+        if (!vm.alive) {
+          finish();
+          return;
+        }
         deferred.settled.then(() => {
           try {
             vm.runtime.executePendingJobs();
           } catch {
             /* ignore */
           }
+          finish();
         });
       });
     return deferred.handle;

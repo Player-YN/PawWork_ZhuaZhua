@@ -22,7 +22,7 @@ export const DEFAULT_OPENROUTER_IMAGE_PATH = '/images';
 /**
  * Host law (HANDOFF Q3=B): captions/dialogue live in text nodes, so image
  * prompts are stamped no-text by default. `allowText === true` is the explicit
- * exemption for user-requested fused finished images (compose-image).
+ * exemption for user-requested fused finished images.
  */
 export const NO_TEXT_PROMPT_CLAUSE =
   'Strictly no text in the image: no words, no letters, no numbers, no captions, no speech-bubble lettering, no watermarks, no UI chrome. 图中不要出现任何文字。';

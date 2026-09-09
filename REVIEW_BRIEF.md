@@ -66,7 +66,7 @@ Branch: `main`. Recent commits (context only; not this wave):
 | `src/agent/vnext/sessionWorkspace/capabilityCatalog.js` | Comment only (2 lines) |
 | `src/agent/vnext/primitives/acquire.js` | Comment + `/work`→`/scratch` description (not sys ABI) |
 | `src/agent/vnext/index.js` | Barrel comment |
-| `src/agent/prompts.js` | Leftover constitution file header |
+| `src/agent/vnext/sessionWorkspace/prompt.js` | Session agent system prompt |
 | `src/content_script.js` | File-header comment only |
 | `AGENTS.md` | Nested map / sys mention |
 | `README.md` | Load blurb + sys mention |
@@ -141,7 +141,7 @@ Do not inherit answers from docs or from §10.
    - `handleWorkspaceSys` `op` switch in `browserSysHost.js`
    - `SYS_MODEL_HINT` + `inspect` `view=sys` + `prompt.js` wording
 5. **Failure modes.** User Scripts off; Chrome &lt; 135; `debugger` missing; DevTools already attached (`CDP_BUSY`); restricted URLs (`chrome://`, other-extension, Widevine); result caps (`SYS_EVAL_JSON_MAX`, `SYS_FETCH_BYTES_MAX`, `SYS_EVAL_SOURCE_MAX`, `SYS_CDP_RESULT_MAX`, screenshot cap); `NOT_CLONEABLE`; timeout constants (`SYS_TIMEOUT_MS`, `SYS_CDP_TIMEOUT_MS`). Which codes are returned, and are they consistent across layers (sandbox reject vs `{ ok:false, code }`)?
-6. **Prompt / tool text vs behavior.** `run` description, `code` field, `inspect view=sys`, world line `browserSys=pawwork-sys-v1`, leftover `src/agent/prompts.js`. What does the model get told that the host does not do (or the reverse)?
+6. **Prompt / tool text vs behavior.** `run` description, `code` field, `inspect view=sys`, world line `browserSys=pawwork-sys-v1`, `sessionWorkspace/prompt.js`. What does the model get told that the host does not do (or the reverse)?
 7. **Surface shape.** Is there anything that looks like a prebuilt downloader product or a userscript manager UI/store? `sys.download` and `userScripts` appear in this wave — what do they actually implement?
 8. **Permission blast radius.** `userScripts` + `debugger` + existing `<all_urls>` / `tabs` / `downloads`. Is the new surface gated, or is it a general SW RPC?
 9. **Docs in the same tree.** `HANDOFF.md` is deleted while `AGENTS.md` / `README.md` still link to it. `minimum_chrome_version` vs 135+. Treat doc/code drift as in-scope for *this* wave only.
@@ -149,7 +149,7 @@ Do not inherit answers from docs or from §10.
 ## 7. Out of scope
 
 - Office canvases, preview engines, and packaged skills — unless you need them to explain a file that is actually in §3 (`src/preview/AGENTS.md` is docs-only in this tree).
-- Rewriting leftover `src/agent/prompts.js` constitution.
+- Rewriting `sessionWorkspace/prompt.js` (the live system prefix).
 - Adding cookies, `tabCapture`, or further ABI ops.
 - Whole-product rewrite, CWS packaging, or inventing a test harness as the review deliverable.
 - Treating this file or `AGENTS.md` as a source of truth for what “should” exist.

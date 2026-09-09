@@ -10,7 +10,7 @@ import { harvestModelUsage } from './contextCompact.js';
 
 export const BEHAVIOR_TRAJECTORY_SCHEMA = 'pagewand.trajectory/v3';
 
-const OFFICE_TOOLS = new Set(['sheet', 'deck', 'doc']);
+const OFFICE_TOOLS = new Set(['sheet', 'doc', 'web']);
 const COMMAND_KEEP = [
   'op',
   'act',
@@ -45,7 +45,7 @@ const RESULT_KEEP = [
   'shell'
 ];
 const GRID_WRITE_OPS = new Set(['setValues2d', 'applyGrid']);
-const SLOT_WRITE_OPS = new Set(['replacePlate', 'createScene']);
+const SLOT_WRITE_OPS = new Set(['replacePlate']);
 const BLOCK_WRITE_OPS = new Set(['createDocument']);
 const HTML_WRITE_OPS = new Set(['replaceHtml', 'setHtml']);
 const PAYLOAD_MARKERS = new Set(['[omitted]', '[stripped]', '[path-hydrate]']);
@@ -95,7 +95,7 @@ function compactMentions(raw) {
 function compactCanvases(canvases) {
   if (!canvases || typeof canvases !== 'object') return undefined;
   const out = {};
-  for (const key of ['sheet', 'deck', 'poster', 'doc']) {
+  for (const key of ['sheet', 'doc', 'web']) {
     const ids = Array.isArray(canvases[key]) ? canvases[key].map(String).slice(0, 20) : [];
     if (ids.length) out[key] = ids;
   }
@@ -340,12 +340,12 @@ function compactCommands(commands) {
 
 function officeSurface(tool, args, result) {
   const name = String(tool || '');
-  if (OFFICE_TOOLS.has(name)) return name === 'deck' ? 'canvas' : name;
+  if (OFFICE_TOOLS.has(name)) return name;
   const op = String(args?.op || result?.op || '');
   if (name === 'run') {
     if (op === 'skill') return 'skill';
     if (op === 'sheet' || op === 'doc') return op;
-    if (op === 'html' || op === 'ingestPdf') return 'canvas';
+    if (op === 'ingestPdf') return 'doc';
     if (op === 'write_artifact' || op === 'update_artifact') return 'artifact';
   }
   if (name === 'inspect') {

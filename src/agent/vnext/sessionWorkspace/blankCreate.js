@@ -3,11 +3,10 @@
  * Reuses existing durable formats — no second file type.
  */
 
-import { emptyPawCanvas } from './engineCanvas.js';
 import { applyDocCommands, emptyDocSnapshot } from './docsApply.js';
 import { stampSiteHtml } from './siteApply.js';
 
-export const BLANK_KINDS = ['design', 'slides', 'sheet', 'doc', 'site'];
+export const BLANK_KINDS = ['sheet', 'doc', 'site'];
 
 const BLANK_SITE_HTML = `<!DOCTYPE html>
 <html lang="zh-CN" data-paw-kind="site">
@@ -37,17 +36,6 @@ function stampDocumentKind(html) {
 export function blankArtifactPayload(kind) {
   const k = String(kind || '').trim();
   if (k === 'sheet') return { kind: 'sheet' };
-  if (k === 'design' || k === 'slides') {
-    const shell = k === 'slides' ? 'slides' : 'design';
-    const title = shell === 'slides' ? 'Slides' : 'Design';
-    return {
-      kind: k,
-      name: shell === 'slides' ? 'slides.json' : 'design.json',
-      mimeType: 'application/json',
-      content: JSON.stringify(emptyPawCanvas({ shell, title })),
-      folder: shell === 'slides' ? 'slides' : 'design'
-    };
-  }
   if (k === 'doc') {
     const applied = applyDocCommands(emptyDocSnapshot('Document'), [
       { op: 'createDocument', title: 'Document' }

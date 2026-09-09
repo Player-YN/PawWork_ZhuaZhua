@@ -1,9 +1,9 @@
 /**
- * Frame-pixel verify for Design/Slides. Headless JSON cannot rasterize tldraw;
- * previews come from the live editor (toImage) and travel as modelParts.
+ * Office tool result → model output. Frame-pixel attach is leftover from
+ * Design/Slides and unused by sheet / doc / web.
  *
- * HARD: these JPEGs are ephemeral model-vision only — never createArtifact,
- * never list in 交付物, never download. Burn after the tool result is read.
+ * HARD: preview JPEGs are ephemeral model-vision only — never createArtifact,
+ * never list in 交付物, never download.
  */
 
 export const PREVIEW_MAX_FRAMES = 8;

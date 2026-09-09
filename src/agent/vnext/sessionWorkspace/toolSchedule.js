@@ -7,7 +7,7 @@ import { SESSION_TOOL_NAMES } from './canvasInventory.js';
 import { formatFrozenPlanInstructions } from './planContract.js';
 
 /**
- * @param {{ sheet?: string[], deck?: string[], poster?: string[], doc?: string[], web?: string[] }} [inventory]
+ * @param {{ sheet?: string[], doc?: string[], web?: string[] }} [inventory]
  * @param {{ tabUnfocused?: boolean }} [runtime]
  * @returns {string[]}
  */

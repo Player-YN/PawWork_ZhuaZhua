@@ -239,17 +239,9 @@ export function applyLiveProgress(state, ev, lang = 'zh') {
       next.visible = false;
       return next;
     }
-    if (next.pendingTools > 0 || next.phase === 'commentary') {
-      next.phase = 'commentary';
-      return useCommentaryLabel(next);
-    }
-    if (next.buffer.length > COMMENTARY_MAX || (next.buffer.match(/\n/g) || []).length >= 2) {
-      next.phase = 'final';
-      next.answerFlush = next.buffer;
-      next.visible = false;
-      return next;
-    }
-    next.phase = 'unknown';
+    // Mid-turn prose is the progress row only. Promoting it to a bubble
+    // before model-end makes the same text appear twice when tools follow.
+    next.phase = next.pendingTools > 0 || next.phase === 'commentary' ? 'commentary' : 'unknown';
     return useCommentaryLabel(next);
   }
 

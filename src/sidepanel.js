@@ -32,6 +32,7 @@ import {
   buildMentionCandidates,
   nestMentionCandidates,
   normalizeComposerMentions,
+  abbrevTabTitle,
   WORKSPACE_MENTION_ID,
   PAGES_MENTION_ID
 } from './sidepanel/composerMentions.js';
@@ -41,14 +42,17 @@ import {
   normalizePageRef,
   classifyWorkTab,
   isPawWorkTabUrl,
-  workTabListenLabel
+  workTabListenLabel,
+  pageRefId
 } from './agent/vnext/sessionWorkspace/pageContext.js';
 import {
   shouldApplySessionBroadcast,
   sessionThreadShouldHide,
+  clarifyBelongsToSession,
   mergeSessionTranscriptMessages,
   pendingThreadMessages
 } from './sidepanel/sessionIsolation.js';
+import { readActiveExecution, isExecutionLive } from './sidepanel/executionSync.js';
 import {
   nextGroupName,
   groupNameKey,
@@ -94,7 +98,7 @@ import {
   trajectoryDownloadFilename,
   normalizeHumanStatus
 } from './agent/trajectory.js';
-import { SYSTEM_CONSTITUTION_VERSION } from './agent/prompts.js';
+import { SYSTEM_PROMPT_VERSION } from './agent/vnext/sessionWorkspace/prompt.js';
 import {
   cacheModelsForBase,
   loadCachedModelsForBase,
@@ -360,6 +364,7 @@ function emptySessionUi(sid) {
   return {
     liveTask: null,
     liveTurnThink: null,
+    liveTurnThinkFromStream: false,
     liveTurnWrap: null,
     liveTurnAnswerText: '',
     liveTurnAnswerEl: null,
@@ -400,6 +405,7 @@ function snapshotLiveGlobals() {
   return {
     liveTask,
     liveTurnThink,
+    liveTurnThinkFromStream,
     liveTurnWrap,
     liveTurnAnswerText,
     liveTurnAnswerEl,
@@ -414,6 +420,7 @@ function snapshotLiveGlobals() {
 function applyLiveGlobals(g = {}) {
   liveTask = g.liveTask || null;
   liveTurnThink = g.liveTurnThink || null;
+  liveTurnThinkFromStream = g.liveTurnThinkFromStream === true;
   liveTurnWrap = g.liveTurnWrap || null;
   liveTurnAnswerText = g.liveTurnAnswerText || '';
   liveTurnAnswerEl = g.liveTurnAnswerEl || null;
@@ -439,9 +446,10 @@ function stashLiveToSession(sid) {
   u.attachments = Array.isArray(pendingAttachments) ? pendingAttachments.slice() : [];
   u.selectedArtifactIds = [...selectedArtifactIds];
   u.sheetSel = { ...sheetSelState, sessionId: id };
-  if (clarifyLiveState) {
+  if (clarifyLiveState && clarifyBelongsToSession(clarifyLiveState.sessionId || id, id)) {
     u.pendingClarify = {
       type: 'clarify',
+      sessionId: id,
       clarifyId: clarifyLiveState.clarifyId,
       questions: clarifyLiveState.questions,
       ...(clarifyLiveState.kind ? { kind: clarifyLiveState.kind } : {}),
@@ -536,6 +544,8 @@ const SCRIPT_CONFIRM_TIMEOUT_MS = 120000;
 let currentActivePageMeta = null;
 /** @type {{ url: string, title: string, origin: string, host: string }|null} */
 let lastActivePage = null;
+/** Live http(s) tabs from SW (`workspace_list_open_tabs`). Not visitedPages. */
+let openMentionPages = [];
 let crossTabStore = new Map();
 let workspaceGroupState = { groups: [], activeGroupId: null, boundGroupIds: [] };
 /** Composer submit mode: default chat; toggle switches the up-arrow to run. */
@@ -605,6 +615,8 @@ let liveTurnWrap = null;
 /** Per-turn assistant bubble (promoteFinalAnswer used to overwrite the first one) */
 let liveTurnAnswerEl = null;
 let liveTurnAnswerText = '';
+/** True after a stream thought / thought-open — empty finish may keep a sealed bar. */
+let liveTurnThinkFromStream = false;
 /** True after finishLiveTurnUi — late thought events must not spawn a second 思考中. */
 let liveTurnSealed = false;
 let liveTurnRenderTimer = 0;
@@ -640,7 +652,7 @@ const trajectoryUi = createTrajectoryUi({
   trajectoryToDownloadJson,
   serializeBehaviorTrajectory,
   fetchWorkspaceSession: (sessionId) => workspaceRpc('getSession', { sessionId }),
-  getConstitutionVersion: () => SYSTEM_CONSTITUTION_VERSION
+  getConstitutionVersion: () => SYSTEM_PROMPT_VERSION
 });
 const mountTaskTrajectoryButton = trajectoryUi.mountTaskTrajectoryButton;
 const downloadTaskTrajectory = trajectoryUi.downloadTaskTrajectory;
@@ -684,6 +696,7 @@ function initSidePanel() {
   safe('wireSessionRail', wireSessionRail);
   syncPickerStateFromActiveTab();
   updateActivePageListeningBanner();
+  void refreshOpenMentionPages();
   safe('setupAutoResizeTextarea', setupAutoResizeTextarea);
   refreshAgentStatusBadge();
   void refreshImageGenChip();
@@ -705,9 +718,22 @@ function initSidePanel() {
   chrome.tabs.onActivated?.addListener(() => {
     updateActivePageListeningBanner();
     syncPickerStateFromActiveTab();
+    void refreshOpenMentionPages();
   });
   chrome.tabs.onUpdated?.addListener((_tabId, changeInfo) => {
     if (changeInfo.status === 'complete') updateActivePageListeningBanner();
+    if (changeInfo.url || changeInfo.title || changeInfo.status || changeInfo.discarded != null) {
+      void refreshOpenMentionPages();
+    }
+  });
+  chrome.tabs.onCreated?.addListener(() => {
+    void refreshOpenMentionPages();
+  });
+  chrome.tabs.onRemoved?.addListener(() => {
+    void refreshOpenMentionPages();
+  });
+  chrome.tabs.onReplaced?.addListener(() => {
+    void refreshOpenMentionPages();
   });
 }
 
@@ -1081,8 +1107,13 @@ function composerPlainText(el = composerEl()) {
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     if (node.classList?.contains('composer-mention')) {
-      const label = node.getAttribute('data-label') || String(node.textContent || '').replace(/^@/, '');
-      s += `@${label}`;
+      const kind = node.getAttribute('data-kind') || '';
+      if (kind === 'link') {
+        s += String(node.getAttribute('data-url') || node.getAttribute('data-label') || '').trim();
+        return;
+      }
+      const label = node.getAttribute('data-label') || String(node.textContent || '').replace(/^[@/]/, '');
+      s += kind === 'skill' || kind === 'command' ? `/${label}` : `@${label}`;
       return;
     }
     if (node.tagName === 'BR') {
@@ -1100,17 +1131,85 @@ function composerPlainText(el = composerEl()) {
 
 function mentionPageCandidates() {
   const out = [];
-  const seen = new Set();
-  const push = (raw, current) => {
-    const ref = normalizePageRef(raw);
-    if (!ref || seen.has(ref.url)) return;
-    seen.add(ref.url);
-    out.push({ ...ref, current: current === true });
-  };
-  if (lastActivePage) push(lastActivePage, true);
-  const visited = workspaceGroupState.visitedPages || [];
-  for (const p of visited) push(p, false);
+  const seenTab = new Set();
+  for (const p of openMentionPages) {
+    const tabId = Number(p?.tabId);
+    if (!Number.isFinite(tabId) || tabId <= 0 || seenTab.has(tabId)) continue;
+    const ref = normalizePageRef(p);
+    if (!ref) continue;
+    seenTab.add(tabId);
+    out.push({
+      ...ref,
+      tabId,
+      current: p.current === true
+    });
+  }
   return out;
+}
+
+function applyOpenMentionPages(pages) {
+  const next = Array.isArray(pages) ? pages : [];
+  const sig = (list) =>
+    list
+      .map((p) => `${Number(p.tabId) || 0}|${p.url || ''}|${p.title || ''}|${p.current ? 1 : 0}`)
+      .join('\n');
+  const changed = sig(openMentionPages) !== sig(next);
+  openMentionPages = next;
+  if (changed) {
+    pruneStalePageMentionChips();
+    if (mentionPaletteOpen) renderMentionPalette(mentionPaletteQuery, mentionPaletteRange);
+  }
+  return changed;
+}
+
+async function refreshOpenMentionPages() {
+  try {
+    const res = await chrome.runtime.sendMessage({
+      target: 'pawwork-background',
+      action: 'workspace_list_open_tabs'
+    });
+    if (res?.ok && Array.isArray(res.pages)) applyOpenMentionPages(res.pages);
+  } catch {
+    /* SW waking */
+  }
+}
+
+function liveMentionTabIds() {
+  return new Set(
+    openMentionPages.map((p) => Number(p.tabId)).filter((id) => Number.isFinite(id) && id > 0)
+  );
+}
+
+function liveMentionUrls() {
+  return new Set(openMentionPages.map((p) => String(p.url || '')).filter(Boolean));
+}
+
+function isLivePageMention(m) {
+  if (!m || m.kind !== 'page') return true;
+  const tabId = Number(m.tabId);
+  if (Number.isFinite(tabId) && tabId > 0) return liveMentionTabIds().has(tabId);
+  const url = String(m.url || '').trim();
+  return url ? liveMentionUrls().has(url) : false;
+}
+
+function pruneStalePageMentionChips(el = composerEl()) {
+  if (!el) return;
+  const liveTabs = liveMentionTabIds();
+  const liveUrls = liveMentionUrls();
+  for (const node of [...el.querySelectorAll('.composer-mention')]) {
+    if (node.getAttribute('data-kind') !== 'page') continue;
+    const tabId = Number(node.getAttribute('data-tab-id'));
+    if (Number.isFinite(tabId) && tabId > 0) {
+      if (!liveTabs.has(tabId)) node.remove();
+      continue;
+    }
+    const url = String(node.getAttribute('data-url') || '').trim();
+    if (!url || !liveUrls.has(url)) node.remove();
+  }
+}
+
+function filterLivePageMentions(mentions) {
+  return (Array.isArray(mentions) ? mentions : []).filter(isLivePageMention);
 }
 
 function composerMentionsFromDom(el = composerEl()) {
@@ -1122,7 +1221,8 @@ function composerMentionsFromDom(el = composerEl()) {
       groupId: node.getAttribute('data-group-id') || '',
       label: node.getAttribute('data-label') || '',
       handle: node.getAttribute('data-handle') || '',
-      url: node.getAttribute('data-url') || ''
+      url: node.getAttribute('data-url') || '',
+      tabId: node.getAttribute('data-tab-id') || ''
     }))
   );
 }
@@ -1399,20 +1499,37 @@ function renderMentionPalette(query, range) {
       } else {
         for (const c of items) {
           const iIndex = mentionPaletteItems.length;
+          const isCurrentPage = c.kind === 'page' && c.current === true;
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className =
-            'mention-palette-item is-item' + (iIndex === mentionPaletteIndex ? ' is-active' : '');
+            'mention-palette-item is-item' +
+            (iIndex === mentionPaletteIndex ? ' is-active' : '') +
+            (isCurrentPage ? ' is-current-page' : '');
           btn.setAttribute('role', 'option');
           btn.setAttribute('aria-selected', iIndex === mentionPaletteIndex ? 'true' : 'false');
+          if (isCurrentPage) btn.setAttribute('aria-current', 'true');
           const label = document.createElement('span');
           label.className = 'mention-palette-label';
           label.textContent = c.label;
+          if (c.kind === 'page') {
+            const tip = [c.title || c.label, c.url].filter(Boolean).join('\n');
+            if (tip) {
+              btn.title = tip;
+              label.title = c.title || c.label;
+            }
+          }
           const meta = document.createElement('span');
           meta.className = 'mention-palette-meta';
           meta.textContent =
             c.kind === 'artifact' ? c.kicker || '' : c.bound ? '' : en ? 'bind' : '将绑定';
           btn.appendChild(label);
+          if (isCurrentPage) {
+            const now = document.createElement('span');
+            now.className = 'mention-palette-now';
+            now.textContent = c.kicker || (en ? 'Now' : '当前');
+            btn.appendChild(now);
+          }
           btn.appendChild(meta);
           btn.addEventListener('mousedown', (e) => e.preventDefault());
           btn.addEventListener('click', () => {
@@ -1536,6 +1653,7 @@ function syncMentionPaletteFromCaret() {
     return;
   }
   renderMentionPalette(ctx.query, ctx.range);
+  void refreshOpenMentionPages();
 }
 
 function createMentionToken(candidate) {
@@ -1548,11 +1666,19 @@ function createMentionToken(candidate) {
   chip.setAttribute('data-label', candidate.label || '');
   chip.setAttribute('data-handle', candidate.handle || '');
   if (candidate.itemKind) chip.setAttribute('data-item-kind', candidate.itemKind);
-  if (candidate.kind === 'page' && candidate.url) chip.setAttribute('data-url', candidate.url);
+  if ((candidate.kind === 'page' || candidate.kind === 'link') && candidate.url) {
+    chip.setAttribute('data-url', candidate.url);
+  }
+  if (candidate.kind === 'page' && Number(candidate.tabId) > 0) {
+    chip.setAttribute('data-tab-id', String(candidate.tabId));
+  }
   chip.textContent =
     candidate.kind === 'skill' || candidate.kind === 'command'
       ? `/${candidate.label}`
-      : `@${candidate.label}`;
+      : candidate.kind === 'link'
+        ? String(candidate.label || 'link')
+        : `@${candidate.label}`;
+  if (candidate.kind === 'link' && candidate.url) chip.title = String(candidate.url);
   if (candidate.kind === 'artifact' && candidate.id) {
     chip.title = currentLang === 'en' ? 'Open workspace file' : '打开工作区文件';
     chip.addEventListener('click', (e) => {
@@ -1562,6 +1688,124 @@ function createMentionToken(candidate) {
     });
   }
   return chip;
+}
+
+function insertComposerNodesAtCaret(nodes) {
+  const input = composerEl();
+  if (!input || !nodes?.length) return;
+  input.focus();
+  const sel = window.getSelection();
+  let range = sel?.rangeCount ? sel.getRangeAt(0) : null;
+  if (!range || !input.contains(range.commonAncestorContainer)) {
+    range = document.createRange();
+    range.selectNodeContents(input);
+    range.collapse(false);
+  }
+  range.deleteContents();
+  for (const node of nodes) {
+    range.insertNode(node);
+    range.setStartAfter(node);
+    range.collapse(true);
+  }
+  const space = document.createTextNode('\u00a0');
+  range.insertNode(space);
+  range.setStartAfter(space);
+  range.collapse(true);
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+  syncComposerEmptyClass(input);
+  resizeComposerField(input);
+}
+
+function normalizePastedHttpUrl(raw) {
+  const s = String(raw || '').trim().replace(/[),.;]+$/g, '');
+  if (!s) return '';
+  const withScheme = /^https?:\/\//i.test(s) ? s : /^www\./i.test(s) ? `https://${s}` : '';
+  if (!withScheme) return '';
+  try {
+    const u = new URL(withScheme);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    return u.href;
+  } catch {
+    return '';
+  }
+}
+
+function pastedUrlList(text) {
+  const t = String(text || '').trim();
+  if (!t) return [];
+  const found = [];
+  const re = /https?:\/\/[^\s<>"'`]+/gi;
+  let m;
+  while ((m = re.exec(t))) {
+    const href = normalizePastedHttpUrl(m[0]);
+    if (href) found.push(href);
+  }
+  if (!found.length) {
+    const one = normalizePastedHttpUrl(t);
+    if (one) found.push(one);
+  }
+  if (!found.length) return [];
+  const leftover = t
+    .replace(/https?:\/\/[^\s<>"'`]+/gi, ' ')
+    .replace(/^www\.\S+/i, ' ')
+    .replace(/[\s,;]+/g, '');
+  return leftover ? [] : [...new Set(found)];
+}
+
+function pageCandidateForPastedUrl(url) {
+  const href = normalizePastedHttpUrl(url);
+  if (!href) return null;
+  const live = mentionPageCandidates().find((p) => {
+    const a = String(p.url || '').split('#')[0];
+    const b = href.split('#')[0];
+    return a === b || String(p.url || '') === href;
+  });
+  if (live) {
+    return {
+      kind: 'page',
+      id: pageRefId(live) || `page:tab:${live.tabId}`,
+      groupId: PAGES_MENTION_ID,
+      label: abbrevTabTitle(live.title, live.host || live.origin),
+      url: live.url || href,
+      tabId: live.tabId
+    };
+  }
+  let host = '';
+  try {
+    host = new URL(href).hostname;
+  } catch {
+    host = '';
+  }
+  return {
+    kind: 'link',
+    id: (`link:${href}`).slice(0, 96),
+    label: abbrevTabTitle('', host) || host || (currentLang === 'en' ? 'Link' : '链接'),
+    url: href
+  };
+}
+
+async function insertPastedUrlChips(urls) {
+  await refreshOpenMentionPages();
+  const chips = [];
+  for (const url of urls) {
+    const cand = pageCandidateForPastedUrl(url);
+    if (cand) chips.push(createMentionToken(cand));
+  }
+  insertComposerNodesAtCaret(chips);
+}
+
+function insertPastedScreenshotChip(att) {
+  if (!att) return;
+  const label = String(att.name || att.handle || (currentLang === 'en' ? 'Screenshot' : '截图'));
+  insertComposerNodesAtCaret([
+    createMentionToken({
+      kind: 'screenshot',
+      id: `shot:${att.labelN || att.handle || label}`,
+      label,
+      handle: att.handle || ''
+    })
+  ]);
 }
 
 async function bindMentionGroups(mentions) {
@@ -1575,6 +1819,8 @@ async function bindMentionGroups(mentions) {
             m.kind !== 'workspace' &&
             m.kind !== 'page' &&
             m.kind !== 'pages' &&
+            m.kind !== 'link' &&
+            m.kind !== 'screenshot' &&
             m.kind !== 'skill' &&
             m.kind !== 'command' &&
             m.groupId !== PAGES_MENTION_ID
@@ -1604,6 +1850,13 @@ async function insertComposerMention(candidate) {
   const input = composerEl();
   const ctx = getAtQueryContext();
   if (!input || !candidate?.id) return;
+  if (candidate.kind === 'page') {
+    await refreshOpenMentionPages();
+    if (!isLivePageMention({ kind: 'page', tabId: candidate.tabId, url: candidate.url })) {
+      if (mentionPaletteOpen) renderMentionPalette(mentionPaletteQuery, mentionPaletteRange);
+      return;
+    }
+  }
   input.focus();
   const chip = createMentionToken(candidate);
   const space = document.createTextNode('\u00a0');
@@ -1685,8 +1938,94 @@ function setAgentRunningUi(running) {
   // Stop replaces send; mode toggle hides while running
   document.getElementById('panel')?.classList.toggle('is-agent-running', !!running);
   if (!running) {
-    hideClarifyLive();
+    const sid = getWorkspaceSessionId();
+    if (
+      clarifyLiveState &&
+      clarifyBelongsToSession(clarifyLiveState.sessionId || sid, sid) &&
+      clarifyLiveState.kind !== 'plan'
+    ) {
+      hideClarifyLive(sid);
+    }
     applyComposerSubmitMode(composerSubmitMode);
+  }
+}
+
+/**
+ * Re-hydrate Stop / thinking from offscreen abort registry (not in-memory send flags).
+ * Live lease → spinner + Stop bound to that sessionId+executionId.
+ * No lease → seal leftover “思考中”, hide Stop.
+ */
+function applyWorkspaceExecutionSnapshot(sessionId, payload, { rpcFailed = false } = {}) {
+  const sid = String(sessionId || '');
+  if (!sid) return;
+  const payloadSid = payload && typeof payload === 'object' ? String(payload.sessionId || '') : '';
+  if (!rpcFailed && payloadSid && payloadSid !== sid) return;
+  const live = rpcFailed ? null : readActiveExecution(payload);
+  const u = uiState(sid);
+  const foreground = getWorkspaceSessionId() === sid;
+  if (live === undefined) {
+    if (foreground) setAgentRunningUi(!!u.running);
+    renderSessionRailList();
+    return;
+  }
+
+  if (isExecutionLive(live)) {
+    // Stale getWorkspaceState from another session must not paint this one.
+    if (live.sessionId && live.sessionId !== sid) {
+      renderSessionRailList();
+      return;
+    }
+    u.running = true;
+    if (live.executionId) {
+      u.executionId = live.executionId;
+      if (foreground) currentWorkspaceTaskId = live.executionId;
+    }
+    if (foreground) {
+      setAgentRunningUi(true);
+      withSessionLive(sid, () => {
+        liveTurnSealed = false;
+        if (liveTask?.body) ensureLiveTurnThink();
+      });
+    }
+    renderSessionRailList();
+    return;
+  }
+
+  const hadSpinner = !!(
+    u.liveTask?.el?.querySelector?.('.think-block.is-live') ||
+    (foreground && liveTurnWrap?.querySelector?.('.think-block.is-live'))
+  );
+  u.running = false;
+  if (foreground) {
+    currentAgentAbort = null;
+    setAgentRunningUi(false);
+  }
+  withSessionLive(sid, () => {
+    const spinning =
+      liveTurnWrap?.querySelector?.('.think-block.is-live') ||
+      liveTask?.el?.querySelector?.('.think-block.is-live');
+    if (spinning || hadSpinner) {
+      finishLiveThinkBlocks();
+      if (rpcFailed && !String(liveTurnAnswerText || '').trim()) {
+        const msg =
+          currentLang === 'en'
+            ? '**Error:** The agent runtime disconnected. This session is no longer running.'
+            : '**错误:** 后台已断开，这一轮已不在运行。';
+        promoteFinalAnswer(msg, { force: true });
+      }
+    }
+  });
+  renderSessionRailList();
+}
+
+async function refreshExecutionFromWorkspace(sessionId) {
+  const sid = String(sessionId || '');
+  if (!sid) return;
+  try {
+    const full = await workspaceRpc('getSession', { sessionId: sid });
+    applyWorkspaceExecutionSnapshot(sid, full);
+  } catch {
+    applyWorkspaceExecutionSnapshot(sid, null, { rpcFailed: true });
   }
 }
 
@@ -1727,8 +2066,8 @@ function stopAgentRun(reason = 'user_stop') {
   renderPromptQueueHint();
   // Product Session abort — host cancels in-flight model/tools/code
   void workspaceRpc('abortTask', {
-    sessionId: getWorkspaceSessionId(),
-    executionId: currentWorkspaceTaskId || undefined
+    sessionId: sid,
+    executionId: uiState(sid).executionId || currentWorkspaceTaskId || undefined
   }).catch((err) => {
     console.warn('[workspace] abortTask failed', err);
   });
@@ -1755,7 +2094,7 @@ function stopAgentRun(reason = 'user_stop') {
       } catch (_) {}
     });
   } catch (_) {}
-  hideClarifyLive();
+  hideClarifyLive(getWorkspaceSessionId());
   // Dismiss free-text ask_user modal if still open (promise already settled above)
   try {
     const modal = document.getElementById('appModalOverlay');
@@ -4328,7 +4667,7 @@ function appendAssistantTurn(task, { thought = '', content = '' } = {}) {
 
 function makeCollapsibleThinking(existingEl) {
   if (existingEl instanceof HTMLElement && existingEl._pawThink) {
-    existingEl.classList.add('is-live');
+    existingEl._pawThink.resume?.();
     return existingEl._pawThink;
   }
   const block = existingEl instanceof HTMLElement ? existingEl : createThinkBlockEl();
@@ -4399,6 +4738,11 @@ function makeCollapsibleThinking(existingEl) {
       syncChrome();
       const duration = formatDurationMS(performance.now() - startedAt);
       summary.textContent = thinkDoneLabel(duration, turnEffort);
+    },
+    resume() {
+      block.classList.add('is-live');
+      if (!tickTimer) tickTimer = setInterval(refreshLiveSummary, 500);
+      refreshLiveSummary();
     },
     destroy() {
       if (tickTimer) {
@@ -4775,8 +5119,10 @@ async function hydrateActiveSessionThread() {
   const parked = uiState(sid).liveTask;
   if (parked?.el) showParkedSessionThread(sid, parked);
   let messages = mergeSessionTranscriptMessages([], Array.isArray(sess.messages) ? sess.messages.slice() : []);
+  let full = null;
+  let rpcFailed = false;
   try {
-    const full = await workspaceRpc('getSession', { sessionId: sid });
+    full = await workspaceRpc('getSession', { sessionId: sid });
     if (getWorkspaceSessionId() !== sid) return;
     messages = mergeSessionTranscriptMessages(
       Array.isArray(full?.messages) ? full.messages : [],
@@ -4793,63 +5139,69 @@ async function hydrateActiveSessionThread() {
     if (messages.length) sess.messages = messages;
     if (full?.title) sess.name = full.title;
   } catch {
-    /* use cached projection */
+    rpcFailed = true;
   }
   if (getWorkspaceSessionId() !== sid) return;
-  const live = uiState(sid).liveTask;
-  if (live?.el) {
-    showParkedSessionThread(sid, live);
-    appendPendingThreadMessages(live, messages);
-    return;
-  }
-  if (!messages.length) {
-    if (liveTask?.el && liveTask.sessionId === sid) {
-      liveTask.el.hidden = true;
+  try {
+    const live = uiState(sid).liveTask;
+    if (live?.el) {
+      showParkedSessionThread(sid, live);
+      appendPendingThreadMessages(live, messages);
+      return;
     }
-    liveTask = null;
-    showWelcome();
-    hideForeignSessionThreads(sid);
-    return;
-  }
-
-  hideWelcome();
-  const existing = dedupeSessionThreads(sid);
-  if (existing) {
-    liveTask = uiState(sid).liveTask || {
-      el: existing,
-      sessionId: sid,
-      body: existing.querySelector('.task-body'),
-      setState() {},
-      append(node) {
-        this.body?.appendChild(node);
-        return node;
+    if (!messages.length) {
+      if (liveTask?.el && liveTask.sessionId === sid) {
+        liveTask.el.hidden = true;
       }
-    };
-    uiState(sid).liveTask = liveTask;
-    existing.hidden = false;
+      liveTask = null;
+      showWelcome();
+      hideForeignSessionThreads(sid);
+      return;
+    }
+
+    hideWelcome();
+    const existing = dedupeSessionThreads(sid);
+    if (existing) {
+      liveTask = uiState(sid).liveTask || {
+        el: existing,
+        sessionId: sid,
+        body: existing.querySelector('.task-body'),
+        setState() {},
+        append(node) {
+          this.body?.appendChild(node);
+          return node;
+        }
+      };
+      uiState(sid).liveTask = liveTask;
+      existing.hidden = false;
+      hideForeignSessionThreads(sid);
+      appendPendingThreadMessages(liveTask, messages);
+      mountSessionTrajectoryButton(liveTask);
+      rebuildTurnJumpRail();
+      return;
+    }
+    const firstUser = messages.find((m) => m.role === 'user');
+    const title = truncateUi(String(sess.name || firstUser?.content || sess.id), 48);
+    const task = createTaskCard(title, { kind: 'chat', continueExisting: false, sessionId: sid });
+    if (!task) return;
     hideForeignSessionThreads(sid);
-    appendPendingThreadMessages(liveTask, messages);
-    mountSessionTrajectoryButton(liveTask);
+    for (const m of messages) {
+      if (m.role === 'user') {
+        appendUserTurnBubble(task, String(m.content || ''));
+      } else if (m.role === 'assistant') {
+        appendAssistantTurn(task, {
+          thought: m.thought || '',
+          content: String(m.content || '')
+        });
+      }
+    }
+    mountSessionTrajectoryButton(task);
     rebuildTurnJumpRail();
-    return;
-  }
-  const firstUser = messages.find((m) => m.role === 'user');
-  const title = truncateUi(String(sess.name || firstUser?.content || sess.id), 48);
-  const task = createTaskCard(title, { kind: 'chat', continueExisting: false, sessionId: sid });
-  if (!task) return;
-  hideForeignSessionThreads(sid);
-  for (const m of messages) {
-    if (m.role === 'user') {
-      appendUserTurnBubble(task, String(m.content || ''));
-    } else if (m.role === 'assistant') {
-      appendAssistantTurn(task, {
-        thought: m.thought || '',
-        content: String(m.content || '')
-      });
+  } finally {
+    if (getWorkspaceSessionId() === sid) {
+      applyWorkspaceExecutionSnapshot(sid, full, { rpcFailed });
     }
   }
-  mountSessionTrajectoryButton(task);
-  rebuildTurnJumpRail();
 }
 
 function appendUserTurnBubble(task, text, nodes) {
@@ -5032,6 +5384,7 @@ function createNewSession() {
   applyContextUsage({});
   sheetSelState = emptySheetSel(id);
   renderSheetSelRow();
+  parkClarifyLive();
   hideForeignSessionThreads(id);
   setAgentRunningUi(false);
   void loadActiveGroupOntoPage();
@@ -5064,10 +5417,19 @@ async function deleteSessionById(sessionId, sessionName) {
   );
   if (!ok) return;
   try {
+    await workspaceRpc('abortTask', {
+      sessionId: doomedId,
+      executionId: uiState(doomedId).executionId || undefined
+    });
+  } catch (err) {
+    console.warn('[workspace] abortTask before delete failed', err);
+  }
+  try {
     await workspaceRpc('deleteSession', { sessionId: doomedId });
   } catch (err) {
     console.warn('[workspace] deleteSession failed', err);
   }
+  uiState(doomedId).running = false;
   const wasActive = String(activeSessionId) === doomedId;
   sessions = sessions.filter((s) => String(s.id) !== doomedId);
   if (!sessions.length) {
@@ -5110,10 +5472,12 @@ function switchSession(sessionId) {
   activeSessionId = sessionId;
   loadLiveFromSession(sessionId);
   void hydrateActiveSessionThread().then(() => {
-    if (getWorkspaceSessionId() === sessionId) hideForeignSessionThreads(sessionId);
+    if (getWorkspaceSessionId() !== sessionId) return;
+    hideForeignSessionThreads(sessionId);
+    restoreClarifyForSession(sessionId);
   });
   hideForeignSessionThreads(sessionId);
-  hideClarifyLive();
+  parkClarifyLive();
   historyRecords = [];
   savePersistentSessions();
   try {
@@ -5136,11 +5500,11 @@ function switchSession(sessionId) {
   sheetSelState = { ...emptySheetSel(sessionId), ...(uiState(sessionId).sheetSel || {}), sessionId };
   renderSheetSelRow();
   setAgentRunningUi(!!uiState(sessionId).running);
-  const pending = uiState(sessionId).pendingClarify;
-  if (pending) {
-    uiState(sessionId).pendingClarify = null;
-    showClarifyLive(pending);
+  if (uiState(sessionId).running) {
+    liveTurnSealed = false;
+    if (liveTask?.body) ensureLiveTurnThink();
   }
+  restoreClarifyForSession(sessionId);
 }
 
 function openMoreSheet() {
@@ -5366,10 +5730,19 @@ function setupAttachmentListeners() {
         return;
       }
       const text = e.clipboardData?.getData('text/plain');
+      const urls = pastedUrlList(text);
+      if (urls.length) {
+        e.preventDefault();
+        void insertPastedUrlChips(urls);
+        return;
+      }
       if (text != null) {
         e.preventDefault();
         document.execCommand('insertText', false, text);
       }
+    });
+    input.addEventListener('input', () => {
+      syncPastedScreenshotChips();
     });
   }
 }
@@ -5481,6 +5854,23 @@ function dropPastedComposerAttachments() {
   renderAttachmentPreviews();
 }
 
+function syncPastedScreenshotChips() {
+  const el = composerEl();
+  if (!el) return;
+  const labels = new Set(
+    [...el.querySelectorAll('.composer-mention[data-kind="screenshot"]')].map(
+      (n) => n.getAttribute('data-label') || n.getAttribute('data-handle') || ''
+    )
+  );
+  const next = pendingAttachments.filter((a) => {
+    if (String(a?.source || '').toLowerCase() !== 'paste' || a.labelKind !== 'screenshot') return true;
+    return labels.has(String(a.name || '')) || labels.has(String(a.handle || ''));
+  });
+  if (next.length === pendingAttachments.length) return;
+  pendingAttachments = next;
+  renderAttachmentPreviews();
+}
+
 /** Clipboard paste images → 截图N chips only. No /artifacts write. */
 function attachPastedImages(files) {
   const list = Array.from(files || []).filter(Boolean);
@@ -5513,14 +5903,24 @@ function inferDataUrlMime(dataUrl) {
 function renderAttachmentPreviews() {
   const bar = $('attachmentPreviewBar');
   if (!bar) return;
-  if (!pendingAttachments.length) {
+  const inlinePasteShots = new Set(
+    [...(composerEl()?.querySelectorAll('.composer-mention[data-kind="screenshot"]') || [])].map(
+      (n) => n.getAttribute('data-label') || ''
+    )
+  );
+  const visible = pendingAttachments.filter((att) => {
+    if (String(att?.source || '').toLowerCase() !== 'paste' || att.labelKind !== 'screenshot') return true;
+    return !inlinePasteShots.has(String(att.name || ''));
+  });
+  if (!visible.length) {
     bar.hidden = true;
     bar.innerHTML = '';
     return;
   }
   bar.hidden = false;
   bar.innerHTML = '';
-  pendingAttachments.forEach((att, i) => {
+  visible.forEach((att) => {
+    const i = pendingAttachments.indexOf(att);
     const chip = document.createElement('span');
     const shown =
       att.labelKind && att.labelN
@@ -5636,9 +6036,13 @@ function beginLiveTurnUi() {
   liveTurnWrap.className = 'agent-turn';
   liveTask.append(liveTurnWrap);
   liveTurnThink = null;
+  liveTurnThinkFromStream = false;
   liveTurnAnswerText = '';
   liveProgressState = createLiveProgressState();
   hideLiveTurnProgress();
+  // Countdown is host chrome for the turn, not a reasoning-delta. OpenRouter /
+  // stream failures otherwise leave an empty card until the RPC rejects.
+  ensureLiveTurnThink();
 }
 
 function hideLiveTurnProgress() {
@@ -5685,6 +6089,14 @@ function renderLiveTurnProgress() {
   scrollTaskStream();
 }
 
+function retractUnsealedLiveAnswer() {
+  if (liveTurnSealed) return;
+  clearLiveTurnRenderTimer();
+  liveTurnAnswerText = '';
+  if (liveTurnAnswerEl?.isConnected) liveTurnAnswerEl.remove();
+  liveTurnAnswerEl = null;
+}
+
 function ingestLiveProgressEvent(ev) {
   const type = String(ev?.type || '');
   if (
@@ -5695,17 +6107,21 @@ function ingestLiveProgressEvent(ev) {
   ) {
     return;
   }
+  if (type === 'tool-call') retractUnsealedLiveAnswer();
   liveProgressState = applyLiveProgress(liveProgressState, ev, currentLang);
   const st = liveProgressState;
-  if (st.answerFlush) {
-    if (!liveTurnAnswerText) liveTurnAnswerText = st.answerFlush;
-    else if (!liveTurnAnswerText.endsWith(st.answerFlush) && !st.answerFlush.startsWith(liveTurnAnswerText)) {
-      liveTurnAnswerText = st.answerFlush;
+  if (st.answerFlush || st.answerChunk) {
+    hideLiveTurnProgress();
+    if (st.answerFlush) {
+      if (!liveTurnAnswerText) liveTurnAnswerText = st.answerFlush;
+      else if (!liveTurnAnswerText.endsWith(st.answerFlush) && !st.answerFlush.startsWith(liveTurnAnswerText)) {
+        liveTurnAnswerText = st.answerFlush;
+      }
+    } else {
+      liveTurnAnswerText += st.answerChunk;
     }
     scheduleLiveTurnAnswerRender();
-  } else if (st.answerChunk) {
-    liveTurnAnswerText += st.answerChunk;
-    scheduleLiveTurnAnswerRender();
+    return;
   }
   renderLiveTurnProgress();
 }
@@ -5718,10 +6134,16 @@ function ensureLiveTurnThink() {
     liveTask.append(liveTurnWrap);
   }
   // One accordion per user turn. Tool-loop step 2 must not spawn a second "思考中".
-  if (liveTurnThink?.el?.isConnected) return liveTurnThink;
+  // Switch-back may find a finished controller (stale idle snapshot sealed it);
+  // if we are asking for live think, reopen the same bar instead of 「已思考」.
+  if (liveTurnThink?.el?.isConnected) {
+    liveTurnThink.resume?.();
+    return liveTurnThink;
+  }
   const existing = liveTurnWrap.querySelector('.think-block');
   if (existing) {
     liveTurnThink = liveTurnThink?.el === existing ? liveTurnThink : makeCollapsibleThinking(existing);
+    liveTurnThink.resume?.();
     return liveTurnThink;
   }
   liveTurnThink = makeCollapsibleThinking();
@@ -5789,19 +6211,85 @@ function applyContextUsage(ev = {}) {
 /** Live clarify overlay — ephemeral chrome, never persisted in the bubble. */
 let clarifyLiveState = null;
 
-function hideClarifyLive() {
+function clarifyHostForSession(sessionId) {
+  const sid = String(sessionId || '');
+  if (sid) {
+    const inThread = uiState(sid).liveTask?.el?.querySelector?.('.clarify-live');
+    if (inThread) return inThread;
+  }
+  const live = document.getElementById('clarifyLive');
+  if (!live) return null;
+  if (!sid || String(live.dataset.sessionId || '') === sid) return live;
+  return null;
+}
+
+function taskForClarifySession(sessionId) {
+  const sid = String(sessionId || '');
+  if (liveTask && (!sid || String(liveTask.sessionId || '') === sid)) return liveTask;
+  return sid ? uiState(sid).liveTask : null;
+}
+
+/** Leave the card in its parked thread. Do not transplant it onto the next session. */
+function parkClarifyLive() {
   const host = document.getElementById('clarifyLive');
-  if (host) host.remove();
+  if (host) host.removeAttribute('id');
   clarifyLiveState = null;
   clearClarifyingChrome();
 }
 
+function hideClarifyLive(sessionId) {
+  const sid = String(sessionId || clarifyLiveState?.sessionId || getLiveSessionId() || '');
+  const host = clarifyHostForSession(sid);
+  if (host && !host.classList.contains('is-sealed')) host.remove();
+  if (!clarifyLiveState || !sid || clarifyBelongsToSession(clarifyLiveState.sessionId, sid)) {
+    clarifyLiveState = null;
+  }
+  if (!sid || sid === getWorkspaceSessionId()) clearClarifyingChrome();
+}
+
+function restoreClarifyForSession(sessionId) {
+  const sid = String(sessionId || '');
+  if (!sid || sid !== getWorkspaceSessionId()) return;
+  const u = uiState(sid);
+  const existing = u.liveTask?.el?.querySelector?.('.clarify-live');
+  if (existing) {
+    if (!existing.classList.contains('is-sealed')) {
+      existing.id = 'clarifyLive';
+      const pending = u.pendingClarify;
+      clarifyLiveState = {
+        sessionId: sid,
+        clarifyId: String(pending?.clarifyId || existing.dataset.clarifyId || ''),
+        questions: Array.isArray(pending?.questions) ? pending.questions : [],
+        picks: Array.isArray(pending?.picks) ? pending.picks : [],
+        ...(pending?.kind === 'plan' || existing.classList.contains('is-plan')
+          ? { kind: 'plan', plan: pending?.plan }
+          : {})
+      };
+      u.liveTask.el.classList.add('is-clarifying');
+      document.querySelector('footer.composer')?.classList.add('is-clarifying');
+      $('panel')?.classList.add('is-clarifying');
+    }
+    u.pendingClarify = null;
+    return;
+  }
+  const pending = u.pendingClarify;
+  if (!pending) return;
+  if (pending.sessionId && !clarifyBelongsToSession(pending.sessionId, sid)) {
+    u.pendingClarify = null;
+    return;
+  }
+  if (!taskForClarifySession(sid)?.body) return;
+  u.pendingClarify = null;
+  showClarifyLive({ ...pending, sessionId: sid });
+}
+
 function submitClarifyAnswers(answers) {
   const id = clarifyLiveState?.clarifyId;
-  hideClarifyLive();
+  const sid = String(clarifyLiveState?.sessionId || getWorkspaceSessionId());
+  hideClarifyLive(sid);
   if (!id) return;
   void workspaceRpc('answerClarify', {
-    sessionId: getWorkspaceSessionId(),
+    sessionId: sid,
     clarifyId: id,
     answers
   }).catch((err) => {
@@ -5815,10 +6303,11 @@ function submitPlanDecision(approved) {
     decision: approved === true ? 'approve' : 'decline'
   };
   const id = clarifyLiveState?.clarifyId;
+  const sid = String(clarifyLiveState?.sessionId || getWorkspaceSessionId());
   sealPlanPanel(approved === true ? 'approved' : 'declined');
   if (!id) return;
   void workspaceRpc('answerClarify', {
-    sessionId: getWorkspaceSessionId(),
+    sessionId: sid,
     clarifyId: id,
     answers
   }).catch((err) => {
@@ -5835,10 +6324,11 @@ function submitPlanRevise(rawNotes) {
     notes
   };
   const id = clarifyLiveState?.clarifyId;
+  const sid = String(clarifyLiveState?.sessionId || getWorkspaceSessionId());
   sealPlanPanel('revise', notes);
   if (!id) return;
   void workspaceRpc('answerClarify', {
-    sessionId: getWorkspaceSessionId(),
+    sessionId: sid,
     clarifyId: id,
     answers
   }).catch((err) => {
@@ -5921,9 +6411,10 @@ function clearClarifyingChrome() {
 }
 
 function sealPlanPanel(decision, notes = '') {
-  const host = document.getElementById('clarifyLive');
+  const sid = String(clarifyLiveState?.sessionId || getLiveSessionId() || '');
+  const host = clarifyHostForSession(sid);
   if (!host?.classList.contains('is-plan')) {
-    hideClarifyLive();
+    hideClarifyLive(sid);
     return;
   }
   const kind =
@@ -5960,7 +6451,9 @@ function sealPlanPanel(decision, notes = '') {
 }
 
 function showPlanLive(ev) {
-  hideClarifyLive();
+  const sid = String(ev?.sessionId || getLiveSessionId() || '');
+  if (!sid) return;
+  hideClarifyLive(sid);
   hideLiveTurnProgress();
   const raw = ev?.plan && typeof ev.plan === 'object' ? ev.plan : null;
   const title = String(raw?.title || '').trim();
@@ -5968,13 +6461,15 @@ function showPlanLive(ev) {
     ? raw.steps.map(normalizePlanStepForUi).filter(Boolean)
     : [];
   if (!title || !steps.length) return;
-  const task = liveTask;
+  const task = taskForClarifySession(sid);
   const body = task?.body;
-  if (!body) return;
+  if (!body || (task.sessionId && !clarifyBelongsToSession(task.sessionId, sid))) return;
 
   const host = document.createElement('div');
-  host.id = 'clarifyLive';
+  if (sid === getWorkspaceSessionId()) host.id = 'clarifyLive';
   host.className = 'clarify-live is-plan';
+  host.dataset.sessionId = sid;
+  host.dataset.clarifyId = String(ev.clarifyId || '');
   host.setAttribute('role', 'region');
   host.setAttribute('aria-label', t('planning') || 'Plan');
 
@@ -6003,15 +6498,26 @@ function showPlanLive(ev) {
 
   body.appendChild(host);
   task.el?.classList.add('is-clarifying');
-  document.querySelector('footer.composer')?.classList.add('is-clarifying');
-  $('panel')?.classList.add('is-clarifying');
-  clarifyLiveState = {
-    clarifyId: String(ev.clarifyId || ''),
-    questions: [],
-    picks: [],
-    kind: 'plan',
-    plan: { title, summary, steps }
-  };
+  if (sid === getWorkspaceSessionId()) {
+    document.querySelector('footer.composer')?.classList.add('is-clarifying');
+    $('panel')?.classList.add('is-clarifying');
+    clarifyLiveState = {
+      sessionId: sid,
+      clarifyId: String(ev.clarifyId || ''),
+      questions: [],
+      picks: [],
+      kind: 'plan',
+      plan: { title, summary, steps }
+    };
+  } else {
+    uiState(sid).pendingClarify = {
+      type: 'clarify',
+      sessionId: sid,
+      clarifyId: String(ev.clarifyId || ''),
+      kind: 'plan',
+      plan: { title, summary, steps }
+    };
+  }
   scrollTaskStream();
 
   host.querySelector('.plan-approve-btn')?.addEventListener('click', () => submitPlanDecision(true));
@@ -6024,17 +6530,21 @@ function showClarifyLive(ev) {
     showPlanLive(ev);
     return;
   }
-  hideClarifyLive();
+  const sid = String(ev?.sessionId || getLiveSessionId() || '');
+  if (!sid) return;
+  hideClarifyLive(sid);
   hideLiveTurnProgress();
   const questions = Array.isArray(ev?.questions) ? ev.questions : [];
   if (!questions.length) return;
-  const task = liveTask;
+  const task = taskForClarifySession(sid);
   const body = task?.body;
-  if (!body) return;
+  if (!body || (task.sessionId && !clarifyBelongsToSession(task.sessionId, sid))) return;
 
   const host = document.createElement('div');
-  host.id = 'clarifyLive';
+  if (sid === getWorkspaceSessionId()) host.id = 'clarifyLive';
   host.className = 'clarify-live';
+  host.dataset.sessionId = sid;
+  host.dataset.clarifyId = String(ev.clarifyId || '');
   host.setAttribute('role', 'region');
   host.setAttribute('aria-label', t('clarifying') || 'Clarifying');
 
@@ -6086,9 +6596,19 @@ function showClarifyLive(ev) {
 
   body.appendChild(host);
   task.el?.classList.add('is-clarifying');
-  document.querySelector('footer.composer')?.classList.add('is-clarifying');
-  $('panel')?.classList.add('is-clarifying');
-  clarifyLiveState = { clarifyId: String(ev.clarifyId || ''), questions, picks };
+  if (sid === getWorkspaceSessionId()) {
+    document.querySelector('footer.composer')?.classList.add('is-clarifying');
+    $('panel')?.classList.add('is-clarifying');
+    clarifyLiveState = { sessionId: sid, clarifyId: String(ev.clarifyId || ''), questions, picks };
+  } else {
+    uiState(sid).pendingClarify = {
+      type: 'clarify',
+      sessionId: sid,
+      clarifyId: String(ev.clarifyId || ''),
+      questions,
+      picks
+    };
+  }
   scrollTaskStream();
 
   const continueBtn = host.querySelector('.clarify-continue-btn');
@@ -6223,29 +6743,34 @@ function handleSessionWorkspaceEvent(request) {
   if (ev.type === 'execution-start') {
     uiState(sid).running = true;
     uiState(sid).executionId = ev.executionId || uiState(sid).executionId;
+    if (sid === foreground) {
+      currentWorkspaceTaskId = ev.executionId || currentWorkspaceTaskId;
+      setAgentRunningUi(true);
+    }
     renderSessionRailList();
   }
 
   const applyLive = () => {
     if (ev?.type === 'clarify') {
-      if (sid !== foreground) {
-        uiState(sid).pendingClarify = ev;
-        return;
-      }
-      showClarifyLive(ev);
+      showClarifyLive({ ...ev, sessionId: sid });
       return;
     }
     if (ev?.type === 'clarify-done') {
-      if (sid !== foreground) {
-        uiState(sid).pendingClarify = null;
+      uiState(sid).pendingClarify = null;
+      const host = clarifyHostForSession(sid);
+      if (host?.classList.contains('is-plan')) {
+        // Plan cards seal in place on their own thread; do not transplant or vanish.
+        if (sid === foreground && !host.classList.contains('is-sealed')) {
+          const decision =
+            ev.decision === 'revise' ? 'revise' : ev.approved === true || ev.decision === 'approve' ? 'approved' : 'declined';
+          if (clarifyLiveState && clarifyBelongsToSession(clarifyLiveState.sessionId, sid)) {
+            sealPlanPanel(decision, ev.notes || '');
+          }
+        }
         return;
       }
-      const live = document.getElementById('clarifyLive');
-      if (live?.classList.contains('is-plan')) {
-        // Plan cards seal in place; do not vanish like question clarify.
-        return;
-      }
-      hideClarifyLive();
+      if (sid !== foreground) return;
+      hideClarifyLive(sid);
       return;
     }
     if (ev.executionId) currentWorkspaceTaskId = ev.executionId;
@@ -6255,10 +6780,23 @@ function handleSessionWorkspaceEvent(request) {
     }
     if (ev.type === 'assistant-final' || ev.type === 'execution-end') {
       settleLiveTurnFromTerminalEvent(ev);
+      uiState(sid).running = false;
+      if (sid === getWorkspaceSessionId()) setAgentRunningUi(false);
+      renderSessionRailList();
       return;
     }
-    if (ev.type === 'thought' || ev.type === 'thought-open') {
+    if (ev.type === 'error') {
+      const msg = streamEventText(ev.message) || String(ev.message || '').trim();
+      if (msg && !liveTurnSealed) {
+        const prefix = currentLang === 'en' ? '**Error:** ' : '**错误:** ';
+        const painted = msg.startsWith('**') ? msg : `${prefix}${msg}`;
+        liveTurnAnswerText = painted;
+        renderLiveTurnAnswer(painted);
+      }
+      ingestLiveProgressEvent(ev);
+    } else if (ev.type === 'thought' || ev.type === 'thought-open') {
       if (liveTurnSealed || !uiState(sid).running) return;
+      liveTurnThinkFromStream = true;
       const text = streamEventText(ev.text) || streamEventText(ev.chunk);
       ensureLiveTurnThink();
       if (text) {
@@ -6368,7 +6906,7 @@ function settleLiveTurnFromTerminalEvent(ev = {}) {
 
 function finishLiveTurnUi(md, opts = {}) {
   liveTurnSealed = true;
-  hideClarifyLive();
+  hideClarifyLive(getLiveSessionId());
   hideLiveTurnProgress();
   liveProgressState = createLiveProgressState();
   if (md && typeof md === 'object' && !Array.isArray(md)) {
@@ -6380,7 +6918,8 @@ function finishLiveTurnUi(md, opts = {}) {
   if (liveTurnThink) {
     const raw = typeof liveTurnThink.getText === 'function' ? liveTurnThink.getText() : '';
     const onlyPlaceholder = isThinkPlaceholderText(raw);
-    if (onlyPlaceholder) {
+    thought = onlyPlaceholder ? '' : String(raw || '').trim();
+    if (!thought && !liveTurnThinkFromStream) {
       try {
         liveTurnThink.clear?.();
       } catch (_) {}
@@ -6388,7 +6927,6 @@ function finishLiveTurnUi(md, opts = {}) {
         liveTurnThink.el?.remove();
       } catch (_) {}
     } else {
-      thought = String(raw || '').trim();
       if (!thought) {
         thought =
           currentLang === 'en'
@@ -6470,7 +7008,7 @@ function renderPromptQueueHint() {
 function enqueueComposerTurn(sessionId) {
   const promptInput = composerEl();
   if (!promptInput) return false;
-  const mentions = composerMentionsFromDom(promptInput);
+  const mentions = filterLivePageMentions(composerMentionsFromDom(promptInput));
   const prompt = composerPlainText(promptInput).trim();
   const attachments = [...pendingAttachments];
   if (!prompt && attachments.length === 0) return false;
@@ -6521,7 +7059,8 @@ async function submitUserPrompt(mode = 'chat', queuedTurn = null) {
     }
   } else {
     if (!promptInput) return;
-    mentions = composerMentionsFromDom(promptInput);
+    await refreshOpenMentionPages();
+    mentions = filterLivePageMentions(composerMentionsFromDom(promptInput));
     prompt = composerPlainText(promptInput).trim();
     if (!prompt && pendingAttachments.length === 0) return;
     if (uiState(runSessionId).running) {
@@ -6542,6 +7081,9 @@ async function submitUserPrompt(mode = 'chat', queuedTurn = null) {
       showSidepanelToast(notMultimodalMessage(currentLang, modelToCheck), { ms: 4200 });
     }
   }
+
+  await refreshOpenMentionPages();
+  mentions = filterLivePageMentions(mentions);
 
   if (!queuedTurn && promptInput) {
     closeMentionPalette();
@@ -6679,6 +7221,16 @@ async function submitUserPrompt(mode = 'chat', queuedTurn = null) {
     const msg = err instanceof Error ? err.message : String(err);
     const aborted = /abort/i.test(msg);
     const channel = isMessageChannelError(err);
+    if (channel) {
+      try {
+        const probe = await workspaceRpc('getSession', { sessionId: runSessionId });
+        if (isExecutionLive(readActiveExecution(probe))) {
+          return;
+        }
+      } catch {
+        /* treat as dead below */
+      }
+    }
     const finalStatusText = aborted
       ? currentLang === 'en'
         ? 'Stopped.'
@@ -6695,15 +7247,14 @@ async function submitUserPrompt(mode = 'chat', queuedTurn = null) {
       promoteFinalAnswer(finalStatusText, { force: true });
     });
   } finally {
-    uiState(runSessionId).running = false;
-    uiState(runSessionId).abort = null;
-    if (getWorkspaceSessionId() === runSessionId) {
-      currentAgentAbort = null;
-      setAgentRunningUi(false);
+    await refreshExecutionFromWorkspace(runSessionId);
+    if (!uiState(runSessionId).running) {
+      uiState(runSessionId).abort = null;
+      if (getWorkspaceSessionId() === runSessionId) currentAgentAbort = null;
+      flushPromptQueue(runSessionId);
     }
     renderSessionRailList();
     void refreshArtifactShelf();
-    flushPromptQueue(runSessionId);
   }
 }
 
@@ -6751,8 +7302,7 @@ async function runBrowserAgentTurn({ prompt, task, skipSend = false, preloadedRe
       promoteFinalAnswer(msg, { force: true });
     });
   } finally {
-    uiState(runSessionId).running = false;
-    if (getWorkspaceSessionId() === runSessionId) setAgentRunningUi(false);
+    await refreshExecutionFromWorkspace(runSessionId);
     renderSessionRailList();
   }
 }
@@ -7403,6 +7953,11 @@ function setupCoreEventListeners() {
       sendResponse?.({ ok: true });
       return true;
     }
+    if (request?.action === 'workspace_open_tabs_changed' && Array.isArray(request.pages)) {
+      applyOpenMentionPages(request.pages);
+      sendResponse?.({ ok: true });
+      return false;
+    }
     if (handleSessionWorkspaceEvent(request)) {
       sendResponse?.({ ok: true });
       return true;
@@ -7554,9 +8109,10 @@ function pulseSheetSelChip(chip, key, pulseKeys) {
 
 function canvasShellLabel(kind) {
   const k = String(kind || '').toLowerCase();
-  if (k === 'deck' || k === 'slides') return t('canvasSelSlides');
-  if (k === 'poster' || k === 'design') return t('canvasSelDesign');
   if (k === 'site' || k === 'web') return t('canvasSelSite');
+  if (k === 'deck' || k === 'slides' || k === 'poster' || k === 'design' || k === 'json-canvas') {
+    return t('canvasSelShell');
+  }
   return t('canvasSelShell');
 }
 
@@ -8261,12 +8817,16 @@ async function deleteSessionArtifact(artifactId) {
 }
 
 async function refreshWorkspaceGroupState() {
+  const sid = getWorkspaceSessionId();
   try {
     // compact:false (service default) — items required for selection chips
-    workspaceGroupState = await workspaceRpc('getWorkspaceState', {
-      sessionId: getWorkspaceSessionId(),
+    const state = await workspaceRpc('getWorkspaceState', {
+      sessionId: sid,
       compact: false
     });
+    if (getWorkspaceSessionId() !== sid) return;
+    workspaceGroupState = state;
+    applyWorkspaceExecutionSnapshot(sid, workspaceGroupState);
     renderWorkspaceGroupControls();
     const active = workspaceGroupState.groups?.find((g) => g.groupId === workspaceGroupState.activeGroupId);
     // Always mirror active group membership into selection chrome (empty group = empty chips, not "no group")
@@ -8752,32 +9312,6 @@ function wireArtifactMenu() {
   });
 }
 
-function setGroupAddLinksOpen(open) {
-  const panel = $('groupAddLinks');
-  const input = $('groupAddLinksInput');
-  const note = $('groupAddLinksNote');
-  if (!panel) return;
-  if (open) {
-    panel.hidden = false;
-    requestAnimationFrame(() => panel.classList.add('is-open'));
-    if (input) {
-      input.value = '';
-      input.placeholder = t('addLinksHint');
-      window.setTimeout(() => input.focus(), 40);
-    }
-    if (note) {
-      note.hidden = true;
-      note.textContent = '';
-    }
-    setGroupSelectOpen(true);
-  } else {
-    panel.classList.remove('is-open');
-    window.setTimeout(() => {
-      if (!panel.classList.contains('is-open')) panel.hidden = true;
-    }, 240);
-  }
-}
-
 async function applyPageAddState(state) {
   const pageAdd = state?.pageAdd || {};
   if (pageAdd.focusedId) focusedPageItemId = pageAdd.focusedId;
@@ -8790,20 +9324,8 @@ async function applyPageAddState(state) {
       : [];
   }
   renderSelectionUI();
-  const note = $('groupAddLinksNote');
-  if (pageAdd.notice) {
-    if (note) {
-      note.hidden = false;
-      note.textContent = pageAdd.notice;
-    }
-    showQuickToast(pageAdd.notice);
-  } else if (pageAdd.summary) {
-    if (note) {
-      note.hidden = false;
-      note.textContent = pageAdd.summary;
-    }
-    showQuickToast(pageAdd.summary);
-  }
+  if (pageAdd.notice) showQuickToast(pageAdd.notice);
+  else if (pageAdd.summary) showQuickToast(pageAdd.summary);
 }
 
 async function addUrlsToActiveGroup(payload) {
@@ -8814,18 +9336,6 @@ async function addUrlsToActiveGroup(payload) {
   });
   await applyPageAddState(state);
   return state;
-}
-
-async function commitPastedGroupLinks() {
-  const input = $('groupAddLinksInput');
-  const text = String(input?.value || '');
-  if (!text.trim()) {
-    setGroupAddLinksOpen(false);
-    return;
-  }
-  const state = await addUrlsToActiveGroup({ text, addedBy: 'paste' });
-  if (input) input.value = '';
-  if (!(state?.pageAdd?.capped > 0)) setGroupAddLinksOpen(false);
 }
 
 function wireGroupSelectUi() {
@@ -8847,13 +9357,6 @@ function wireGroupSelectUi() {
       void createCaptureGroup();
       return;
     }
-    if (t?.id === 'groupSelectAddLinks' || t?.closest?.('#groupSelectAddLinks')) {
-      e.preventDefault();
-      e.stopPropagation();
-      const panel = $('groupAddLinks');
-      setGroupAddLinksOpen(!!panel?.hidden);
-      return;
-    }
     const root = $('groupSelect');
     const menu = $('groupSelectMenu');
     const inTrigger = root?.contains(e.target);
@@ -8861,23 +9364,7 @@ function wireGroupSelectUi() {
     if (!inTrigger && !inMenu) setGroupSelectOpen(false);
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      if ($('groupAddLinks') && !$('groupAddLinks').hidden) {
-        setGroupAddLinksOpen(false);
-        e.stopPropagation();
-        return;
-      }
-      setGroupSelectOpen(false);
-    }
-  });
-  $('groupAddLinksInput')?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      void commitPastedGroupLinks();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      setGroupAddLinksOpen(false);
-    }
+    if (e.key === 'Escape') setGroupSelectOpen(false);
   });
   // Reposition while open (scroll / resize)
   window.addEventListener(
@@ -9186,7 +9673,7 @@ async function restoreBoundHighlightsToTab(tabId, pageUrl) {
       const msg = String(err?.message || err || '');
       if (isUnscriptableInjectError(err) || isUnscriptableTabUrl(url)) return false;
       const transient =
-        /offscreen not ready|Receiving end|establish connection|message port closed|unavailable|context invalidated/i.test(
+        /offscreen not ready|Receiving end|establish connection|message port closed|unavailable|context invalidated|RPC result is unknown|RPC_OUTCOME_UNKNOWN/i.test(
           msg
         );
       if (!transient || attempt === 2) break;
@@ -9197,7 +9684,7 @@ async function restoreBoundHighlightsToTab(tabId, pageUrl) {
     const msg = String(lastErr?.message || lastErr || '');
     if (
       isUnscriptableInjectError(lastErr) ||
-      /offscreen not ready|Receiving end|establish connection|message port closed|Cannot access a chrome/i.test(msg)
+      /offscreen not ready|Receiving end|establish connection|message port closed|Cannot access a chrome|RPC result is unknown|RPC_OUTCOME_UNKNOWN/i.test(msg)
     ) {
       console.debug('[selection] restore bound highlights skipped', msg);
     } else {
@@ -9574,6 +10061,7 @@ function loadPersistentSessions() {
                 }));
               }
               contextUsage = full?.contextUsage || null;
+              applyWorkspaceExecutionSnapshot(id, full);
             } catch {
               const hit = cached.find((s) => s.id === id);
               messages = hit?.messages || [];
@@ -12800,13 +13288,10 @@ async function saveWebAcquireFromForm() {
   return true;
 }
 
-const TLDRAW_LICENSE_STORAGE_KEY = 'pagewand_tldraw_license';
-
 async function saveDebugSettings() {
   const devTraj = !!document.getElementById('devTrajectoryExportCheck')?.checked;
   devTrajectoryExportEnabled = devTraj;
   updateDevTrajectoryUi();
-  const typedLicense = document.getElementById('tldrawLicenseInput')?.value?.trim() || '';
   /** @type {Record<string, unknown>} */
   const toStore = {
     pagewand_use_browser_runtime: true,
@@ -12814,7 +13299,6 @@ async function saveDebugSettings() {
     [RUNTIME_MODE_STORAGE_KEY]: 'vnext',
     [DEV_TRAJECTORY_STORAGE_KEY]: devTraj
   };
-  if (typedLicense) toStore[TLDRAW_LICENSE_STORAGE_KEY] = typedLicense;
   const captureLabel = document.getElementById('captureShortcutLabel')?.dataset?.shortcut;
   if (captureLabel) toStore.pagewand_capture_shortcut = captureLabel;
   await new Promise((resolve) => {
@@ -13000,7 +13484,6 @@ function openAgentSettingsModal() {
       'pagewand_use_browser_runtime',
       'pagewand_allow_python_fallback',
       'pagewand_capture_shortcut',
-      TLDRAW_LICENSE_STORAGE_KEY,
       RUNTIME_MODE_STORAGE_KEY,
       DEV_TRAJECTORY_STORAGE_KEY
     ],
@@ -13009,15 +13492,6 @@ function openAgentSettingsModal() {
       if (devTrajCheck) {
         devTrajCheck.checked = res[DEV_TRAJECTORY_STORAGE_KEY] !== false;
       }
-      const lic = document.getElementById('tldrawLicenseInput');
-      if (lic) {
-        const stored = String(res[TLDRAW_LICENSE_STORAGE_KEY] || '').trim();
-        lic.value = '';
-        lic.placeholder = stored
-          ? (settingsLangEn() ? 'Saved — leave blank to keep' : '已保存 — 留空则保持不变')
-          : (settingsLangEn() ? 'tldraw license key' : 'tldraw 许可证');
-      }
-
       await refreshCaptureShortcutSettingsUi(res.pagewand_capture_shortcut);
 
       try {
@@ -13137,6 +13611,7 @@ async function attachScreenshotToChat(payload) {
     att.labelN = lab.n;
     pendingAttachments.push(att);
     renderAttachmentPreviews();
+    if (payload.source === 'paste') insertPastedScreenshotChip(att);
     // If SW clipboard inject failed, retry from Side Panel document
     if (!payload.clipboardOk) {
       try {

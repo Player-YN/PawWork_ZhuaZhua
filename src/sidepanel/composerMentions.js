@@ -41,7 +41,7 @@ function artifactKindHint(a) {
  * @param {string} query
  * @param {string} [lang]
  * @param {Array<{artifactId?:string,id?:string,name?:string,mimeType?:string,mime?:string}>} [artifacts]
- * @param {Array<{url?:string,title?:string,origin?:string,current?:boolean}>} [pages]
+ * @param {Array<{url?:string,title?:string,origin?:string,current?:boolean,tabId?:number}>} [pages]
  */
 export function buildMentionCandidates(groups, boundIds, query, lang = 'zh', artifacts = [], pages = []) {
   const q = String(query || '')
@@ -140,7 +140,12 @@ export function buildMentionCandidates(groups, boundIds, query, lang = 'zh', art
     .map((p) => {
       const ref = normalizePageRef(p);
       if (!ref) return null;
-      return { ...ref, current: p?.current === true };
+      const tabId = Number(p?.tabId);
+      return {
+        ...ref,
+        current: p?.current === true,
+        ...(Number.isFinite(tabId) && tabId > 0 ? { tabId } : {})
+      };
     })
     .filter(Boolean);
   if (pageList.length) {
@@ -160,20 +165,23 @@ export function buildMentionCandidates(groups, boundIds, query, lang = 'zh', art
     for (const p of pageList) {
       const id = pageRefId(p);
       if (!id) continue;
+      const tabTitle = String(p.title || p.host || '').replace(/\s+/g, ' ').trim() || p.host;
       out.push({
         kind: 'page',
         id,
         groupId: PAGES_MENTION_ID,
-        label: p.current ? p.host : p.title || p.host,
+        label: abbrevTabTitle(tabTitle, p.host),
         handle: p.host,
         bound: true,
         itemCount: 0,
         itemKind: 'page',
         parentName: pagesLabel,
-        kicker: p.current ? (lang === 'en' ? 'Current' : '当前页') : pagesLabel,
+        kicker: p.current ? (lang === 'en' ? 'Now' : '当前') : '',
         url: p.url,
         origin: p.origin,
-        title: p.title
+        title: tabTitle,
+        current: p.current === true,
+        ...(p.tabId ? { tabId: p.tabId } : {})
       });
     }
   }
@@ -235,6 +243,21 @@ export function nestMentionCandidates(flat) {
   return sections;
 }
 
+/** Tab-strip style short name: Chrome `tab.title`, then hostname. */
+export function abbrevTabTitle(title, host = '', max = 32) {
+  const s =
+    String(title || '')
+      .replace(/\s+/g, ' ')
+      .trim() ||
+    String(host || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  if (!s) return '';
+  const chars = [...s];
+  if (chars.length <= max) return s;
+  return `${chars.slice(0, Math.max(1, max - 1)).join('')}…`;
+}
+
 export function mentionHaystack(c) {
   return [c.label, c.handle, c.parentName, c.kicker, c.kind, c.itemKind, c.url, c.origin, c.title]
     .filter(Boolean)
@@ -255,6 +278,10 @@ export function normalizeComposerMentions(raw) {
           ? 'artifact'
           : m.kind === 'page'
             ? 'page'
+            : m.kind === 'link'
+              ? 'link'
+              : m.kind === 'screenshot'
+                ? 'screenshot'
             : m.kind === 'skill'
               ? 'skill'
               : m.kind === 'command'
@@ -271,7 +298,8 @@ export function normalizeComposerMentions(raw) {
       groupId: String(m.groupId || (kind === 'group' ? id : '')).slice(0, 96),
       label: String(m.label || '').slice(0, 80),
       handle: String(m.handle || '').slice(0, 40),
-      ...(kind === 'page' && m.url ? { url: String(m.url).slice(0, 2000) } : {})
+      ...((kind === 'page' || kind === 'link') && m.url ? { url: String(m.url).slice(0, 2000) } : {}),
+      ...(kind === 'page' && Number(m.tabId) > 0 ? { tabId: Number(m.tabId) } : {})
     });
   }
   return out;

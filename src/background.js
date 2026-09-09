@@ -15,6 +15,7 @@ import {
   shouldLockWorkTab,
   tabCreateProps
 } from './agent/vnext/host/pawTabGroups.js';
+import { isMentionablePageUrl, normalizePageRef } from './agent/vnext/sessionWorkspace/pageContext.js';
 
 const PAWWORK_OFFSCREEN_URL = 'src/offscreen/runtime.html';
 let pawworkOffscreenCreating = null;
@@ -61,9 +62,18 @@ function isTransientOffscreenRpcError(err, response) {
   const msg = String(err?.message || err || response?.error || '');
   return (
     /Receiving end does not exist/i.test(msg) ||
-    /Could not establish connection/i.test(msg)
+    /Could not establish connection/i.test(msg) ||
+    /The message port closed/i.test(msg)
   );
 }
+
+/** Empty sendMessage replies may be a dead offscreen. Replay only idempotent reads. */
+const RPC_RETRY_EMPTY_METHODS = new Set([
+  'getWorkspaceState',
+  'getSession',
+  'listArtifacts',
+  'listSkills'
+]);
 
 async function forwardWorkspaceRpc(request) {
   const payload = {
@@ -79,7 +89,12 @@ async function forwardWorkspaceRpc(request) {
       const response = await chrome.runtime.sendMessage(payload);
       if (response && typeof response === 'object') return response;
       // A missing result is not proof that a write or agent turn never ran.
-      throw Object.assign(new Error('Workspace RPC result is unknown; inspect state before retrying.'), { code: 'RPC_OUTCOME_UNKNOWN' });
+      const unknown = Object.assign(
+        new Error('Workspace RPC result is unknown; inspect state before retrying.'),
+        { code: 'RPC_OUTCOME_UNKNOWN' }
+      );
+      if (!RPC_RETRY_EMPTY_METHODS.has(String(request.method || ''))) throw unknown;
+      lastErr = unknown;
     } catch (err) {
       lastErr = err;
       if (!isTransientOffscreenRpcError(err, null)) throw err;
@@ -576,21 +591,7 @@ function artifactPreviewUrl(sessionId, artifactIds, entry = 'artifactPreview.htm
   if (ids.length) q.set('ids', ids.join(','));
   if (ids.length === 1) q.set('artifactId', ids[0]);
   const page = String(entry || 'artifactPreview.html').replace(/^\.\//, '');
-  if (page === 'design.html' || String(arguments[3] || '') === 'slides') {
-    q.set('shell', String(arguments[3] || 'design'));
-  }
   return chrome.runtime.getURL(`src/preview/${page}?${q.toString()}`);
-}
-
-function designPreviewUrl(sessionId, artifactIds, shell = 'design') {
-  const sid = String(sessionId || '');
-  const ids = [...new Set((artifactIds || []).map(String).filter(Boolean))];
-  const q = new URLSearchParams();
-  if (sid) q.set('sessionId', sid);
-  if (ids.length) q.set('ids', ids.join(','));
-  if (ids.length === 1) q.set('artifactId', ids[0]);
-  q.set('shell', shell === 'slides' ? 'slides' : 'design');
-  return chrome.runtime.getURL(`src/preview/design.html?${q.toString()}`);
 }
 
 /** sessionId|artifactId → tabId for the live Univer sheet. */
@@ -902,7 +903,7 @@ function waitHtmlReady(sessionId, artifactId, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       htmlReadyWaiters.delete(key);
-      reject(new Error('design tab timeout'));
+      reject(new Error('preview tab timeout'));
     }, timeoutMs);
     const prev = htmlReadyWaiters.get(key) || [];
     prev.push({
@@ -916,98 +917,12 @@ function waitHtmlReady(sessionId, artifactId, timeoutMs = 20000) {
   });
 }
 
-async function findDesignTab(sessionId, artifactId) {
-  const key = htmlPreviewKey(sessionId, artifactId);
-  const cached = htmlTabByKey.get(key);
-  if (cached != null) {
-    try {
-      const t = await chrome.tabs.get(cached);
-      if (t?.id != null) return t.id;
-    } catch {
-      htmlTabByKey.delete(key);
-    }
-  }
-  const tabs = await chrome.tabs.query({});
-  const sid = String(sessionId || '');
-  const aid = String(artifactId || '');
-  const hit = tabs.find((t) => {
-    const u = t.url || '';
-    return /design\.html/.test(u) && htmlTabMatches(u, sid, aid);
-  });
-  if (hit?.id != null) {
-    htmlTabByKey.set(key, hit.id);
-    return hit.id;
-  }
-  return null;
-}
-
-async function sendCanvasRpc(sessionId, artifactId, payload) {
-  let tabId = await findDesignTab(sessionId, artifactId);
-  if (tabId == null) {
-    await openArtifactPreviewTab(sessionId, [artifactId], { focus: false, reason: 'canvas' });
-    try {
-      tabId = await waitHtmlReady(sessionId, artifactId);
-    } catch {
-      tabId = await findDesignTab(sessionId, artifactId);
-    }
-  }
-  if (tabId == null) {
-    return { ok: false, code: 'NEED_TAB', error: 'Design/Slides canvas tab unavailable' };
-  }
-  try {
-    const res = await chrome.tabs.sendMessage(tabId, {
-      action: 'pawwork_canvas_apply',
-      sessionId,
-      artifactId,
-      method: payload.method || 'apply',
-      ...payload
-    });
-    return res;
-  } catch (e) {
-    return { ok: false, code: 'NEED_TAB', error: e instanceof Error ? e.message : String(e) };
-  }
-}
-
-async function handleCanvasHost(request) {
-  const sessionId = String(request.sessionId || '');
-  const artifactId = String(request.artifactId || '');
-  const method = String(request.method || 'apply');
-  if (!artifactId) return { ok: false, error: 'artifactId required' };
-  if (method === 'apply' || method === 'write') {
-    const res = await sendCanvasRpc(sessionId, artifactId, {
-      method: 'apply',
-      commands: request.commands,
-      selections: request.selections,
-      preview: request.preview === true,
-      previewIds: request.previewIds
-    });
-    return { ok: res?.ok !== false, result: res, error: res?.error, code: res?.code };
-  }
-  if (method === 'export') {
-    const res = await sendCanvasRpc(sessionId, artifactId, {
-      method: 'export',
-      format: request.format || 'png'
-    });
-    return { ok: res?.ok !== false, result: res, error: res?.error, code: res?.code };
-  }
-  if (method === 'preview') {
-    let timer;
-    const res = await Promise.race([
-      sendCanvasRpc(sessionId, artifactId, {
-        method: 'preview',
-        ids: request.ids
-      }),
-      new Promise((resolve) => {
-        timer = setTimeout(
-          () => resolve({ ok: false, code: 'NEED_TAB', error: 'preview timeout' }),
-          12000
-        );
-      })
-    ]);
-    if (timer) clearTimeout(timer);
-    return { ok: res?.ok !== false, result: res, error: res?.error, code: res?.code };
-  }
-  return { ok: false, error: `unknown canvas_host method: ${method}` };
+async function handleCanvasHost(_request) {
+  return {
+    ok: false,
+    code: 'NO_CANVAS',
+    error: 'Design/Slides (tldraw) is removed. Leftover json-canvas opens as generic preview.'
+  };
 }
 
 async function patchHtmlPreviewTab(sessionId, artifactId) {
@@ -1020,7 +935,7 @@ async function patchHtmlPreviewTab(sessionId, artifactId) {
     const hit = tabs.find((t) => {
       const u = t.url || '';
       return (
-        (/artifactPreview\.html/.test(u) || /design\.html/.test(u) || /site\.html/.test(u)) &&
+        (/artifactPreview\.html/.test(u) || /site\.html/.test(u)) &&
         htmlTabMatches(u, sid, aid)
       );
     });
@@ -1041,16 +956,16 @@ async function patchHtmlPreviewTab(sessionId, artifactId) {
 
 async function resolvePreviewRoute(sessionId, artifactId, opts = {}) {
   if (opts.kind === 'design' || opts.kind === 'slides' || opts.shell === 'design' || opts.shell === 'slides') {
-    return {
-      entry: 'design.html',
-      shell: opts.shell || (opts.kind === 'slides' ? 'slides' : 'design')
-    };
+    return { entry: 'artifactPreview.html', shell: '' };
   }
   if (opts.kind === 'site' || opts.kind === 'web' || opts.kind === 'html-site' || opts.entry === 'site.html') {
     return { entry: 'site.html', shell: '' };
   }
-  if (opts.entry === 'design.html' || opts.entry === 'sheet.html' || opts.entry === 'docs.html') {
-    return { entry: opts.entry, shell: opts.shell || 'design' };
+  if (opts.entry === 'design.html') {
+    return { entry: 'artifactPreview.html', shell: '' };
+  }
+  if (opts.entry === 'sheet.html' || opts.entry === 'docs.html') {
+    return { entry: opts.entry, shell: '' };
   }
   if (!artifactId) return { entry: 'artifactPreview.html', shell: '' };
   try {
@@ -1078,17 +993,15 @@ async function openArtifactPreviewTab(sessionId, artifactIds, opts = {}) {
   const reason = opts.reason || (focus ? 'user' : 'preview');
   const routed = await resolvePreviewRoute(sessionId, ids[0], opts);
   const url =
-    routed.entry === 'design.html'
-      ? designPreviewUrl(sessionId, ids, routed.shell || 'design')
-      : routed.entry === 'sheet.html'
-        ? sheetUrl(sessionId, ids[0])
-        : routed.entry === 'docs.html'
-          ? chrome.runtime.getURL(
-              `src/preview/docs.html?sessionId=${encodeURIComponent(sessionId)}&artifactId=${encodeURIComponent(ids[0])}`
-            )
-          : routed.entry === 'site.html'
-            ? artifactPreviewUrl(sessionId, ids, 'site.html')
-            : artifactPreviewUrl(sessionId, ids);
+    routed.entry === 'sheet.html'
+      ? sheetUrl(sessionId, ids[0])
+      : routed.entry === 'docs.html'
+        ? chrome.runtime.getURL(
+            `src/preview/docs.html?sessionId=${encodeURIComponent(sessionId)}&artifactId=${encodeURIComponent(ids[0])}`
+          )
+        : routed.entry === 'site.html'
+          ? artifactPreviewUrl(sessionId, ids, 'site.html')
+          : artifactPreviewUrl(sessionId, ids);
   try {
     const tabs = await chrome.tabs.query({});
     const sid = String(sessionId || '');
@@ -1096,7 +1009,6 @@ async function openArtifactPreviewTab(sessionId, artifactIds, opts = {}) {
       const u = t.url || '';
       if (
         !u.includes('artifactPreview.html') &&
-        !u.includes('design.html') &&
         !u.includes('docs.html') &&
         !u.includes('site.html')
       ) {
@@ -1106,11 +1018,9 @@ async function openArtifactPreviewTab(sessionId, artifactIds, opts = {}) {
     });
     if (existing?.id != null) {
       const have = existing.url || '';
-      const wantDesign = url.includes('design.html');
-      const haveDesign = have.includes('design.html');
       const wantSite = url.includes('site.html');
       const haveSite = have.includes('site.html');
-      if (wantDesign !== haveDesign || wantSite !== haveSite) {
+      if (wantSite !== haveSite) {
         await chrome.tabs.update(existing.id, focus ? { url, active: true } : { url });
       } else {
         if (focus) await chrome.tabs.update(existing.id, { active: true });
@@ -1141,9 +1051,8 @@ async function openArtifactPreviewTab(sessionId, artifactIds, opts = {}) {
 
 function openMarkedHtmlPreviewTab(ev) {
   if (!ev || !ev.artifactId) return;
-  const engine = ev.kind === 'design' || ev.kind === 'slides' || ev.shell;
   const site = ev.kind === 'site' || ev.kind === 'web' || ev.kind === 'html-site';
-  if (!engine && ev.kind !== 'blocks' && !site) return;
+  if (ev.kind !== 'blocks' && !site) return;
   const sid = String(ev.sessionId || '');
   const aid = String(ev.artifactId);
   const key = `${sid}:${aid}`;
@@ -1290,6 +1199,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       shell: request.shell,
       entry: request.entry
     }).then((r) => sendResponse(r));
+    return true;
+  }
+
+  if (request?.target === 'pawwork-background' && request?.action === 'workspace_list_open_tabs') {
+    listMentionableOpenTabs()
+      .then((pages) => sendResponse({ ok: true, pages }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error), pages: [] }));
     return true;
   }
 
@@ -1700,6 +1616,79 @@ async function handleWorkspaceCapturePageBlueprint(request) {
     return { ok: false, error: error?.message || String(error), code: 'NEED_PAGE' };
   }
 }
+
+/**
+ * Live @ page set. Source of truth for the composer picker.
+ * Scope: http(s) tabs in normal windows, NEED_PAGE / injectability filter.
+ * Discarded tabs stay listed. chrome:// / extension / Web Store / DevTools are out.
+ */
+async function listMentionableOpenTabs() {
+  const windows = await chrome.windows.getAll({ populate: true, windowTypes: ['normal'] });
+  const pages = [];
+  const seenTab = new Set();
+  for (const win of windows) {
+    for (const tab of win.tabs || []) {
+      const tabId = Number(tab?.id);
+      if (!Number.isFinite(tabId) || tabId <= 0 || seenTab.has(tabId)) continue;
+      const url = String(tab.url || tab.pendingUrl || '');
+      if (!isMentionablePageUrl(url)) continue;
+      const ref = normalizePageRef({ url, title: tab.title || '' });
+      if (!ref) continue;
+      seenTab.add(tabId);
+      pages.push({
+        tabId,
+        windowId: tab.windowId,
+        url: ref.url,
+        title: ref.title,
+        origin: ref.origin,
+        host: ref.host,
+        discarded: tab.discarded === true,
+        current: tab.active === true && win.focused === true
+      });
+    }
+  }
+  return pages;
+}
+
+let openTabsBroadcastTimer = 0;
+function scheduleOpenTabsBroadcast() {
+  if (openTabsBroadcastTimer) return;
+  openTabsBroadcastTimer = setTimeout(() => {
+    openTabsBroadcastTimer = 0;
+    void broadcastOpenTabsChanged();
+  }, 80);
+}
+
+async function broadcastOpenTabsChanged() {
+  try {
+    const pages = await listMentionableOpenTabs();
+    await chrome.runtime.sendMessage({
+      target: 'pawwork-sidepanel',
+      action: 'workspace_open_tabs_changed',
+      pages
+    });
+  } catch {
+    /* sidepanel may be closed */
+  }
+}
+
+function watchMentionableOpenTabs() {
+  const tabsApi = chrome.tabs;
+  if (!tabsApi) return;
+  tabsApi.onCreated?.addListener(() => scheduleOpenTabsBroadcast());
+  tabsApi.onRemoved?.addListener(() => scheduleOpenTabsBroadcast());
+  tabsApi.onReplaced?.addListener(() => scheduleOpenTabsBroadcast());
+  tabsApi.onAttached?.addListener(() => scheduleOpenTabsBroadcast());
+  tabsApi.onDetached?.addListener(() => scheduleOpenTabsBroadcast());
+  tabsApi.onUpdated?.addListener((_tabId, changeInfo) => {
+    if (changeInfo.url || changeInfo.title || changeInfo.status || changeInfo.discarded != null) {
+      scheduleOpenTabsBroadcast();
+    }
+  });
+  chrome.windows?.onFocusChanged?.addListener(() => scheduleOpenTabsBroadcast());
+}
+
+watchMentionableOpenTabs();
 
 function isRestrictedPageActionUrl(url) {
   const raw = String(url || '');

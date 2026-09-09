@@ -1,18 +1,16 @@
 /**
  * Host law: HTML files are websites or documents — not a design engine.
- * Design/poster/slides must compile to pawCanvas via createScene / deck.
- * Model-origin generic writes (write_artifact, run FS, package files) cannot
- * land pawCanvas / tldraw snapshots. Host-internal createScene / deck / blankCreate skip this gate.
+ * Model-origin generic writes cannot land leftover pawCanvas / tldraw snapshots.
  */
 
-import { isPawCanvasDoc } from './engineCanvas.js';
+import { isPawCanvasDoc } from './openClassify.js';
 
 const USE_CANVAS = {
   ok: false,
   code: 'USE_CANVAS',
   error:
-    'Visual design (poster, slides, click-edit layout) must use run createScene / fromPage / fromSelection / fromRaster or the deck tool. write_artifact cannot create pawCanvas / Design / Slides. HTML files are only a website (data-paw-kind="site") or a document (data-paw-kind="document").',
-  hint: 'retry with run createScene / fromPage / fromRaster or the deck tool'
+    'Design/Slides (tldraw) is removed. write_artifact cannot create pawCanvas JSON. HTML files are only a website (data-paw-kind="site") or a document (data-paw-kind="document").',
+  hint: 'use write_artifact with data-paw-kind=site, or run op=doc'
 };
 
 export function htmlWritePolicy(content, name = '') {

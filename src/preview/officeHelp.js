@@ -102,25 +102,10 @@ function rowsFor(surface) {
   const shared = [
     { keys: [mod, '+'], text: c.zoomIn },
     { keys: [mod, '-'], text: c.zoomOut },
-    { keys: [mod, '0'], text: surface === 'design' || surface === 'slides' ? c.zoomFit : c.zoomFit100 },
+    { keys: [mod, '0'], text: c.zoomFit100 },
     { keys: [mod, 'S'], text: c.save },
     { keys: ['Esc'], text: c.escape }
   ];
-  if (surface === 'design') {
-    return { rows: shared, notes: [c.designEngine, c.pagesMenu, c.insertImage] };
-  }
-  if (surface === 'slides') {
-    return {
-      rows: [
-        ...shared,
-        { keys: ['←', '→'], text: c.page },
-        { keys: ['PgUp', 'PgDn'], text: c.page },
-        { keys: ['F5'], text: c.present },
-        { keys: ['Alt', 'Shift', '←', '→'], text: c.reorderSlide }
-      ],
-      notes: [c.slidesEngine, c.newSlide, c.overview, c.reorderSlide, c.pagesMenu, c.insertImage, c.designEngine]
-    };
-  }
   if (surface === 'sheet') {
     return { rows: shared, notes: [c.sheetEngine] };
   }
@@ -257,7 +242,7 @@ function relabel(btn) {
 
 /**
  * Mount “?” on the existing host-file-actions row, or a quiet dock on Univer chrome.
- * @param {string} surface design | slides | sheet | docs | site
+ * @param {string} surface sheet | docs | site
  */
 export function mountOfficeHelp(surface) {
   const btn = ensureButton(surface);

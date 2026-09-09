@@ -68,8 +68,6 @@
         <div class="artifact-rail-new" id="artifactRailNew">
           <div class="artifact-rail-new-label" id="artifactRailNewLabel" data-i18n="artifactNew">新建</div>
           <div class="artifact-rail-new-list" role="group" aria-labelledby="artifactRailNewLabel">
-            <button type="button" class="artifact-rail-new-btn" data-blank-kind="design" data-i18n="artifactNewDesign">空白画板</button>
-            <button type="button" class="artifact-rail-new-btn" data-blank-kind="slides" data-i18n="artifactNewSlides">空白 PPT</button>
             <button type="button" class="artifact-rail-new-btn" data-blank-kind="sheet" data-i18n="artifactNewSheet">空白 Sheet</button>
             <button type="button" class="artifact-rail-new-btn" data-blank-kind="doc" data-i18n="artifactNewDoc">空白 Document</button>
             <button type="button" class="artifact-rail-new-btn" data-blank-kind="site" data-i18n="artifactNewSite">空白网站</button>
@@ -143,19 +141,6 @@
           <div class="group-select-menu" id="groupSelectMenu" hidden role="listbox" aria-label="选择组">
             <div class="group-select-list" id="groupSelectList"></div>
             <button type="button" class="group-select-create" id="groupSelectCreate">+ 新建 Group</button>
-            <button type="button" class="group-select-create group-select-add-links" id="groupSelectAddLinks" data-i18n="addLinks">添加链接</button>
-            <div class="group-add-links" id="groupAddLinks" hidden>
-              <div class="group-add-links-inner">
-                <textarea
-                  class="group-add-links-input"
-                  id="groupAddLinksInput"
-                  rows="3"
-                  data-i18n-placeholder="addLinksHint"
-                  placeholder="粘贴链接，Enter 添加"
-                ></textarea>
-                <p class="group-add-links-note" id="groupAddLinksNote" hidden></p>
-              </div>
-            </div>
           </div>
           <!-- a11y / programmatic mirror -->
           <select id="activeGroupSelect" hidden aria-hidden="true" tabindex="-1"></select>
@@ -740,14 +725,6 @@
               <button type="button" class="btn btn-primary" id="saveWebAcquireBtn">保存此 API</button>
             </div>
           </div>
-        </section>
-
-        <section class="settings-api-card" id="settingsTldrawCard" aria-labelledby="settingsTldrawTitle">
-          <h4 class="settings-api-card-title" id="settingsTldrawTitle">4. Design / Slides 引擎许可证</h4>
-          <p class="settings-hint">tldraw 在扩展页里不算 localhost。没有许可证时，引擎会在约 5 秒后把画布和工具栏卸掉（图层还在、画面空白）。把购买的 license key 贴在这里，仅存本机。</p>
-          <label class="settings-label" for="tldrawLicenseInput">tldraw license key</label>
-          <input type="password" id="tldrawLicenseInput" class="modal-input" placeholder="tldraw 许可证" autocomplete="off" />
-          <p class="settings-hint" id="tldrawLicenseHint">保存后请关掉并重新打开 Design 预览标签。</p>
         </section>
 
         <hr class="settings-divider" />

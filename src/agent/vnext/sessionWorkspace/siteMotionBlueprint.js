@@ -1,6 +1,6 @@
 /**
  * Pure mapper: common source patterns → additive data-paw-* DSL.
- * Clone pipeline / html-site skill call this. Never copies JS. Never claims WebGL/auth.
+ * Clone pipeline / web act=clone call this. Never copies JS. Never claims WebGL/auth.
  */
 
 import { SITE_MOTION_ATTRS as A, SITE_MOTION_UNSUPPORTED } from './siteMotionSchema.js';

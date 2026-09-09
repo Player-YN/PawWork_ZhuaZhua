@@ -45,9 +45,9 @@ sidepanel workspaceRpc('sendMessage')
 | `sys.tabs.list` / `current` / `frames` | 标签与 frame（进程表） |
 | `sys.tabs.open` / `navigate` / `reload` / `close` / `focus` | 进程控制（已有 `tabs` 权限） |
 | `sys.eval({ world, code, tabId, frameId })` | `code` 是 async 函数体。`MAIN` = 页面 JS 堆；`USER` = 自有世界 + DOM |
-| `sys.fetch({ as:'page'\|'extension', url, tabId, init })` | 两块网卡：页面身份 vs 扩展身份 |
+| `sys.fetch({ as:'page'\|'extension', url, tabId, init })` | 两块网卡：页面身份（MAIN fetch，cookies+Referer；用户要的登录态/验证码/本机 IP 链接默认这条）vs 扩展身份（`credentials:'omit'`，无 cookie）。省略 `as` 时宿主仍当 extension |
 | `sys.cdp` | CDP 管道：`{ method, params }` 自动 attach；`action: attach\|detach\|events\|targets` |
-| `sys.download` / `sys.screenshot` | 下载出口与视口合成截图（已有权限） |
+| `sys.download` / `sys.screenshot` | `chrome.downloads.download`：本 profile cookie jar + 本机 IP，无标签 Referer（不是 extension fetch）。登录态/Referer/验证码优先 `as:'page'`。截图为视口合成 |
 
 `eval` / page `fetch` 走 `chrome.userScripts.execute`。`sys.cdp` 走 `chrome.debugger`（一条管道，不是网络/PDF 产品）。DevTools 已挂上时会 `CDP_BUSY`。返回值必须能 JSON 序列化。`eval` / page `fetch` / `cdp` 只允许 http(s) 可注入页；扩展预览页返回 `NEED_PAGE`（MAIN world 不能碰到 `chrome.*`）。除 `tabs.current` 外，未带 `tabId`/`defaultTabId` 也是 `NEED_PAGE`。`SYS_ABORTED` / `SYS_TIMEOUT` 表示等待结束，不表示副作用已撤销。可见标签截图失败为 `TAB_NOT_VISIBLE` / `TARGET_CHANGED`。`targetId` 会先经 `getTargets` 校验 URL。
 
@@ -55,7 +55,7 @@ sidepanel workspaceRpc('sendMessage')
 
 Artifact 具有 `revision`；`updateArtifact` 可携带 `expectedRevision`，不同内容的过期写入返回 `ARTIFACT_CONFLICT`。四种编辑器与常用 office 写入路径已接入；raw guest 写主文件推进 revision，但仍不是带读版本的条件写入。
 
-模型可见面：没有单独的 `sys` 工具。ISA 写在 `run` 的 description / `code` 字段说明（`SYS_MODEL_HINT`）、`inspect.view` enum 含 `sys`、每轮 world 有 `browserSys=pawwork-sys-v1`。完整目录仍是 `inspect view=sys` 或 guest `sys.help()`。
+模型可见面：没有单独的 `sys` 工具。ISA 写在 `run` 的 `code` 字段（`SYS_MODEL_HINT`）；`run.description` 只指向该字段与 `inspect view=sys`。`inspect.view` enum 含 `sys`、每轮 world 有 `browserSys=pawwork-sys-v1`。完整目录仍是 `inspect view=sys` 或 guest `sys.help()`。
 
 Guest FS（`fs.js`）：
 
@@ -77,17 +77,16 @@ System prompt 原则在 `prompt.js`。具体配方在 skills，按需 `inspect v
 
 | id | 定义 | 现状 |
 |----|------|------|
-| `inspect` | `sessionWorkspace/tools.js` | 读会话：`view` = groups / group / item / artifacts / files / skill / workbook / range / html / sys |
-| `acquire` | 同上 | `action` = search / fetch / map / crawl / image / note。设置键 `pagewand_web_acquire` |
-| `run` | 同上 | sandbox JS/TS；guest FS + `sys`。`op` 含 write_artifact、createScene、fromPage、fromRaster、createWorkbook、createDocument、shelf 等 |
-| `clarify` | 同上 | 暂停本轮：1–4 个问题，或 plan 卡（`title` / `summary` / steps）。用户 `answerClarify` 后继续 |
-| `action` | 同上 | 当前标签 live-page。运输见 [../AGENTS.md](../AGENTS.md) |
+| `inspect` | `sessionWorkspace/tools.js` | 只读查找：`view` = groups / group / item / artifacts / files / skill / workbook / range / html / sys |
+| `acquire` | 同上 | 把未知公开网带进会话：search / fetch / map / crawl / image / note。已打开或需登录/验证码的 URL 走 `run` + `sys.fetch as:"page"` |
+| `run` | 同上 | 访客机：sandbox JS/TS + fs + `sys`。`op` 是登记 ABI（persist / scratch / register workbook\|document\|html）。日常改画布走 sheet / doc / web |
+| `clarify` | 同上 | 暂停本轮：问题或 plan 卡。用户 `answerClarify` 后继续 |
+| `action` | 同上 | 当前标签 live-page（snapshot 后同代 mutate）。运输见 [../AGENTS.md](../AGENTS.md) |
 | `sheet` | `sessionWorkspace/officeTools.js` | Univer 表：`act` = read / write / snapshot |
-| `deck` | 同上 | tldraw Design/Slides：`act` = read / write / export |
 | `doc` | 同上 | Univer 文档：`act` = read / write |
 | `web` | 同上 | `data-paw-kind=site`：`act` = read / write / undo / clone / capture |
 
-Office 无对应 canvas 时返回 `NO_CANVAS`（工具仍在 schema 里）。视觉画布是 Paw Canvas JSON（`engineCanvas.js`），不是「一张封面 PNG」。网站复刻走 `web act=clone`，不要用 `fromPage` / Design 重建整页。
+Office 无对应 canvas 时返回 `NO_CANVAS`（工具仍在 schema 里）。没有 Design/Slides（tldraw）。网站复刻走 `web act=clone`。
 
 BYOK：`llm.js` → `pagewand_providers`。`run`：`vnext/adapters`（QuickJS / esbuild-wasm / AI SDK loader）+ `src/sandbox/`。Offscreen 经 `sandboxClient.js` postMessage；channel `pawwork-code-sandbox-v1`。`fs` 与 `sys` 都是同一条 RPC。
 
@@ -95,7 +94,7 @@ BYOK：`llm.js` → `pagewand_providers`。`run`：`vnext/adapters`（QuickJS / 
 
 `vnext/skills/<id>/`：`SKILL.md` + 打包进扩展的 `skillSource.js` + `index.js`。注册表：`skills/registry.js`。
 
-已注册：`html-preview` `slides` `poster` `html-site` `compose-image` `visual-compile` `sheet-nl` `listing-sheet` `briefing-deck` `remake-poster` `userscript` `page-restyle` `page-extract` `form-autopilot` `site-hotkeys` `auto-pager`。别名：`html-deck` → `slides`，`html-poster` → `poster`，`page-script` → `userscript`。正文用 `inspect view=skill`。
+已注册：`page-restyle`。正文用 `inspect view=skill`。
 
 用户自定义 skill（侧栏固化）走 `agent/skills.js`，与打包 playbook 分开存。
 

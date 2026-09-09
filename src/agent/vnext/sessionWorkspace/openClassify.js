@@ -130,16 +130,9 @@ export function previewEntryForKind(kind) {
   const k = String(kind || '');
   if (SHEET_OPEN_KINDS.has(k)) return 'sheet.html';
   if (DOCS_OPEN_KINDS.has(k)) return 'docs.html';
-  if (k === 'json-canvas') return 'design.html';
+  if (k === 'json-canvas') return 'artifactPreview.html';
   if (k === 'html-site') return 'site.html';
   return 'artifactPreview.html';
-}
-
-function visualHtmlShell(text) {
-  if (/"shell"\s*:\s*"slides"/i.test(text) || /data-paw-kind\s*=\s*["']deck["']/i.test(text)) {
-    return 'slides';
-  }
-  return 'design';
 }
 
 function isDocumentHtml(text) {
@@ -148,7 +141,7 @@ function isDocumentHtml(text) {
 }
 
 /**
- * Design/Slides live on design.html. Univer docs/sheet and PDF reconstruct stay off that engine.
+ * Univer docs/sheet, site, and generic preview. No Design/Slides engine.
  */
 export function previewEntryForItem(item = {}) {
   const cls = classifyOpenArtifact(item);
@@ -158,9 +151,6 @@ export function previewEntryForItem(item = {}) {
   }
   if (cls.kind === 'html-site') {
     return { entry: 'site.html', shell: '', kind: 'html-site' };
-  }
-  if (cls.kind === 'json-canvas') {
-    return { entry: 'design.html', shell: visualHtmlShell(text), kind: cls.kind };
   }
   return { entry: previewEntryForKind(cls.kind), shell: '', kind: cls.kind };
 }
@@ -203,10 +193,52 @@ function finish(kind, reason) {
   return { kind, canvas: canvasForKind(kind), reason };
 }
 
+/**
+ * Leftover Paw Canvas / tldraw JSON. Not a product surface — generic preview only.
+ * @param {unknown} raw
+ * @returns {boolean}
+ */
+export function isPawCanvasDoc(raw) {
+  const obj = coerceJsonObject(raw);
+  if (!obj) return false;
+  if (Number(obj.pawCanvas) === 1) return true;
+  const shell = String(obj.shell || obj.kind || '').toLowerCase();
+  if (shell === 'slides' || shell === 'design' || shell === 'deck' || shell === 'poster') return true;
+  return looksLikeTldrawStore(obj);
+}
+
+function coerceJsonObject(raw) {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (!text.startsWith('{')) return null;
+  try {
+    const obj = JSON.parse(text);
+    return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
+function looksLikeTldrawStore(doc) {
+  if (!doc || typeof doc !== 'object') return false;
+  const store =
+    doc.tldraw?.document?.store ||
+    doc.document?.store ||
+    (doc.store && typeof doc.store === 'object' && !Array.isArray(doc.store) ? doc.store : null);
+  if (!store || typeof store !== 'object' || Array.isArray(store)) return false;
+  return Object.keys(store).some(
+    (k) =>
+      k.startsWith('shape:') ||
+      k.startsWith('asset:') ||
+      k.startsWith('page:') ||
+      k === 'document:document'
+  );
+}
+
 function canvasForKind(kind) {
   if (SHEET_OPEN_KINDS.has(kind)) return 'sheet';
   if (DOCS_OPEN_KINDS.has(kind)) return 'docs';
-  if (kind === 'json-canvas') return 'design';
+  if (kind === 'json-canvas') return 'none';
   if (kind === 'html-site') return 'web';
   if (kind === 'html') return 'none';
   if (kind === 'png' || kind === 'jpeg' || kind === 'gif' || kind === 'webp' || kind === 'svg') {

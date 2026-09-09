@@ -9,6 +9,14 @@ export function shouldApplySessionBroadcast(payloadSessionId, activeSessionId) {
   return sid === active;
 }
 
+/** Plan / clarify chrome belongs to one session. Empty ids never match. */
+export function clarifyBelongsToSession(clarifySessionId, sessionId) {
+  const owned = String(clarifySessionId || '').trim();
+  const sid = String(sessionId || '').trim();
+  if (!owned || !sid) return false;
+  return owned === sid;
+}
+
 /** Thread with another sessionId (or none) must not paint on the foreground task. */
 export function sessionThreadShouldHide(elSessionId, activeSessionId) {
   const sid = String(elSessionId || '').trim();
@@ -86,8 +94,7 @@ export function htmlTabMatches(tabUrl, sessionId, artifactId) {
   if (
     !u.includes('artifactPreview.html') &&
     !u.includes('docs.html') &&
-    !u.includes('site.html') &&
-    !u.includes('design.html')
+    !u.includes('site.html')
   ) {
     return false;
   }

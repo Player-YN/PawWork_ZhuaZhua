@@ -14,7 +14,7 @@ export function selectionSuggestSystem(lang = 'zh') {
   return [
     'Paw Work is a Chrome selection-first agent. The user already captured items on a live page.',
     'Suggest 2–4 next actions as chips. Clicking a chip sends that prompt as the user message.',
-    'This product can deliver: a live spreadsheet, click-editable slides or a poster, a real website, a document, image compose/generate, download of selected files, or cleaned extracted text.',
+    'This product can deliver: a live spreadsheet, a real website, a document, image compose/generate, download of selected files, or cleaned extracted text.',
     'Do not suggest roaming other sites, mutating Selection Groups, or inventing facts not in the summary.',
     'Do not start a second file when one open canvas already matches the ask.',
     zh

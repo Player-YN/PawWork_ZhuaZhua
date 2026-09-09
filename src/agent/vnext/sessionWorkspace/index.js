@@ -80,7 +80,8 @@ export {
   previewEntryForItem,
   looksLikeZipBytes,
   looksLikePdfBytes,
-  isUtf8OpenKind
+  isUtf8OpenKind,
+  isPawCanvasDoc
 } from './openClassify.js';
 export { sendMessage } from './sendMessage.js';
 export {
@@ -141,13 +142,6 @@ export {
   isMarkedPreviewHtml
 } from './artifactStage.js';
 export { platesToPptxBytes, buildZipStore, PPTX_CONTENT_TYPE } from './pptxExport.js';
-export {
-  exportPawCanvasPptx,
-  inspectPawCanvasPptx,
-  validatePawCanvasPptx,
-  PPTX_ANIMATION_SUPPORT
-} from './pawCanvasPptxExport.js';
-export { normalizeSlideMotion, slideMotionMeta } from './slideMotion.js';
 export { exportPlates, EXPORT_FORMATS, platesToDocxBytes } from './artifactExport.js';
 export { platesToPrintHtml, detectHtmlKind } from './printHtml.js';
 export {
@@ -165,40 +159,9 @@ export {
   OFFICE_TOOL_NAMES,
   SESSION_TOOL_NAMES
 } from './canvasInventory.js';
-export {
-  isPawCanvasDoc,
-  parsePawCanvas,
-  canvasKindFromDoc,
-  previewEntryForCanvas,
-  emptyPawCanvas,
-  compileSceneToPawCanvas,
-  listEngineNodes,
-  canvasReadModel,
-  compactCanvasOverview,
-  DECK_OPS,
-  DECK_ACTS,
-  DECK_CAPABILITIES,
-  shapesFromPawCanvas,
-  createPayloads,
-  recordsFromPawCanvas,
-  assetsFromPawCanvas,
-  hydratePawCanvasImages,
-  applyEngineCommands,
-  fieldWriteNeedsNode,
-  canvasSelectionCheck,
-  editorMethodForOp,
-  exportPawCanvas,
-  normalizeImageSrc,
-  isDisplayableImageSrc,
-  imageSrcNeedsHostPixels,
-  summarizeImageSrc,
-  unresolvedEngineImages
-} from './engineCanvas.js';
 export { scheduleActiveToolNames, scheduleSessionTools, makeOfficePrepareStep } from './toolSchedule.js';
 export { createOfficeTools } from './officeTools.js';
 export {
-  attachCanvasPreview,
-  requestCanvasPreview,
   sessionToolToModelOutput,
   PREVIEW_MAX_FRAMES
 } from './canvasPreview.js';
@@ -260,126 +223,6 @@ export {
   expandOmittedImageCommands,
   resolveOfficeAsset
 } from './sheetImageHydrate.js';
-export {
-  createScene,
-  documentFromArtifactText,
-  compilePageHtml,
-  compileSelectionFragments,
-  compileMarkedSlots,
-  compileNodeList,
-  compileRasterScene,
-  isSceneCreateCommand
-} from './sceneCompile.js';
-export {
-  listThemeIds,
-  listPageVariants,
-  getTheme,
-  THEME_IDS,
-  PAGE_VARIANT_IDS,
-  DEFAULT_THEME_ID,
-  DEFAULT_VARIANT_ID,
-  DEFAULT_VARIANT_BY_LAYOUT,
-  ROLE_TO_TLDRAW_COLOR,
-  VARIANT_ROLE_TO_TLDRAW_COLOR,
-  TLDRAW_COLOR_NAMES,
-  TLDRAW_FONT_CSS_VARS,
-  CJK_SANS_STACK,
-  CJK_SERIF_STACK,
-  tldrawColorForRole,
-  themeHexForRole,
-  resolveVariantTokens,
-  resolvePageVariant,
-  defaultVariantForLayout,
-  isPageVariant,
-  themeNamedPalette,
-  themeCssVarMap,
-  themeTokenBag,
-  buildTldrawColorPalettes,
-  inferDocumentThemeId
-} from './themeCatalog.js';
-export {
-  listLayoutIds,
-  getLayout,
-  SLIDE_LAYOUT_IDS,
-  POSTER_LAYOUT_IDS,
-  ALL_LAYOUT_IDS,
-  compactLayoutCatalog
-} from './layoutCatalog.js';
-export { compileLayoutFrame, compileSemanticFrames, isSemanticFrame, nodesWithinPaper } from './layoutCompile.js';
-export {
-  parseVisual,
-  validateVisual,
-  compileVisual,
-  readVisualCatalog,
-  compactVisualCatalog,
-  VISUAL_KINDS,
-  ASSET_KINDS
-} from './visualAssets.js';
-export { searchIcons, compactIconCatalog, resolveIconName, COMMON_ICON_IDS } from './iconCatalog.js';
-export { compileMotif, listMotifIds, MOTIF_IDS, compactMotifCatalog } from './canvasMotifs.js';
-export { compileChart, parseChartSeries, CHART_TYPES, compactChartCatalog } from './canvasCharts.js';
-export { buildGeneratedImageBrief, nearestAspectRatio } from './imageBrief.js';
-export {
-  SLIDE_STRIP_GAP,
-  SLIDE_STRIP_ORIGIN,
-  SLIDE_FRAME_SIZE,
-  slideStripBox,
-  placeFramesInStrip,
-  framesNeedStripMigration,
-  migrateOverlappingSlideFrames,
-  planInsertAfter,
-  planDeleteFrame,
-  resolveSlideFrameName,
-  resolveReplaceFrameName,
-  titleLikeSlotText
-} from './slidesLayout.js';
-export {
-  resolveTldrawLicenseKey,
-  tldrawLicenseStatus,
-  TLDRAW_LICENSE_STORAGE_KEY,
-  TLDRAW_LICENSE_MISSING_BLOCKER
-} from './tldrawLicense.js';
-export {
-  TLDRAW_SCHEMA_VERSION,
-  TLDRAW_SHAPE_PROP_DEFAULTS,
-  fillTldrawShapeProps,
-  missingTldrawShapeProps,
-  normalizeTldrawShapeRecord,
-  normalizeTldrawStore,
-  normalizeTldrawSnapshot
-} from './tldrawShapeProps.js';
-export {
-  assessCanvasScene,
-  CANVAS_QA_VERSION,
-  QA_CODES,
-  QA_THRESHOLDS,
-  QA_SCORE_DEDUCTIONS
-} from './canvasQa.js';
-export {
-  CANVAS_QA_FAILED,
-  gateCompiledScene,
-  gateReplacePlate,
-  compiledSceneToQaInput,
-  compactQa,
-  qaGateMode
-} from './canvasQaGate.js';
-export {
-  applyRasterCrops,
-  isRasterCompileInput,
-  tldrawCropFromBox,
-  imageSizeFromDataUrl
-} from './rasterCompile.js';
-export {
-  scanRasterPixels,
-  shouldAutoScan,
-  rasterScanFlag,
-  mergeRasterScanNodes,
-  resolveRasterScanNodes,
-  rasterPixelsFromSrc,
-  rasterImageDataFromInput,
-  encodePngRgba,
-  decodePngDataUrl
-} from './rasterScan.js';
 export {
   createMemorySkillStore,
   getDurableSkillStore,

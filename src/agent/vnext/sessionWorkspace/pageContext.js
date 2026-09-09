@@ -24,6 +24,22 @@ export function isInjectableTabUrl(url) {
   return isHttpPageUrl(s);
 }
 
+/** Same injectability gate as action NEED_PAGE (skip Web Store + view-source). */
+export function isMentionablePageUrl(url) {
+  const s = String(url || '').trim();
+  if (!s || /^view-source:/i.test(s)) return false;
+  if (!isInjectableTabUrl(s)) return false;
+  try {
+    const parsed = new URL(s);
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'chromewebstore.google.com') return false;
+    if (host === 'chrome.google.com' && /\/webstore\b/.test(parsed.pathname)) return false;
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 const WORK_TAB_RE = /\/src\/preview\/(design|site|sheet|docs|artifactPreview)\.html/i;
 
 /**
@@ -83,6 +99,8 @@ export function normalizePageRef(raw = {}) {
 }
 
 export function pageRefId(page) {
+  const tabId = Number(page?.tabId);
+  if (Number.isFinite(tabId) && tabId > 0) return `page:tab:${tabId}`;
   const ref = normalizePageRef(page);
   if (!ref) return '';
   return (`page:${ref.url}`).slice(0, 96);
@@ -99,7 +117,7 @@ function pageFromMention(m) {
   const kind = String(m.kind || '');
   const id = String(m.id || '');
   if (kind !== 'page' && !id.startsWith('page:')) return null;
-  const url = String(m.url || '').trim() || id.replace(/^page:/, '');
+  const url = String(m.url || '').trim() || (id.startsWith('page:tab:') ? '' : id.replace(/^page:/, ''));
   return normalizePageRef({ url, title: m.label || m.title, origin: m.origin });
 }
 

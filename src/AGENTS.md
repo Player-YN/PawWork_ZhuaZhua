@@ -13,7 +13,7 @@ Service worker 会被 Chrome 杀掉。会话仓库、AI SDK、`run` 沙箱客户
 | Content script | `content_script.js` | `matches: <all_urls>`，`run_at: document_idle`，**`all_frames: true`**。伸爪选区 + 每 frame 的 action。经典脚本（IIFE），`executeScript` 可再注入 |
 | Sidepanel | `sidepanel.html` + `sidepanel.js` | 对话 UI。`workspaceRpc` → background。编排器仍是 `sidepanel.js` |
 | Sandbox | `sandbox/runtime.html` | `manifest.sandbox`；无 `chrome.*`。`run` 的访客代码 + FS / `sys` postMessage |
-| Preview | `preview/` | 扩展页标签：sheet / design / docs / site / artifactPreview / print |
+| Preview | `preview/` | 扩展页标签：sheet / docs / site / artifactPreview / print |
 
 `icons/` 在仓库根，不在 `src/`。`web_accessible_resources` 目前只有 `src/agent/vnext/sessionWorkspace/pickContext.js`（content script 动态 `import`）。
 
@@ -29,7 +29,7 @@ CSP：`extension_pages` 允许 `'wasm-unsafe-eval'`（QuickJS / Univer）；sand
     workspace_rpc          → ensurePawWorkOffscreen + forward（最多 8 次）
     workspace_page_action  → handleWorkspacePageAction → 各 frame content_script
     sheet_host             → 打开/复用 sheet.html，再 pawwork_sheet_rpc
-    canvas_host            → design.html / docs.html 同类 RPC
+    canvas_host            → docs.html 同类 RPC（无 Design/Slides）
     workspace_fetch / workspace_sys / workspace_capture_* / workspace_find_tab / …
     storage_local_get|set  → chrome.storage.local 代理
     workspace_get_llm_settings / workspace_get_active_page
@@ -103,7 +103,6 @@ Content script：
 | IndexedDB + OPFS | `pawwork-session-workspace-v1` | 会话 / group / artifact / fsNodes（offscreen） |
 | `chrome.storage.local` | `pagewand_providers`、`pagewand_active_provider_id` | BYOK |
 | 同上 | `pagewand_web_acquire` | acquire 搜索/抓取设置 |
-| 同上 | `pagewand_tldraw_license` | tldraw key；仓库无生产 license，缺则官方水印 |
 | 同上 | `pagewand_theme_mode`（兼 `pagewand_theme`） | 侧栏主题 |
 | 同上 | `pagewand_user_skills` | 用户固化 skill（`agent/skills.js`，侧栏） |
 
@@ -112,4 +111,3 @@ Content script：
 - 权限与命令见根 AGENTS.md / `manifest.json`。`userScripts` 给 `sys.eval` / page `fetch`；`debugger` 给 `sys.cdp`。Chrome 135+ 的 `userScripts.execute` 需要扩展卡片 **允许运行用户脚本**（或更早的开发者模式）。CDP 挂上时 Chrome 会显示调试横幅；F12 已打开会 `CDP_BUSY`。`eval` / page `fetch` / `cdp` 不注入扩展预览页。`sys` 是系统调用表，不是产品功能列表（[agent/AGENTS.md](agent/AGENTS.md)）。
 - 区域截图：Alt+Shift+C → content script 框选 → SW `captureVisibleTab` 裁剪 → 剪贴板 + 对话附件。
 - `llm_proxy_fetch`：侧栏/设置探测模型时走 SW，避免页面 CORS。
-- tldraw：`sessionWorkspace/tldrawLicense.js` 解析 key。

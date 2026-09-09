@@ -30,7 +30,7 @@ export const SYS_OPS = Object.freeze([
 export const SYS_HELP = Object.freeze({
   abi: 'pawwork-sys-v1',
   note:
-    'Program the browser machine from run(). chrome / window / document are absent on purpose. Return values must JSON-serialize. Worlds: MAIN = page JS heap + page cookies; USER = own world + DOM, no page JS. sys.cdp is the Chrome DevTools Protocol pipe — not a product feature.',
+    'Program the browser machine from run(). chrome / window / document are absent on purpose. Return values must JSON-serialize. Worlds: MAIN = page JS heap + page cookies; USER = own world + DOM, no page JS. sys.cdp is the Chrome DevTools Protocol pipe — not a product feature. User-asked URLs that need login, cookies, Referer, this-machine IP, or might show captcha: sys.fetch as:"page" on their tab. Never acquire/cloud/provider-fetch those. Page and extension fetch from this Chrome share the user public IP; captcha/login still need cookies+origin+Referer (page only).',
   ops: {
     'sys.help': 'This catalog (sync).',
     'sys.capabilities': 'Live browser capability probe: userScripts availability/reason, debugger, capture, downloads and transfer limits. Check this before choosing an execution route.',
@@ -45,10 +45,11 @@ export const SYS_HELP = Object.freeze({
     'sys.eval':
       '{ code, world?: "MAIN"|"USER", tabId?, frameId? }. code is an async function body; return a JSON value.',
     'sys.fetch':
-      '{ as: "page"|"extension", url, tabId?, init?, saveTo? }. page = MAIN-world fetch (cookies); extension = no cookies. saveTo writes bytes directly to /scratch or /artifacts and returns a file receipt instead of base64.',
+      '{ as: "page"|"extension", url, tabId?, init?, saveTo? }. Default for user-asked open/save/read: as:"page" on their tab (MAIN-world fetch — cookies + origin + Referer; same public IP as this Chrome). as:"extension" is credentials:omit (no cookies) — only when they need the extension network or the page cannot fetch (CORS). Omit as and the host currently treats it as extension — always pass as. saveTo writes /scratch or /artifacts and returns a file receipt. Never acquire/cloud those URLs.',
     'sys.cdp':
-      'CDP pipe. Send: { method, params?, tabId?, targetId? } (auto-attach). Session: { action: "attach"|"detach"|"events"|"targets", tabId?, targetId?, clear? }. Bodies of already-fired requests need attach + Network.enable first, then action:"events" + Network.getResponseBody.',
-    'sys.download': '{ url } or { base64, filename, mimeType? }. Existing downloads permission — not a downloader product.',
+      'CDP pipe. Send: { method, params?, tabId?, targetId? } (auto-attach). Session: { action: "attach"|"detach"|"events"|"targets", tabId?, targetId?, clear? }. Already-fired request URLs: attach + Network.enable, then action:"events". Do not dump media via Network.getResponseBody (cap ~6MB TOO_LARGE); hand URLs to sys.fetch as:"page".',
+    'sys.download':
+      '{ url, filename? } or { base64, filename, mimeType? }. Host calls chrome.downloads.download: this profile cookie jar + this-machine IP, no tab Referer. Not extension fetch (that is credentials:omit). Prefer sys.fetch as:"page" when login/Referer/captcha matter; download is the large-file shelf when the URL still works without document Referer.',
     'sys.screenshot': '{ tabId?, format?: "png"|"jpeg", saveTo? } — target must be visible; otherwise TAB_NOT_VISIBLE. saveTo writes to guest FS.'
   },
   walls: [
@@ -61,18 +62,20 @@ export const SYS_HELP = Object.freeze({
   ]
 });
 
-/** Model-facing guest ISA. Goes on the run tool schema — not a separate tool. */
+/** Model-facing guest ISA. Goes on the run tool schema — not a separate tool.
+ *  Identity + surprising host facts only. Catalog/recipes live in inspect view=sys / skills. */
 export const SYS_MODEL_HINT = [
-  'Guest globals: await fs.readFile/writeFile/readdir/... and sys (no chrome/window/document).',
+  'Guest is QuickJS — not browser JS, not Node. Globals: only await fs.readFile/writeFile/readdir/… and sys (no chrome/window/document/setTimeout).',
+  'run ~15s (timeoutMs max 120s). sys.fetch saveTo cap 8MB → TOO_LARGE. Oversized eval/cdp or DOM/functions → TOO_LARGE / NOT_CLONEABLE.',
   'sys.help() or inspect view=sys → full catalog (pawwork-sys-v1).',
   'await sys.capabilities() → live browser availability and limits.',
   'sys.tabs.list|current|frames({tabId?})',
   'sys.tabs.open({url,active?}) sys.tabs.navigate({url,tabId?}) sys.tabs.reload({tabId?}) sys.tabs.close({tabId?}) sys.tabs.focus({tabId?})',
   'sys.eval({world:"MAIN"|"USER", code, tabId?, frameId?}) — async function body on http(s) pages only; return JSON.',
-  'sys.fetch({as:"page"|"extension", url, tabId?, init?, saveTo?}) — use saveTo:"/scratch/data.csv" or "/artifacts/file.pdf" to keep binary data out of model context.',
+  'sys.fetch({as:"page"|"extension", url, tabId?, init?, saveTo?}) — default as:"page" on the user tab for any URL they asked to open/save/read that needs their session, or may be cookie/referrer/IP-bound, or may show captcha. This Chrome page+extension fetch share the user public IP; acquire/cloud/provider fetch do not. as:"extension" is no cookies — only for cookie-less extension network or when the page cannot fetch (CORS). Always pass as (omit currently means extension). saveTo:"/scratch/…" or "/artifacts/…" keeps bytes out of context.',
   'sys.cdp({method, params?, tabId?, targetId?}) auto-attach send. sys.cdp({action:"attach"|"detach"|"events"|"targets", tabId?, targetId?, clear?})',
-  'Already-fired HTTP bodies: cdp attach + Network.enable, then action:"events", then Network.getResponseBody({requestId}).',
-  'sys.download({url}) or sys.download({base64, filename, mimeType?})',
+  'Already-fired request URLs: cdp attach + Network.enable, then action:"events". Do not dump media via Network.getResponseBody (cap ~6MB).',
+  'sys.download({url, filename?}) uses chrome.downloads on this profile (host cookies, no tab Referer) or sys.download({base64, filename, mimeType?}). Prefer page fetch when login/Referer/captcha matter.',
   'sys.screenshot({tabId?, format?, saveTo?}) — visible target only.',
   'Errors carry e.code. SYS_ABORTED/SYS_TIMEOUT can mean an already dispatched action has completed: inspect state before retrying.'
 ].join(' ');

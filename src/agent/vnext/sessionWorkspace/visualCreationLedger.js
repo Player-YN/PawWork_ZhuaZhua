@@ -16,7 +16,7 @@
  */
 
 import { listArtifacts } from './artifacts.js';
-import { isPawCanvasDoc, parsePawCanvas } from './engineCanvas.js';
+import { isPawCanvasDoc } from './openClassify.js';
 import { isSheetArtifact } from '../../../preview/sheetCodec.js';
 
 export const AMBIGUOUS_CANVAS = 'AMBIGUOUS_CANVAS';
@@ -111,9 +111,17 @@ export function readOwnedCanvasText(store, fs, sessionId, artifactId) {
 }
 
 export function kindFromOwnedCanvas(store, fs, sessionId, artifactId) {
-  const doc = parsePawCanvas(readOwnedCanvasText(store, fs, sessionId, artifactId));
-  if (!doc) return '';
-  return doc.shell === 'slides' ? 'deck' : 'poster';
+  const text = readOwnedCanvasText(store, fs, sessionId, artifactId);
+  if (!text) return '';
+  try {
+    const doc = JSON.parse(text);
+    const shell = String(doc?.shell || doc?.kind || '').toLowerCase();
+    if (shell === 'slides' || shell === 'deck') return 'deck';
+    if (shell === 'design' || shell === 'poster') return 'poster';
+  } catch {
+    /* leftover JSON */
+  }
+  return '';
 }
 
 export function listMatchingCanvases(store, fs, sessionId, kind) {

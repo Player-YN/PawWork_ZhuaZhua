@@ -78,7 +78,7 @@ export class SessionWorkspaceService {
     this.model = opts.model || null;
     this.activeGroupId = null;
     this.storeKind = store.kind || 'memory';
-    /** @type {Map<string, { controller: AbortController, executionId: string|null, sessionId: string }>} */
+    /** @type {Map<string, { controller: AbortController, executionId: string|null, sessionId: string, finished?: Promise<void> }>} */
     this._activeBySession = new Map();
     /** @type {Map<string, AbortController>} */
     this._activeByExecution = new Map();
@@ -155,8 +155,45 @@ export class SessionWorkspaceService {
    * Offscreen → Sidepanel live events (thinking / tokens). Fire-and-forget:
    * chrome.storage is unavailable here; chrome.runtime messaging is the bridge.
    */
+  _snapshotActiveExecution(sessionId) {
+    const sid = String(sessionId || '');
+    const slot = sid ? this._activeBySession.get(sid) : null;
+    if (!slot) return null;
+    return {
+      sessionId: sid,
+      executionId: slot.executionId || null,
+      status: 'running'
+    };
+  }
+
+  async _awaitSessionIdle(sessionId, ms = 8000) {
+    const slot = this._activeBySession.get(sessionId);
+    if (!slot?.finished) return;
+    let timer = 0;
+    try {
+      await Promise.race([
+        slot.finished,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('idle-timeout')), ms);
+        })
+      ]);
+    } catch {
+      /* aborted turn or timeout — caller still deletes */
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   _broadcastUiEvent(event) {
     try {
+      const sid = event?.sessionId;
+      if (
+        sid &&
+        !this.runtime.store.has('sessions', sid) &&
+        !this._activeBySession.has(sid)
+      ) {
+        return;
+      }
       if (typeof chrome === 'undefined' || typeof chrome.runtime?.sendMessage !== 'function') {
         return;
       }
@@ -204,13 +241,16 @@ export class SessionWorkspaceService {
     const ids = this.runtime.store.keys('sessions');
     return ids.map((id) => {
       const s = this.runtime.store.get('sessions', id);
+      const live = this._snapshotActiveExecution(id);
       return {
         sessionId: id,
         title: s?.title || s?.name || id,
         titleLocked: !!s?.titleLocked,
         messageCount: Array.isArray(s?.messages) ? s.messages.length : 0,
         updatedAt: s?.updatedAt || s?.createdAt || 0,
-        createdAt: s?.createdAt || 0
+        createdAt: s?.createdAt || 0,
+        running: !!live,
+        executionId: live?.executionId || null
       };
     });
   }
@@ -225,8 +265,14 @@ export class SessionWorkspaceService {
       messages: Array.isArray(s?.messages) ? s.messages : [],
       updatedAt: s?.updatedAt || 0,
       createdAt: s?.createdAt || 0,
-      shelf: s?.shelf && typeof s.shelf === 'object' ? s.shelf : null
+      shelf: s?.shelf && typeof s.shelf === 'object' ? s.shelf : null,
+      activeExecution: this._snapshotActiveExecution(sessionId)
     };
+  }
+
+  /** Sidepanel: is this session's ToolLoopAgent still leased? */
+  async getActiveExecution({ sessionId } = {}) {
+    return { sessionId: sessionId || '', activeExecution: this._snapshotActiveExecution(sessionId) };
   }
 
   async renameSession({ sessionId = 'default', title, lockTitle = true } = {}) {
@@ -262,6 +308,8 @@ export class SessionWorkspaceService {
     const deleted = [];
     for (const id of [...this.runtime.store.keys('sessions')]) {
       if (keep.has(String(id))) continue;
+      await this.abortExecution({ sessionId: id });
+      await this._awaitSessionIdle(id);
       this.runtime.deleteSession(id);
       deleted.push(id);
     }
@@ -350,6 +398,7 @@ export class SessionWorkspaceService {
     if (labeledAny) await this._persist();
     const sess = this.runtime.store.get('sessions', sessionId) || {};
     return {
+      sessionId,
       groups,
       activeGroupId: readActiveCaptureGroupId(this.runtime.store),
       boundGroupIds: bound,
@@ -357,7 +406,8 @@ export class SessionWorkspaceService {
       artifactCount: artifacts.length,
       storeKind: this.storeKind,
       compact: !!compact,
-      visitedPages: Array.isArray(sess.visitedPages) ? sess.visitedPages : []
+      visitedPages: Array.isArray(sess.visitedPages) ? sess.visitedPages : [],
+      activeExecution: this._snapshotActiveExecution(sessionId)
     };
   }
 
@@ -712,10 +762,15 @@ export class SessionWorkspaceService {
     }
 
     const controller = new AbortController();
+    let settleSlot = () => {};
+    const finished = new Promise((resolve) => {
+      settleSlot = resolve;
+    });
     this._activeBySession.set(sessionId, {
       controller,
       executionId: null,
-      sessionId
+      sessionId,
+      finished
     });
 
     try {
@@ -831,6 +886,11 @@ export class SessionWorkspaceService {
       await this._persist();
       return result;
     } finally {
+      try {
+        settleSlot();
+      } catch {
+        /* */
+      }
       if (this._activeBySession.get(sessionId)?.controller === controller) this._activeBySession.delete(sessionId);
       for (const [eid, c] of [...this._activeByExecution.entries()]) {
         if (c === controller) this._activeByExecution.delete(eid);
@@ -1095,8 +1155,9 @@ export class SessionWorkspaceService {
 
   async deleteSession({ sessionId }) {
     if (!sessionId) throw new Error('deleteSession: sessionId required');
-    // Abort any in-flight work for this session
+    // Same kill path as Stop — then wait so sendMessage cannot recreate the row
     await this.abortExecution({ sessionId });
+    await this._awaitSessionIdle(sessionId);
     const result = this.runtime.deleteSession(sessionId);
     await this._persist();
     return result;

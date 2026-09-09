@@ -7,6 +7,7 @@ import { createGuestSys } from '../src/agent/vnext/sessionWorkspace/browserSys.j
 import { SessionWorkspaceStore } from '../src/agent/vnext/sessionWorkspace/store.js';
 import { createSessionGuestFs } from '../src/agent/vnext/sessionWorkspace/fs.js';
 import { createArtifact, updateArtifactContent } from '../src/agent/vnext/sessionWorkspace/artifacts.js';
+import { clarifyBelongsToSession } from '../src/sidepanel/sessionIsolation.js';
 
 // Stages writes until commit, so a transaction error cannot publish partial data.
 function memoryIdb() {
@@ -96,21 +97,6 @@ test('docs drains edits made during a slow save and returns persistence failure'
   assert.deepEqual(writes.map(x=>x.version), [1,2]); assert.equal(context.dirty,false);
   context.workspaceRpc=async()=>{throw new Error('disk failure')};
   assert.equal((await context.saveNow()).ok,false); assert.equal(context.dirty,true);
-});
-
-test('design retries the same local snapshot after a failed save', async () => {
-  const source=await readFile(new URL('../src/preview/design.js',import.meta.url),'utf8');
-  const code=source.slice(source.indexOf('let pendingSave ='),source.indexOf('\nfunction snapshotHasSchema('));
-  let fail=true, writes=0, applied=0;
-  const context=vm.createContext({artifactId:'a',sessionId:'s',lastJson:'old',pawDoc:null,ignorePatchUntil:0,
-    artifactRevision:0,localDirty:false,localEditRevision:0,
-    isWorkLocked:()=>false, workspaceRpc:async(name)=>{if(name==='readArtifact')return {content:'old'};
-      writes++; if(fail)throw new Error('disk failure');},
-    applyPatchFromStore:async()=>applied++,wrapSnap:x=>x,parsePawCanvas:x=>x,setStatus(){}});
-  vm.runInContext(code,context);
-  assert.equal(await context.persistNow({v:'new'}),false); assert.equal(context.lastJson,'old');
-  fail=false; assert.equal(await context.persistNow({v:'new'}),true);
-  assert.equal(writes,2); assert.equal(applied,0);
 });
 
 globalThis.chrome = { debugger: {} };
@@ -256,15 +242,10 @@ test('sheet saves newer edits after slow persistence and reports write failures'
   assert.equal((await context.saveNow()).ok,false);assert.equal(context.dirty,true);
 });
 
-test('design conflict preserves the unsaved snapshot and does not reload remote data', async () => {
-  const source=await readFile(new URL('../src/preview/design.js',import.meta.url),'utf8');
-  const code=source.slice(source.indexOf('let pendingSave ='),source.indexOf('\nfunction snapshotHasSchema('));
-  let reloaded=false, expected;
-  const context=vm.createContext({artifactId:'a',sessionId:'s',artifactRevision:4,localEditRevision:1,localDirty:true,
-    lastJson:'old',pawDoc:null,ignorePatchUntil:0,isWorkLocked:()=>false,
-    workspaceRpc:async(_,p)=>{expected=p.expectedRevision;throw new Error('ARTIFACT_CONFLICT')},
-    applyPatchFromStore:async()=>{reloaded=true},wrapSnap:x=>x,parsePawCanvas:x=>x,setStatus(){}});
-  vm.runInContext(code,context);
-  assert.equal(await context.persistNow({v:'local'}),false);
-  assert.equal(expected,4);assert.equal(context.lastJson,'old');assert.equal(context.localDirty,true);assert.equal(reloaded,false);
+test('plan/clarify chrome never matches another session', () => {
+  assert.equal(clarifyBelongsToSession('session-a', 'session-a'), true);
+  assert.equal(clarifyBelongsToSession('session-a', 'session-b'), false);
+  assert.equal(clarifyBelongsToSession('', 'session-b'), false);
+  assert.equal(clarifyBelongsToSession('session-a', ''), false);
+  assert.equal(clarifyBelongsToSession('', ''), false);
 });

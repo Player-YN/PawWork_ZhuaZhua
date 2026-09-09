@@ -5,8 +5,16 @@
 
 import { createOpenAICompatible } from './vnext/adapters/vendor/ai-sdk-loader.mjs';
 import { loadLlmSettings, DEFAULT_BASE } from './llm.js';
-import { resolveModelName } from './prompts.js';
 import { isAbortLike, toAbortError } from './vnext/host/userStop.js';
+
+const DEFAULT_MODEL_ID = 'deepseek-v4-flash';
+
+function resolveModelName(raw) {
+  const s = String(raw || '')
+    .trim()
+    .replace(/\s+/g, '-');
+  return s || DEFAULT_MODEL_ID;
+}
 
 /**
  * Fields many OpenAI-compatible proxies (Groq, etc.) reject on re-sent history.

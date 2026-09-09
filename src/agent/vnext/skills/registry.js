@@ -13,29 +13,10 @@
  * Host never keyword-matches user text; description is for model semantic routing.
  */
 
-import { skill as htmlPreview } from './html-preview/index.js';
-import { skill as slides } from './slides/index.js';
-import { skill as poster } from './poster/index.js';
-import { skill as htmlSite } from './html-site/index.js';
-import { skill as composeImage } from './compose-image/index.js';
-import { skill as visualCompile } from './visual-compile/index.js';
-import { skill as sheetNl } from './sheet-nl/index.js';
-import { skill as listingSheet } from './listing-sheet/index.js';
-import { skill as briefingDeck } from './briefing-deck/index.js';
-import { skill as remakePoster } from './remake-poster/index.js';
-import { skill as userscript } from './userscript/index.js';
 import { skill as pageRestyle } from './page-restyle/index.js';
-import { skill as pageExtract } from './page-extract/index.js';
-import { skill as formAutopilot } from './form-autopilot/index.js';
-import { skill as siteHotkeys } from './site-hotkeys/index.js';
-import { skill as autoPager } from './auto-pager/index.js';
 
 /** Permanent id aliases so inspect / skillStore overlays keyed by old ids still resolve. */
-export const SKILL_ID_ALIASES = Object.freeze({
-  'html-deck': 'slides',
-  'html-poster': 'poster',
-  'page-script': 'userscript'
-});
+export const SKILL_ID_ALIASES = Object.freeze({});
 
 /** @type {Map<string, SkillDef>} */
 const SKILLS = new Map();
@@ -69,6 +50,8 @@ export function skillIdAliases(canonicalId) {
  * @property {string|((ctx?: object) => string)} instructions
  * @property {Record<string, string>} [templates]
  * @property {Record<string, string>} [resources]
+ * @property {string[]} [resourcePaths] inspect listing when files live on disk
+ * @property {string} [packagePrefix] allow inspect of any safe path under this prefix
  * @property {string[]} [libraries]
  * @property {string} [root] package folder id
  */
@@ -90,6 +73,8 @@ export function registerSkill(def) {
     instructions: def.instructions,
     templates: def.templates && typeof def.templates === 'object' ? { ...def.templates } : {},
     resources: def.resources && typeof def.resources === 'object' ? { ...def.resources } : {},
+    resourcePaths: Array.isArray(def.resourcePaths) ? def.resourcePaths.slice() : [],
+    packagePrefix: String(def.packagePrefix || ''),
     libraries: Array.isArray(def.libraries) ? def.libraries.slice() : [],
     root: def.root || def.id
   });
@@ -120,7 +105,7 @@ export function listPackagedSkillCatalog() {
     id: s.id,
     name: s.name || s.id,
     description: s.description,
-    resourcePaths: Object.keys(s.resources || {}),
+    resourcePaths: skillResourcePaths(s),
     origin: 'packaged'
   }));
 }
@@ -144,15 +129,63 @@ export function loadSkillInstructions(id, ctx = {}) {
 }
 
 /**
+ * @param {SkillDef} skill
+ * @returns {string[]}
+ */
+export function skillResourcePaths(skill) {
+  if (!skill) return [];
+  if (Array.isArray(skill.resourcePaths) && skill.resourcePaths.length) {
+    return skill.resourcePaths.slice();
+  }
+  return Object.keys(skill.resources || {});
+}
+
+/**
+ * @param {string} raw
+ * @returns {string}
+ */
+function safeSkillRelPath(raw) {
+  const n = String(raw || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!n || n.includes('\0')) return '';
+  const parts = n.split('/');
+  if (parts.some((p) => !p || p === '.' || p === '..')) return '';
+  return parts.join('/');
+}
+
+/**
+ * @param {string} root skill folder id
+ * @param {string} rel
+ * @returns {Promise<string|null>}
+ */
+async function readPackagedSkillFile(root, rel) {
+  if (typeof chrome === 'undefined' || !chrome.runtime?.getURL) return null;
+  const url = chrome.runtime.getURL(`src/agent/vnext/skills/${root}/${rel}`);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * @param {string} skillId
  * @param {string} resourcePath logical path e.g. templates/report.html
- * @returns {string|null}
+ * @returns {Promise<string|null>}
  */
-export function loadSkillResource(skillId, resourcePath) {
+export async function loadSkillResource(skillId, resourcePath) {
   const skill = getSkill(skillId);
-  if (!skill?.resources) return null;
-  const v = skill.resources[resourcePath];
-  return v == null ? null : String(v);
+  if (!skill) return null;
+  const rel = safeSkillRelPath(resourcePath);
+  if (!rel) return null;
+  const packed = skill.resources?.[rel];
+  if (packed != null && String(packed) !== '') return String(packed);
+  const prefix = String(skill.packagePrefix || '');
+  if (prefix && (rel === prefix.replace(/\/$/, '') || rel.startsWith(prefix))) {
+    return await readPackagedSkillFile(skill.root || skill.id, rel);
+  }
+  return packed == null ? null : String(packed);
 }
 
 /**
@@ -171,7 +204,7 @@ export function formatSkillsForSystemPrompt(_ctx = {}) {
   return [
     'Skills are optional folder packages (playbooks + templates/scripts), not tools and not modes.',
     'Match the user intent to a skill description using semantic understanding — never by host keyword lists.',
-    'If no skill description fits, do not load any skill. Use inspect / acquire / run only.',
+    'If no skill description fits, do not load any skill. Use the machine (inspect / run / action / acquire).',
     'If a description fits, load that playbook with inspect view=skill and that skillId before following it.',
     'If the loaded playbook lists a resource path, load it with inspect view=skill, the same skillId, and path.',
     'Create, import, or delete a skill only when the user explicitly asked to. Never invent a skill unprompted.',
@@ -186,23 +219,6 @@ export function clearSkills() {
 }
 
 // ── Register built-in folder packages ───────────────────────────────────────
-for (const pack of [
-  htmlPreview,
-  slides,
-  poster,
-  htmlSite,
-  composeImage,
-  visualCompile,
-  sheetNl,
-  listingSheet,
-  briefingDeck,
-  remakePoster,
-  userscript,
-  pageRestyle,
-  pageExtract,
-  formAutopilot,
-  siteHotkeys,
-  autoPager
-]) {
+for (const pack of [pageRestyle]) {
   registerSkill({ ...pack, root: pack.id });
 }
