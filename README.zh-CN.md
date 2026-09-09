@@ -8,13 +8,13 @@
 [![last commit](https://img.shields.io/github/last-commit/Player-YN/PawWork_ZhuaZhua)](https://github.com/Player-YN/PawWork_ZhuaZhua/commits/main)
 [![JavaScript](https://img.shields.io/github/languages/top/Player-YN/PawWork_ZhuaZhua)](https://github.com/Player-YN/PawWork_ZhuaZhua)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-4285F4?logo=googlechrome&logoColor=white)](manifest.json)
-[![unpacked](https://img.shields.io/badge/load-unpacked-111111)](README.zh-CN.md#加载)
+[![unpacked](https://img.shields.io/badge/load-unpacked-111111)](README.zh-CN.md#运行)
 
 把已经登录的 **[Chrome 当成一台可编程计算机](README.zh-CN.md#你得到什么)**。爪爪是这台机器上的 **agent**。
 
 *侧栏 → Service Worker → offscreen agent · 工具：`action` · `run`+`sys` · `sheet` / `doc` / `web`*
 
-[你得到什么](#你得到什么) · [机制](#机制) · [加载](#加载) · [用例](#用例) · [边界](#边界) · [下一步](#下一步)
+[你得到什么](#你得到什么) · [机制](#机制) · [运行](#运行) · [用例](#用例) · [边界](#边界) · [下一步](#下一步)
 
 </div>
 
@@ -51,22 +51,21 @@
 
 `sys` **不是**模型工具。要登录态 / cookie / 验证码：在 `run` 里写 `sys.fetch({ as: "page" })`。
 
-## 加载
+## 运行
 
-**本文件夹就是加载根**（有 `manifest.json`）。
+加载后侧栏标题应是 **爪爪 · 完全解放版**。没有 Chrome 网上应用店安装包。
 
-1. Chrome → `chrome://extensions` → 打开开发者模式
-2. **加载已解压的扩展程序** → 选本文件夹
-3. 打开侧栏 → 填 BYOK Key（`pagewand_providers`）
-4. 在普通 `http(s)` 页面上发一条任务
+1. 下载 [Release zip](https://github.com/Player-YN/PawWork_ZhuaZhua/releases)，**或** clone 本仓库后用 `extension/` 文件夹
+2. Chrome → `chrome://extensions` → 开发者模式 → **加载已解压的扩展程序** → 选那个文件夹（根上就是 `manifest.json`）
+3. 打开侧栏 → 填 BYOK Key（`pagewand_providers`）→ 在普通 `http(s)` 页面发一条任务
 
-建议 Chrome 135+。Chrome 138+ 若要用 `sys.eval` / 页面身份 fetch：扩展详情里打开 **允许运行用户脚本**。需要 CDP 时不要在目标标签开着 F12（会 `CDP_BUSY`）。
+需要 Chrome 135+。Chrome 138+ 若要用 `sys.eval` / 页面身份 fetch：扩展详情打开 **允许运行用户脚本**。用 CDP 前关掉目标标签的 F12（否则 `CDP_BUSY`）。限制页（`chrome://`、网上应用店）会 `NEED_PAGE`。
+
+改完加载文件夹里的文件后，到扩展卡片点 **重新加载**。日常不跑 `npm`。
 
 ```text
 node --test tests/runtime-regression.test.mjs
 ```
-
-日常不跑 `npm`。改完 `src/` 后到扩展卡片点 **重新加载**。
 
 ## 用例
 

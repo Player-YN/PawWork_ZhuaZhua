@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>文档 · 爪爪</title>
+    <link rel="stylesheet" href="vendor/docs-runtime.css" />
+    <link rel="stylesheet" href="officeHelp.css" />
+    <link rel="stylesheet" href="workLock.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #fff;
+        font-family: system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      #boot {
+        padding: 24px 16px;
+        font-size: 13px;
+        color: #6b636b;
+      }
+      #boot.error {
+        color: #fb7185;
+      }
+      #app {
+        position: relative;
+        flex: 1 1 auto;
+        min-height: 0;
+        background: #fff;
+      }
+      body.is-ready #boot {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="boot">正在打开文档… 若引擎未打包，请运行 npm run build:docs</div>
+    <div id="app"></div>
+    <script src="workLock.js"></script>
+    <script type="module" src="docs.js"></script>
+  </body>
+</html>

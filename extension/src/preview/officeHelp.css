@@ -1,0 +1,114 @@
+/**
+ * Quiet “?” help control + compact shortcut popover for preview chrome.
+ * Tokens aligned with host-bar / Univer paper — no extra accent purple.
+ */
+
+.paw-help-btn {
+  box-sizing: border-box;
+  height: 28px;
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+  border: 1px solid rgba(40, 32, 24, 0.14);
+  border-radius: 10px;
+  background: #fff;
+  color: #9a9186;
+  font: 700 14px/1 system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  cursor: pointer;
+}
+
+.paw-help-btn:hover {
+  color: #1c1915;
+  border-color: rgba(40, 32, 24, 0.28);
+  background: #fffcf8;
+}
+
+.paw-help-btn[aria-expanded='true'] {
+  color: #1c1915;
+  border-color: rgba(40, 32, 24, 0.28);
+}
+
+#bar.host-file-strip .paw-help-btn {
+  height: 28px;
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+  font-weight: 700;
+  color: #9a9186;
+}
+
+.paw-help-dock {
+  position: fixed;
+  top: 10px;
+  right: 12px;
+  z-index: 30;
+}
+
+.paw-help-pop {
+  box-sizing: border-box;
+  width: 280px;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: min(70vh, 420px);
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid rgba(40, 32, 24, 0.14);
+  border-radius: 10px;
+  background: #fff;
+  color: #1c1915;
+  box-shadow: 0 8px 24px rgba(40, 32, 24, 0.12);
+  z-index: 50;
+  font: 12px/1.45 system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+.paw-help-pop[hidden] {
+  display: none !important;
+}
+
+.paw-help-pop-title {
+  font-weight: 700;
+  font-size: 12px;
+  padding: 4px 6px 6px;
+  color: #6b635a;
+}
+
+.paw-help-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.paw-help-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+.paw-help-keys {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 3px;
+}
+
+.paw-help-pop kbd {
+  display: inline-block;
+  min-width: 1.2em;
+  padding: 1px 5px;
+  border: 1px solid rgba(40, 32, 24, 0.14);
+  border-radius: 4px;
+  background: #f7f4ef;
+  color: #6b635a;
+  font: 650 11px/1.4 ui-monospace, 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  text-align: center;
+}
+
+.paw-help-note {
+  margin: 8px 6px 4px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(40, 32, 24, 0.08);
+  color: #9a9186;
+  font-size: 11px;
+  line-height: 1.45;
+}

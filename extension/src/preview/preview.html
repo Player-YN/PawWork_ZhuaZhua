@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-pagewand-role="draft-preview">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PageWand Draft Preview</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: #0f172a;
+        font-family: system-ui, 'Segoe UI', 'PingFang SC', sans-serif;
+      }
+      #boot {
+        padding: 28px 20px;
+        font-size: 13px;
+        color: #94a3b8;
+      }
+      #boot.error {
+        color: #fca5a5;
+      }
+      #boot[hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="boot">正在打开草稿预览标签页…</div>
+    <div id="root"></div>
+    <script type="module" src="preview.js"></script>
+  </body>
+</html>

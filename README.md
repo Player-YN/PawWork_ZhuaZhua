@@ -8,13 +8,13 @@ English · [中文](README.zh-CN.md)
 [![last commit](https://img.shields.io/github/last-commit/Player-YN/PawWork_ZhuaZhua)](https://github.com/Player-YN/PawWork_ZhuaZhua/commits/main)
 [![JavaScript](https://img.shields.io/github/languages/top/Player-YN/PawWork_ZhuaZhua)](https://github.com/Player-YN/PawWork_ZhuaZhua)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-4285F4?logo=googlechrome&logoColor=white)](manifest.json)
-[![unpacked](https://img.shields.io/badge/load-unpacked-111111)](README.md#load-it)
+[![unpacked](https://img.shields.io/badge/load-unpacked-111111)](README.md#run-it)
 
 Treat the already-logged-in **[Chrome as a programmable computer](README.md#what-you-get)**. 爪爪 is the **agent** on that machine.
 
 *sidepanel → service worker → offscreen agent · tools: `action` · `run`+`sys` · `sheet` / `doc` / `web`*
 
-[What you get](#what-you-get) · [Mechanism](#mechanism) · [Load it](#load-it) · [Use cases](#use-cases) · [Limits](#limits) · [Next](#next)
+[What you get](#what-you-get) · [Mechanism](#mechanism) · [Run it](#run-it) · [Use cases](#use-cases) · [Limits](#limits) · [Next](#next)
 
 </div>
 
@@ -51,22 +51,21 @@ Side panel → service worker → offscreen `SessionWorkspaceService` → AI SDK
 
 `sys` is **not** a model tool. Login / cookies / captcha: `sys.fetch({ as: "page" })` inside `run`.
 
-## Load it
+## Run it
 
-This folder **is** the load root (`manifest.json`).
+You should see a side-panel agent named **爪爪 · 完全解放版**. There is no Chrome Web Store listing.
 
-1. Chrome → `chrome://extensions` → Developer mode
-2. **Load unpacked** → this folder
-3. Open the side panel → paste a BYOK key (`pagewand_providers`)
-4. On a normal `http(s)` page, send a task
+1. Download the [Release zip](https://github.com/Player-YN/PawWork_ZhuaZhua/releases) **or** clone this repo and use the `extension/` folder
+2. Chrome → `chrome://extensions` → Developer mode → **Load unpacked** → select that folder (`manifest.json` is at its root)
+3. Open the side panel → paste a BYOK key (`pagewand_providers`) → send a task on a normal `http(s)` page
 
-Chrome 135+. Chrome 138+: extension details → **Allow User Scripts** if you need `sys.eval` / page fetch. Close F12 on the target tab before CDP (`CDP_BUSY`).
+Need Chrome 135+. Chrome 138+: extension details → **Allow User Scripts** if you need `sys.eval` / page fetch. Close F12 on the target tab before CDP (`CDP_BUSY`). Restricted pages (`chrome://`, Web Store) return `NEED_PAGE`.
+
+After you edit files in the load folder, click **重新加载** on the extension card. No daily `npm`.
 
 ```text
 node --test tests/runtime-regression.test.mjs
 ```
-
-No daily `npm`. After you edit `src/`, hit **重新加载** on the extension card.
 
 ## Use cases
 

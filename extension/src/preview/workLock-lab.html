@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>编排锁 · 呼吸氛围</title>
+  <link rel="stylesheet" href="workLock.css" />
+  <style>
+    :root {
+      --ink: #1c1917;
+      --muted: #78716c;
+      --paper: #fff;
+      --cloth: #e7e5e4;
+      --line: #d6d3d1;
+      --amber-hot: #f59e0b;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font: 14px/1.45 system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: #f5f5f4;
+    }
+
+    .lab-bar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 8px 20px;
+      padding: 16px 22px 14px;
+      background: rgba(245, 245, 244, 0.92);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--line);
+    }
+    .lab-bar h1 { margin: 0; font-size: 16px; font-weight: 650; }
+    .lab-bar p { margin: 0; color: var(--muted); font-size: 13px; max-width: 72ch; }
+
+    .stage-wrap {
+      padding: 18px 22px 28px;
+    }
+    body.is-solo .lab-bar,
+    body.is-solo .stage-wrap { display: none; }
+
+    .card {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      background: #fff;
+      border: 1px solid rgba(245, 158, 11, 0.45);
+      border-radius: 16px;
+      overflow: hidden;
+      cursor: pointer;
+    }
+    .card:focus-visible { outline: 2px solid var(--amber-hot); outline-offset: 2px; }
+    .meta { padding: 12px 14px 10px; }
+    .meta h2 { margin: 0 0 4px; font-size: 14px; font-weight: 650; }
+    .meta p { margin: 0; color: var(--muted); font-size: 12px; }
+
+    .stage {
+      position: relative;
+      height: min(62vh, 520px);
+      background: var(--cloth);
+      overflow: hidden;
+    }
+    .paper {
+      position: absolute;
+      inset: 46px 58px 52px;
+      background: #fff;
+      border-radius: 2px;
+      box-shadow: 0 10px 28px rgba(28, 25, 23, 0.08);
+    }
+    .paper::after {
+      content: "Slides";
+      position: absolute;
+      top: -18px;
+      left: 0;
+      font: 650 10px/1 system-ui;
+      color: #78716c;
+    }
+
+    .solo {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      background: var(--cloth);
+    }
+    body.is-solo .solo { display: block; }
+    .solo .paper {
+      inset: 72px 96px 80px;
+    }
+    .solo-exit {
+      position: absolute;
+      top: 14px;
+      right: 16px;
+      z-index: 4;
+      height: 28px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--ink);
+      font: 650 12px/26px inherit;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <header class="lab-bar">
+    <h1>编排锁</h1>
+    <p>产品方案：边框呼吸灯 + 边缘雾气同频起伏。没有游走光、彗星、粒子。点卡片全屏单看，Esc 返回。</p>
+  </header>
+
+  <main class="stage-wrap">
+    <article class="card" id="card" tabindex="0">
+      <div class="meta">
+        <h2>呼吸灯 + 雾</h2>
+        <p>静止氛围：边框明暗起伏，内侧一层软雾跟着呼吸。没有位移高光。</p>
+      </div>
+      <div class="stage" id="stage"></div>
+    </article>
+  </main>
+
+  <section class="solo" id="solo" hidden>
+    <button type="button" class="solo-exit" id="soloExit">返回</button>
+    <div class="paper"></div>
+    <div id="soloLock"></div>
+  </section>
+
+  <script>
+    const LOCK_HTML =
+      '<div class="paw-work-lock is-contained is-on">' +
+      '<div class="paw-work-lock-vignette"></div>' +
+      '<div class="paw-work-lock-mist"></div>' +
+      '<div class="paw-work-lock-frame"></div>' +
+      '<span class="paw-work-lock-chip">编排中</span>' +
+      '</div>';
+
+    document.getElementById("stage").innerHTML = `<div class="paper"></div>${LOCK_HTML}`;
+
+    const solo = document.getElementById("solo");
+    const soloLock = document.getElementById("soloLock");
+
+    function closeSolo() {
+      document.body.classList.remove("is-solo");
+      solo.hidden = true;
+      soloLock.innerHTML = "";
+    }
+
+    function openSolo() {
+      soloLock.innerHTML = LOCK_HTML;
+      solo.hidden = false;
+      document.body.classList.add("is-solo");
+    }
+
+    const card = document.getElementById("card");
+    card.addEventListener("click", openSolo);
+    card.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        openSolo();
+      }
+    });
+    document.getElementById("soloExit").addEventListener("click", closeSolo);
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && document.body.classList.contains("is-solo")) closeSolo();
+    });
+  </script>
+</body>
+</html>

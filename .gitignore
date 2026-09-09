@@ -1,4 +1,5 @@
-# This folder IS the Chrome load root. Do not ignore src/ or src/preview/vendor/.
+# Repo root and extension/ are both valid unpacked load roots.
+# Do not ignore src/ or src/preview/vendor/ or extension/.
 
 # Dependencies (not required to load the unpacked extension)
 node_modules/

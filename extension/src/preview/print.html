@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PageWand · 打印 PDF</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, 'Segoe UI', 'PingFang SC', sans-serif;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+      .bar {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: 10px 14px;
+        background: #1e293b;
+        border-bottom: 1px solid #334155;
+        font-size: 12px;
+      }
+      .bar button {
+        border: none;
+        border-radius: 8px;
+        padding: 8px 14px;
+        font-weight: 700;
+        cursor: pointer;
+        background: #4f46e5;
+        color: #fff;
+      }
+      .bar button.ghost {
+        background: transparent;
+        border: 1px solid #475569;
+        color: #e2e8f0;
+      }
+      #status {
+        padding: 20px;
+        color: #94a3b8;
+      }
+      #frame-wrap {
+        background: #fff;
+      }
+      iframe {
+        width: 100%;
+        min-height: 80vh;
+        border: 0;
+        background: #fff;
+      }
+      @media print {
+        .bar,
+        #status {
+          display: none !important;
+        }
+        iframe {
+          min-height: 100vh;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bar no-print">
+      <strong>导出 PDF</strong>
+      <span>在系统对话框中选择「另存为 PDF / Save as PDF」</span>
+      <button type="button" id="btnPrint">打印 / 另存为 PDF</button>
+      <button type="button" class="ghost" id="btnClose">关闭</button>
+    </div>
+    <div id="status">正在准备打印页…</div>
+    <div id="frame-wrap"></div>
+    <script type="module" src="print.js"></script>
+  </body>
+</html>

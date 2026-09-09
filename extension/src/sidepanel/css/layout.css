@@ -1,0 +1,625 @@
+/**
+ * Side panel layout — SINGLE whole-panel scroll (not nested section scrolls).
+ * Load order: tokens.css → layout.css → motion.css → sidepanel.css
+ *
+ * Contract:
+ * - Sticky: .topbar + .selection-bar + .composer
+ * - Home / no-thread: #panelScroll is the document scrollport
+ * - Conversation open (.is-thread-open): chat-window chrome — .task-header stays
+ *   put; .task-body is the message scrollport
+ * - History lives inside .thread-workspace with #taskStream
+ */
+
+/* ── Document height chain ── */
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
+html,
+body {
+  height: 100%;
+  max-height: 100%;
+}
+
+body {
+  overflow: hidden;
+  position: relative;
+}
+
+/* ── Panel shell ── */
+.panel {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  min-height: 0;
+  isolation: isolate;
+  container-type: inline-size;
+  container-name: panel;
+}
+
+.topbar,
+.composer,
+.attachment-preview-bar {
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+}
+
+/*
+ * Pinned selection chrome occupies flex space and squeezes #panelScroll.
+ * Do not overlay the thread (no overflow:visible leak, no absolute expand).
+ */
+.selection-bar {
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
+  /* Combined pick + clipboard cap ≈ 3/4 of the panel (was 100% - 11.5rem). */
+  max-height: min(75%, calc(100% - 7rem));
+  overflow: hidden;
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+}
+
+.selection-bar.is-empty {
+  max-height: none;
+  overflow: visible;
+}
+
+.panel-scroll {
+  flex: 1 1 0%;
+  min-height: 0;
+  max-height: 100%;
+  opacity: 1;
+}
+
+.panel-scroll.is-overflowing::after {
+  content: '';
+  position: sticky;
+  bottom: 0;
+  display: block;
+  height: 16px;
+  margin-top: -16px;
+  background: linear-gradient(to top, var(--bg-panel), transparent);
+  pointer-events: none;
+  z-index: 5;
+}
+
+/*
+ * Home empty (no tasks):
+ * - selection-bar stays pinned under topbar (never vertically centered)
+ * - only the thread/welcome area centers the composer (MaxAI-style)
+ * - composer is portaled into #homeComposerSlot
+ */
+.panel.is-home-empty .panel-scroll {
+  flex: 1 1 0%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start; /* pick/shot stay at top */
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.panel.is-home-empty > .selection-bar {
+  flex: 0 0 auto;
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+
+.panel.is-home-empty .panel-scroll > .drafts-bar {
+  flex: 0 0 auto;
+}
+
+/*
+ * Fill leftover height; place welcome+composer in the upper 2/3 band.
+ * Flex spacers 1:2 above/below → content sits at ~1/3 from top (not dead center).
+ */
+.panel.is-home-empty .panel-scroll > .thread-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  padding: 0;
+  width: 100%;
+}
+
+/* Top spacer = 1 share of free space */
+.panel.is-home-empty .panel-scroll > .thread-workspace::before {
+  content: '';
+  flex: 1 1 0;
+  min-height: 12px;
+  pointer-events: none;
+}
+
+/* Bottom spacer = 2 shares → keeps chat cluster in upper 2/3 */
+.panel.is-home-empty .panel-scroll > .thread-workspace::after {
+  content: '';
+  flex: 2 1 0;
+  min-height: 24px;
+  pointer-events: none;
+}
+
+.panel.is-home-empty .task-stream {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+}
+
+.panel.is-home-empty .thread-workspace > .history-bar {
+  flex: 0 0 auto;
+  order: -1; /* history (if any) stays above spacers/content */
+}
+
+/*
+ * Work surface (first selection — same idea as post-send):
+ * JS docks composer to footer. Hero logo becomes a non-interactive watermark
+ * at the home visual center, always painted under chrome / selection / chat.
+ */
+.panel.is-home-working .welcome.is-work-surface {
+  min-height: 0;
+  padding: 8px 12px 10px;
+  justify-content: flex-end;
+  /* logo is taken out of flow as watermark — only chips remain in welcome */
+  position: relative;
+  z-index: 2;
+}
+.panel.is-home-working .welcome.is-work-surface .home-center {
+  gap: 8px;
+  max-width: 100%;
+}
+.panel.is-home-working .panel-scroll {
+  justify-content: flex-start;
+  position: relative;
+  z-index: 2;
+}
+.panel.is-home-working .thread-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  justify-content: flex-end;
+  padding-bottom: 4px;
+}
+.panel.is-home-working .thread-workspace::before,
+.panel.is-home-working .thread-workspace::after {
+  display: none !important;
+  flex: 0 !important;
+  min-height: 0 !important;
+}
+
+/* —— Logo watermark (work surface) —— */
+.panel.is-home-working .home-mark.is-watermark,
+.panel.is-home-working .welcome.is-work-surface .home-mark {
+  display: flex !important;
+  position: fixed;
+  /* Corresponds to empty-home optical center (upper ~2/3 band) */
+  top: 38%;
+  left: 50%;
+  width: 84px;
+  height: 84px;
+  margin: 0 !important;
+  transform: translate(-50%, -50%);
+  opacity: 0.12;
+  color: var(--text-muted);
+  filter: none !important;
+  pointer-events: none !important;
+  user-select: none;
+  cursor: default;
+  z-index: 0; /* always under chrome */
+  will-change: auto;
+  transition: opacity 320ms ease;
+}
+.panel.is-home-working .home-mark.is-watermark .paw-svg-hero,
+.panel.is-home-working .welcome.is-work-surface .home-mark .paw-svg-hero {
+  width: 72px;
+  height: 72px;
+  animation: none !important;
+  transform: none !important;
+}
+/* Kill hover lift / glow / breathe while watermarked */
+.panel.is-home-working .home-mark.is-watermark:hover,
+.panel.is-home-working .welcome.is-work-surface .home-mark:hover {
+  transform: translate(-50%, -50%) !important;
+  color: var(--text-muted) !important;
+  filter: none !important;
+  animation: none !important;
+  opacity: 0.12;
+}
+.panel.is-home-working .home-mark.is-watermark:hover .paw-svg-hero,
+.panel.is-home-working .welcome.is-work-surface .home-mark:hover .paw-svg-hero {
+  animation: none !important;
+  transform: none !important;
+}
+/* Stacking: watermark 0 < scroll/selection 2 < topbar/composer 4+ */
+.panel.is-home-working .topbar {
+  position: relative;
+  z-index: 5;
+}
+.panel.is-home-working .selection-bar {
+  position: relative;
+  z-index: 3;
+}
+.panel.is-home-working .composer,
+.panel.is-home-working .attachment-preview-bar {
+  position: relative;
+  z-index: 4;
+}
+.panel.is-home-working .more-sheet,
+.panel.is-home-working .sheet-backdrop {
+  z-index: 20;
+}
+
+/* Pure home empty: stack order for selection vs thread when still is-home-empty */
+.panel.is-home-empty .panel-scroll > .drafts-bar {
+  order: 1;
+}
+.panel.is-home-empty .home-composer-slot,
+.panel.is-home-empty .composer {
+  position: relative;
+  z-index: 3;
+}
+.panel.is-home-empty .selection-bar {
+  position: relative;
+  z-index: 2;
+}
+
+.panel.is-home-empty .composer {
+  /* In-slot: no sticky footer chrome */
+  border-top: none;
+  background: transparent;
+  backdrop-filter: none;
+  padding: 0;
+  width: 100%;
+}
+
+.panel.is-home-empty .composer-meta {
+  justify-content: center;
+  opacity: 0.75;
+}
+
+.panel.is-home-empty .attachment-preview-bar:not([hidden]) {
+  margin: 0 0 8px;
+}
+
+/* Shared names for first-message dock motion (View Transitions) */
+.panel.is-home-empty .composer,
+.panel:not(.is-home-empty) .composer {
+  /* names applied via JS during transition only */
+}
+
+/* FLIP-friendly transitions when docking */
+.composer.is-docking-motion,
+.selection-bar.is-docking-motion {
+  will-change: transform;
+  z-index: 5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer.is-docking-motion,
+  .selection-bar.is-docking-motion {
+    will-change: auto;
+  }
+}
+
+/* ── THE only vertical scrollport ── */
+.panel-scroll {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  scrollbar-gutter: stable;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+  z-index: 1;
+}
+
+/* All blocks in the scroll flow: grow with content, never nested scrollports */
+.panel-scroll > .context-row,
+.panel-scroll > .drafts-bar,
+.panel-scroll > .thread-workspace {
+  flex-shrink: 0;
+  max-height: none;
+  overflow: visible;
+}
+
+.selection-bar.is-running-compact:not(.is-empty) {
+  max-height: min(75%, calc(100% - 7rem));
+}
+
+.drafts-bar {
+  max-height: none !important;
+  min-height: 0;
+}
+
+.drafts-bar[hidden] {
+  display: none !important;
+  max-height: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+.drafts-bar.is-drawer-open .drafts-list {
+  max-height: 320px !important;
+  overflow: auto !important;
+}
+
+/* ── Thread: history + live task, same section ── */
+.thread-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 0 12px;
+  min-height: 0;
+}
+
+.thread-workspace .history-bar {
+  margin: 8px 12px 0;
+  max-height: none !important;
+  overflow: visible !important;
+  flex-shrink: 0;
+}
+
+.thread-workspace .history-list {
+  max-height: none !important;
+  overflow: visible !important;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.thread-workspace .history-list[hidden] {
+  display: none !important;
+}
+
+/* Task stream: document flow when no thread; fills workspace when conversation is open */
+.task-stream {
+  flex: 0 0 auto;
+  min-height: 120px;
+  overflow: visible !important;
+  max-height: none !important;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  gap: 12px;
+  scrollbar-gutter: auto;
+}
+
+/* Chat window: session title bar stays; only messages scroll */
+.panel.is-thread-open .panel-scroll {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.panel.is-thread-open .thread-workspace {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow: hidden;
+  justify-content: flex-start;
+}
+
+.panel.is-thread-open .task-stream {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow: hidden !important;
+  max-height: none !important;
+  padding-bottom: 8px;
+}
+
+.panel.is-thread-open .task-stream > .session-thread,
+.panel.is-thread-open .task-stream > .task-card {
+  flex: 1 1 0%;
+  min-height: 0;
+  max-height: 100%;
+}
+
+.panel.is-thread-open .task-stream > .welcome,
+.panel.is-thread-open .task-stream > .viewing-banner {
+  flex: 0 0 auto;
+}
+
+.panel.is-thread-open .session-thread,
+.panel.is-thread-open .task-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel.is-thread-open .task-header {
+  flex: 0 0 auto;
+  position: relative;
+}
+
+.panel.is-thread-open .task-header::after {
+  display: none;
+}
+
+.panel.is-thread-open .task-body {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.panel.is-thread-open .task-body > * {
+  flex: 0 0 auto;
+}
+.panel.is-thread-open .agent-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-stream > .task-card,
+.task-stream > .welcome,
+.task-stream > .viewing-banner {
+  flex-shrink: 0;
+}
+
+/* Expanded think stays a bounded scrollport (do not explode the chat card) */
+
+/* Clip list also flows into main scroll */
+.clip-list {
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+/* Scroll affordance classes — panel document scroll or conversation body */
+.panel-scroll.is-scroll-up,
+.task-body.is-scroll-up {
+  box-shadow: inset 0 12px 12px -12px color-mix(in srgb, var(--text) 18%, transparent);
+}
+.panel-scroll.is-scroll-down,
+.task-body.is-scroll-down {
+  box-shadow: inset 0 -12px 12px -12px color-mix(in srgb, var(--text) 18%, transparent);
+}
+.panel-scroll.is-scroll-up.is-scroll-down,
+.task-body.is-scroll-up.is-scroll-down {
+  box-shadow:
+    inset 0 12px 12px -12px color-mix(in srgb, var(--text) 18%, transparent),
+    inset 0 -12px 12px -12px color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+/* ── Narrow side panel ── */
+@container panel (max-width: 340px) {
+  .page-url {
+    display: none;
+  }
+
+  .composer-meta {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-1, 4px);
+  }
+
+  .composer-hint {
+    text-align: left;
+    font-size: 10px;
+  }
+
+  .model-select-mini {
+    max-width: 100%;
+  }
+
+  .selection-bar .sel-toolbar,
+  .selection-bar:not(.is-empty) .sel-toolbar {
+    grid-template-columns: auto auto auto minmax(0, 1fr);
+    grid-template-areas:
+      'pick shot pin group'
+      'summary summary summary actions';
+  }
+
+  .sel-label {
+    display: none;
+  }
+
+  .brand-sub {
+    display: none;
+  }
+
+  .topbar {
+    padding: 8px 10px 6px;
+  }
+
+  .pick-btn {
+    min-width: 64px;
+    height: 30px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+
+  .task-stream {
+    padding: 8px;
+    gap: 8px;
+  }
+}
+
+@container panel (max-width: 280px) {
+  .status-pill .status-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .status-pill {
+    position: relative;
+    padding: 4px 8px;
+  }
+
+  .composer-hint {
+    display: none;
+  }
+
+  .topbar {
+    padding: 6px 8px;
+  }
+
+  .pick-btn {
+    min-width: 56px;
+    height: 28px;
+    padding: 0 8px;
+    font-size: 11.5px;
+  }
+
+  .task-stream {
+    padding: 6px;
+    gap: 6px;
+  }
+
+  .page-name {
+    font-size: 11px;
+  }
+}
+
+.panel[data-density='compact'] {
+  --density-topbar-pad-y: 8px;
+  --density-topbar-pad-x: 10px;
+  --density-stream-pad: 8px;
+  --density-stream-gap: 8px;
+  --density-pick-h: 30px;
+  --density-pick-min-w: 64px;
+  --density-pick-fs: 12px;
+  --density-pick-pad-x: 10px;
+}
+
+.panel[data-density='compact'] .topbar {
+  padding: var(--density-topbar-pad-y) var(--density-topbar-pad-x)
+    calc(var(--density-topbar-pad-y) - 2px);
+}
+
+.panel[data-density='compact'] .pick-btn {
+  min-width: var(--density-pick-min-w);
+  height: var(--density-pick-h);
+  padding: 0 var(--density-pick-pad-x);
+  font-size: var(--density-pick-fs);
+}
+
+.panel[data-density='compact'] .task-stream {
+  padding: var(--density-stream-pad);
+  gap: var(--density-stream-gap);
+}

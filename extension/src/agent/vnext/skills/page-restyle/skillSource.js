@@ -1,0 +1,2 @@
+// Generated from SKILL.md — do not edit by hand.
+export const SKILL_MD = "---\nname: Page Restyle\ndescription: User wants the current http(s) tab restyled in place — hide named clutter, a calmer reading layout, contrast, or a floating TOC.\n---\n\nThe live document is the outcome. One tagged `<style>`; undo = remove that node. Idempotent id (`#paw-restyle`). After navigate or SPA remount, inject again. This is not a saved clone.\n";

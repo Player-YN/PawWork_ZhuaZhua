@@ -1,0 +1,146 @@
+/**
+ * Paw Work tab lock — breathing rim + edge mist.
+ * Overlay-only tokens; preview pages do not load sidepanel tokens.css.
+ * Paper stays visible: glow and haze stay at the rim, not a page wash.
+ * Stationary only: opacity/blur pulse. No canvas, no traveling light.
+ */
+
+.paw-work-lock {
+  --work-lock-amber: #fbbf24;
+  --work-lock-amber-hot: #f59e0b;
+  --work-lock-gold: #fde68a;
+  --work-lock-amber-ink: #92400e;
+  --work-lock-amber-soft: rgba(251, 191, 36, 0.28);
+  --work-lock-amber-ring: rgba(245, 158, 11, 0.42);
+  --work-lock-amber-haze: rgba(251, 191, 36, 0.16);
+  --work-lock-chip-bg: rgba(255, 251, 235, 0.94);
+  --work-lock-chip-border: rgba(245, 158, 11, 0.38);
+  --work-lock-radius: var(--radius, 14px);
+  --work-lock-ease: var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1));
+  --pulse-ms: 3.4s;
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    opacity 200ms var(--work-lock-ease),
+    visibility 200ms var(--work-lock-ease);
+}
+
+.paw-work-lock.is-on {
+  pointer-events: auto;
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Lab stages reuse product CSS inside a card, not as a page-fixed overlay. */
+.paw-work-lock.is-contained {
+  position: absolute;
+  z-index: 2;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: none;
+}
+
+.paw-work-lock-vignette,
+.paw-work-lock-mist,
+.paw-work-lock-frame {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Edge-only dusk — not a center wash */
+.paw-work-lock-vignette {
+  background:
+    linear-gradient(to bottom, rgba(180, 96, 8, 0.1), transparent 58px),
+    linear-gradient(to top, rgba(180, 96, 8, 0.1), transparent 58px),
+    linear-gradient(to right, rgba(180, 96, 8, 0.1), transparent 58px),
+    linear-gradient(to left, rgba(180, 96, 8, 0.1), transparent 58px);
+}
+
+/* Soft inward haze — breathes with the rim, slightly offset */
+.paw-work-lock-mist {
+  background:
+    linear-gradient(to bottom, var(--work-lock-amber-soft), transparent 88px),
+    linear-gradient(to top, var(--work-lock-amber-soft), transparent 88px),
+    linear-gradient(to right, var(--work-lock-amber-soft), transparent 88px),
+    linear-gradient(to left, var(--work-lock-amber-soft), transparent 88px);
+  filter: blur(18px);
+  opacity: 0.48;
+  animation: paw-lock-mist var(--pulse-ms) ease-in-out infinite;
+  animation-delay: -1.1s;
+  animation-play-state: paused;
+}
+
+.paw-work-lock.is-on .paw-work-lock-mist,
+.paw-work-lock.is-contained .paw-work-lock-mist {
+  animation-play-state: running;
+}
+
+/* Soft amber band — bloom, not a 1px hairline */
+.paw-work-lock-frame {
+  inset: 8px;
+  border-radius: var(--work-lock-radius);
+  box-shadow:
+    0 0 0 3px var(--work-lock-amber-haze),
+    0 0 20px 5px var(--work-lock-amber-soft),
+    0 0 44px 10px rgba(245, 158, 11, 0.16),
+    inset 0 0 16px 2px var(--work-lock-amber-haze);
+  animation: paw-lock-pulse var(--pulse-ms) ease-in-out infinite;
+}
+
+.paw-work-lock-chip {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-xs, 6px);
+  border: 1px solid var(--work-lock-chip-border);
+  background: var(--work-lock-chip-bg);
+  color: var(--work-lock-amber-ink);
+  font: 650 11px/22px var(--font, system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 0 14px var(--work-lock-amber-soft);
+}
+
+@keyframes paw-lock-pulse {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes paw-lock-mist {
+  0%,
+  100% {
+    opacity: 0.32;
+    filter: blur(16px);
+  }
+  50% {
+    opacity: 0.7;
+    filter: blur(22px);
+  }
+}
+
+/*
+ * Reduced motion: keep a slow breath, do not freeze the lock.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .paw-work-lock {
+    --pulse-ms: 5.5s;
+  }
+}

@@ -2,7 +2,7 @@
 
 Chrome MV3 **unpacked** 扩展：把已登录浏览器当成可编程层（live-page `action`，以及 `run` 里的 guest `sys`），并在侧栏里跑一个 **Session Workspace** 通用 agent（表 / 画布 / 文档 / 站点 / 代码沙箱）。
 
-加载根 = **本文件夹**（根上有 `manifest.json`）。显示名：`manifest.name` / `action.default_title` = `爪爪 · 完全解放版`。不面向 CWS，日常改 `src/` 后在扩展卡片点 **重新加载**。无 `package.json`，不跑 npm。
+开发加载根仍是 **本文件夹**（根上有 `manifest.json`）。陌生人 / Release 加载根是 [`extension/`](extension/)（`python scripts/pack_extension.py` 从已跟踪的 `manifest.json` + `icons/` + `src/` 生成，不含 AGENTS/tests）。显示名：`manifest.name` / `action.default_title` = `爪爪 · 完全解放版`。不面向 CWS，日常改 `src/` 后重新 pack 或直接改 `extension/` 再点 **重新加载**。无 `package.json`，不跑 npm。
 
 产品入口与本地验证：[README.md](README.md)。实现进展与技术方向：[BROWSER_COMPUTER.md](BROWSER_COMPUTER.md)。
 
@@ -98,6 +98,8 @@ Chrome MV3 **unpacked** 扩展：把已登录浏览器当成可编程层（live-
 manifest.json              # MV3：SW / side_panel / content_scripts / sandbox / CSP
 icons/                     # 16|32|48|128
 BROWSER_COMPUTER.md        # 实现进展与后续技术方向
+extension/                 # stranger / Release 加载根（pack 自 src）
+scripts/pack_extension.py  # 生成 extension/ 与 zip
 src/
   background.js            # Service worker（type: module）
   content_script.js        # <all_urls> all_frames；伸爪 + action

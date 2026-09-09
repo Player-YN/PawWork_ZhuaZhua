@@ -1,0 +1,204 @@
+/**
+ * Shared host file strip for sheet / docs / HTML preview tabs.
+ * Univer's own format toolbar stays below this strip.
+ */
+:root {
+  --host-bar-bg: #121214;
+  --host-bar-text: #f5f2f4;
+  --host-bar-faint: #6b636b;
+  --host-bar-border: rgba(255, 255, 255, 0.08);
+  --host-bar-border-strong: rgba(255, 255, 255, 0.14);
+  --host-bar-soft: #0c0c0f;
+  --host-bar-elevated: #16161a;
+  --host-accent: #f43f8c;
+  --host-accent-soft: rgba(244, 63, 140, 0.14);
+  --host-danger: #fb7185;
+  --host-radius: 10px;
+}
+
+body.is-artboard #bar.host-file-strip {
+  background: #ffffff;
+  color: #1a1a1a;
+  border-bottom-color: #e5e5e5;
+}
+body.is-artboard #bar.host-file-strip button,
+body.is-artboard #bar.host-file-strip select {
+  background: #ffffff;
+  color: #1a1a1a;
+  border-color: #d9d9d9;
+}
+body.is-artboard #bar.host-file-strip #status {
+  color: #6b6b6b;
+}
+
+#bar.host-file-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  flex: 0 0 auto;
+  height: 48px;
+  min-height: 48px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--host-bar-border);
+  background: var(--host-bar-bg);
+  color: var(--host-bar-text);
+  font-size: 12px;
+  z-index: 4;
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+#bar.host-file-strip #title {
+  font-weight: 700;
+  max-width: 36%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bar.host-file-strip #status,
+#bar.host-file-strip #sel {
+  color: var(--host-bar-faint);
+  font-weight: 600;
+}
+
+#bar.host-file-strip .sp {
+  flex: 1;
+}
+
+#bar.host-file-strip .host-file-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+#bar.host-file-strip button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--host-bar-border-strong);
+  border-radius: var(--host-radius);
+  background: var(--host-bar-soft);
+  color: var(--host-bar-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+#bar.host-file-strip button.primary {
+  background: var(--host-accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+#bar.host-file-strip button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+#bar.host-file-strip button.danger:hover:not(:disabled) {
+  color: var(--host-danger);
+  border-color: var(--host-danger);
+}
+
+#bar.host-file-strip button.is-busy {
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+#bar.host-file-strip button.is-done {
+  background: var(--host-accent-soft);
+  border-color: var(--host-accent);
+  color: var(--host-bar-text);
+}
+
+#bar.host-file-strip button[hidden],
+#bar.host-file-strip [hidden] {
+  display: none !important;
+}
+
+#bar.host-file-strip .export-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+#downloadBtn {
+  anchor-name: --host-download;
+}
+
+#exportMenu {
+  /* UA [popover] is position:fixed; inset:0 — that fills the viewport unless we pin size. */
+  position: fixed;
+  inset: unset;
+  top: 48px;
+  right: 12px;
+  left: auto;
+  bottom: auto;
+  margin: 0;
+  width: max-content;
+  min-width: 148px;
+  max-width: min(240px, 80vw);
+  height: max-content;
+  max-height: min(240px, 70vh);
+  padding: 4px;
+  border: 1px solid var(--host-bar-border-strong);
+  border-radius: var(--host-radius);
+  background: var(--host-bar-elevated);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 40;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+#exportMenu:not([popover]) {
+  position: fixed;
+}
+
+#exportMenu[popover] {
+  position: fixed;
+  inset: unset;
+  margin: 0;
+}
+
+#exportMenu[popover]:not(:popover-open) {
+  display: none;
+}
+
+#exportMenu[popover]:is(:popover-open, .\:popover-open) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+#exportMenu[hidden] {
+  display: none !important;
+}
+
+#exportMenu button {
+  height: 28px;
+  width: 100%;
+  text-align: left;
+  justify-content: flex-start;
+}
+
+#exportMenu button:hover {
+  border-color: var(--host-accent);
+  color: var(--host-accent);
+}
+
+#hint {
+  width: 100%;
+  color: var(--host-bar-faint);
+  font-size: 11px;
+}
+
+#bar.host-file-strip .plate-tools {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
