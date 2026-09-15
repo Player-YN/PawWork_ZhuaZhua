@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { aoaToCsv, parseDelimited } from '../src/preview/sheetCodec.js';
 import { DurableSessionWorkspaceStore } from '../src/agent/vnext/sessionWorkspace/durableStore.js';
 import { createGuestSys } from '../src/agent/vnext/sessionWorkspace/browserSys.js';
 import { SessionWorkspaceStore } from '../src/agent/vnext/sessionWorkspace/store.js';
@@ -248,4 +249,15 @@ test('plan/clarify chrome never matches another session', () => {
   assert.equal(clarifyBelongsToSession('', 'session-b'), false);
   assert.equal(clarifyBelongsToSession('session-a', ''), false);
   assert.equal(clarifyBelongsToSession('', ''), false);
+});
+
+test('TSV save and reopen preserves tabs inside cells and neighboring columns', () => {
+  const rows = [
+    ['name', 'note', 'count'],
+    ['Alice', 'left\tright', '2'],
+    ['Bob', '\t', '3'],
+    ['Carol', 'a"b\tc\nd', '4'],
+  ];
+  assert.deepEqual(parseDelimited(aoaToCsv(rows, '\t'), 'tsv'), rows);
+  assert.deepEqual(parseDelimited(aoaToCsv(rows), 'csv'), rows);
 });
