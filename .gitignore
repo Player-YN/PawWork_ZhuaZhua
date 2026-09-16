@@ -1,5 +1,5 @@
-# Repo root and extension/ are both valid unpacked load roots.
-# Do not ignore src/ or src/preview/vendor/ or extension/.
+# The repo root is the unpacked load root (manifest.json is here).
+# Do not ignore src/ or src/preview/vendor/.
 
 # Dependencies (not required to load the unpacked extension)
 node_modules/
@@ -41,7 +41,8 @@ output/playwright/*-profile/
 # Local Playwright / smoke evidence (not product)
 output/
 
-# If someone later runs a pack script, keep output out of git
+# Pack output — scripts/pack_extension.py regenerates it at release time
+extension/
 artifacts/
 dist/
 *.zip

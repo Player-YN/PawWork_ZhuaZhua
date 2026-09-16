@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  regression:
+    name: runtime regression + pack shape
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Runtime regression
+        run: node --test tests/runtime-regression.test.mjs
+
+      # The release load root is generated from src/, never committed. These
+      # assertions are what keeps the shipped tree from drifting away from the
+      # tested tree; they need no browser.
+      - name: Pack release load root
+        run: python scripts/pack_extension.py
+
+      - name: Assert pack shape
+        run: |
+          test -f extension/manifest.json
+          test -d extension/src
+          test -f extension/src/preview/vendor/sheet-runtime.js
+          test -f extension/src/preview/vendor/docs-runtime.js
+          if find extension -name '*.md' ! -name 'README.md' | grep -q .; then
+            echo "pack leaked non-README .md files"; exit 1
+          fi
+
+      # Regression guard for the drift that once shipped a fixed bug: the pack
+      # must carry the TSV tab escape, not an older copy of it.
+      - name: Assert pack carries the TSV fix
+        run: |
+          grep -qF '/[",\t\n]/' extension/src/agent/dataTools/structuredData.js \
+            || { echo "packed structuredData.js is missing the TSV tab fix"; exit 1; }

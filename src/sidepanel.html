@@ -90,7 +90,6 @@
           <span class="page-listen-dot" aria-hidden="true"></span>
           <span class="page-listen-label" id="pageListenLabel">监听中</span>
         </button>
-        <span class="worker-slot-pill" id="workerSlotPill" hidden data-state="idle"></span>
         <!-- Hidden fields kept for JS that still reads title/domain -->
         <span id="activePageTitle" hidden></span>
         <span id="activePageDomain" hidden></span>
@@ -270,22 +269,6 @@
     <!-- Hidden attachment bar (kept for multimodal / screenshot) -->
     <div class="attachment-preview-bar" id="attachmentPreviewBar" hidden></div>
     <input type="file" id="fileInput" accept="image/*,.txt,.json,.js,.py,.md,.csv,.pdf" multiple hidden />
-
-    <!-- Read-only worker thinking session (no user input) -->
-    <dialog class="worker-session-dialog" id="workerSessionDialog" aria-labelledby="workerSessionTitle">
-      <div class="worker-session-sheet">
-        <header class="worker-session-header">
-          <div class="worker-session-heading">
-            <span class="worker-session-kicker" id="workerSessionKicker">Worker</span>
-            <h2 class="worker-session-title" id="workerSessionTitle">Worker</h2>
-          </div>
-          <button type="button" class="sheet-close" id="workerSessionClose" aria-label="Close">×</button>
-        </header>
-        <p class="worker-session-goal" id="workerSessionGoal"></p>
-        <p class="worker-session-note" id="workerSessionNote">只读任务 · 不可直接对话</p>
-        <pre class="worker-session-body" id="workerSessionBody" tabindex="0"></pre>
-      </div>
-    </dialog>
 
     <!-- Sticky composer: floating model / bind-group / artifacts above white shell -->
     <footer class="composer">

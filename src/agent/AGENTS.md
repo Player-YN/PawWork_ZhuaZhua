@@ -13,7 +13,7 @@ sidepanel workspaceRpc('sendMessage')
   → createSessionTools + runSessionToolLoopAgent
 ```
 
-`vnext/index.js` / `runSession.product.js` 是对外 barrel。`agent/index.js` 再导出 BYOK（`llm.js`）。
+没有 barrel / `index.js` re-export 层。每个 import 都写具体文件路径：`offscreen/runtime.js` → `vnext/service/sessionWorkspaceService.js` → `vnext/runSession.product.js` → `vnext/sessionWorkspace/index.js`。新增模块不要再建 barrel。
 
 ## 目录
 

@@ -1,11 +1,14 @@
 // node tests/browser-smoke.cjs [path-to-playwright-package]
 // Uses a disposable, separate Chromium profile; no user browser state is accessed.
+// PAW_LOAD_ROOT overrides the unpacked load root, so CI can smoke the packed
+// release output instead of the repo root. Evidence always lands in the repo.
 const { chromium } = require(process.argv[2] || 'playwright');
 const fs = require('node:fs');
 const path = require('node:path');
 
 (async () => {
   const root = path.resolve(__dirname, '..');
+  const loadRoot = process.env.PAW_LOAD_ROOT ? path.resolve(process.env.PAW_LOAD_ROOT) : root;
   const output = path.join(root, 'output/playwright');
   fs.mkdirSync(output, { recursive: true });
   const evidence = { storage: [], sandbox: [], errors: [], console: [] };
@@ -16,7 +19,7 @@ const path = require('node:path');
   });
   const context = await chromium.launchPersistentContext(path.join(output, 'smoke-profile'), {
     headless: true, channel: 'chromium',
-    args: [`--disable-extensions-except=${root}`, `--load-extension=${root}`]
+    args: [`--disable-extensions-except=${loadRoot}`, `--load-extension=${loadRoot}`]
   });
   try {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

@@ -162,169 +162,10 @@ import { I18N, createT } from './sidepanel/i18n.js';
 import { createTrajectoryUi } from './sidepanel/trajectoryUi.js';
 import { wirePopoverMenu } from './sidepanel/popoverMenu.js';
 import { setupPanelDensity } from './sidepanel/density.js';
-// dual-agent workerSlot disabled — single-agent only (no spawn/cancel/message tools)
+// Single-agent only — no worker spawn/cancel/message tools.
 
-/** Active script-confirm promise settle (so Stop can deny it) */
-
-/** Product path is vNext-only. Legacy tool-loop has no UI entry (dev: npm run test:agent). */
+/** Product path is vNext-only. Legacy tool-loop has no UI entry. */
 const RUNTIME_MODE_STORAGE_KEY = 'pagewand_runtime_mode'; // legacy key ignored if present
-
-/** @type {Map<string, HTMLElement>} workerId → bubble el */
-const workerBubbleEls = new Map();
-
-/** Multi-agent workers removed — product is single-agent vNext only. */
-function ensureWorkerHostWired() {
-  return;
-}
-
-
-/**
- * Worker bubble in the bound task stream. Click → read-only thinking session.
- * @param {import('./agent/workerSlot.js').WorkerRecord} worker
- * @param {string} [eventType]
- */
-function upsertWorkerBubble(worker, eventType) {
-  if (!worker?.workerId) return;
-  const wid = worker.workerId;
-  const status = worker.status || 'running';
-  const goalShort = truncateUi(worker.goal || '', 56);
-
-  // Prefer live task body when worker is bound to it; else any matching task card
-  let hostBody = null;
-  if (liveTask && String(liveTask.id) === String(worker.taskId)) {
-    hostBody = liveTask.body;
-  } else if (liveTask && worker.taskId == null) {
-    hostBody = liveTask.body;
-  } else {
-    const card = document.querySelector(`.session-thread[data-task-id="${CSS.escape(String(worker.taskId))}"]`);
-    hostBody = card?.querySelector?.('.task-body') || liveTask?.body || null;
-  }
-  if (!hostBody) return;
-
-  let bubble = workerBubbleEls.get(wid);
-  if (!bubble || !bubble.isConnected) {
-    bubble = document.createElement('button');
-    bubble.type = 'button';
-    bubble.className = 'worker-bubble';
-    bubble.dataset.workerId = wid;
-    bubble.setAttribute('aria-label', `Worker ${wid}`);
-    bubble.addEventListener('click', () => openWorkerSession(wid));
-    // Insert near end of task body (after progress / before final if any)
-    hostBody.appendChild(bubble);
-    workerBubbleEls.set(wid, bubble);
-    if (liveTask) {
-      if (!Array.isArray(liveTask.workers)) liveTask.workers = [];
-      if (!liveTask.workers.includes(wid)) liveTask.workers.push(wid);
-    }
-  }
-
-  bubble.dataset.state = status;
-  bubble.classList.toggle('is-running', status === 'running' || status === 'starting');
-  bubble.classList.toggle('is-done', status === 'done');
-  bubble.classList.toggle('is-failed', status === 'failed' || status === 'cancelled');
-  bubble.classList.toggle('is-abandoned', status === 'abandoned');
-
-  const statusLabel =
-    status === 'running' || status === 'starting'
-      ? currentLang === 'en'
-        ? 'running'
-        : '执行中'
-      : status === 'done'
-        ? currentLang === 'en'
-          ? 'done'
-          : '完成'
-        : status === 'abandoned'
-          ? currentLang === 'en'
-            ? 'left behind'
-            : '已脱离'
-          : status === 'cancelled'
-            ? currentLang === 'en'
-              ? 'cancelled'
-              : '已取消'
-            : currentLang === 'en'
-              ? 'failed'
-              : '失败';
-
-  bubble.innerHTML = `
-    <span class="worker-bubble-dot" aria-hidden="true"></span>
-    <span class="worker-bubble-main">
-      <span class="worker-bubble-title">Worker · ${escapeHtml(statusLabel)}</span>
-      <span class="worker-bubble-goal">${escapeHtml(goalShort || wid)}</span>
-    </span>
-    <span class="worker-bubble-chevron" aria-hidden="true">›</span>
-  `;
-
-  if (eventType === 'spawn' || eventType === 'status') {
-    scrollTaskStream();
-  }
-
-  // Live-update open dialog
-  const dlg = document.getElementById('workerSessionDialog');
-  if (dlg?.open && dlg.dataset.workerId === wid) {
-    fillWorkerSessionDialog(worker);
-  }
-}
-
-/**
- * @param {string} workerId
- */
-function openWorkerSession(workerId) {
-  const rec = getWorkerRecord(workerId);
-  if (!rec) {
-    showSidepanelToast(currentLang === 'en' ? 'Worker not found' : '未找到该 Worker');
-    return;
-  }
-  const dlg = document.getElementById('workerSessionDialog');
-  if (!dlg) return;
-  dlg.dataset.workerId = workerId;
-  fillWorkerSessionDialog(rec);
-  try {
-    if (typeof dlg.showModal === 'function') dlg.showModal();
-    else dlg.setAttribute('open', '');
-  } catch (_) {
-    dlg.setAttribute('open', '');
-  }
-}
-
-/**
- * @param {import('./agent/workerSlot.js').WorkerRecord} rec
- */
-function fillWorkerSessionDialog(rec) {
-  const title = document.getElementById('workerSessionTitle');
-  const kicker = document.getElementById('workerSessionKicker');
-  const goal = document.getElementById('workerSessionGoal');
-  const body = document.getElementById('workerSessionBody');
-  const note = document.getElementById('workerSessionNote');
-  if (title) title.textContent = rec.workerId;
-  if (kicker) {
-    kicker.textContent =
-      rec.status === 'running' || rec.status === 'starting'
-        ? currentLang === 'en'
-          ? 'Worker · live'
-          : 'Worker · 进行中'
-        : currentLang === 'en'
-          ? `Worker · ${rec.status}`
-          : `Worker · ${rec.status}`;
-  }
-  if (goal) goal.textContent = rec.goal || '';
-  if (note) {
-    note.textContent =
-      currentLang === 'en'
-        ? 'Read-only session · you cannot chat with this worker'
-        : '只读任务 · 不可直接与 Worker 对话';
-  }
-  if (body) {
-    const text =
-      (rec.thoughtText || '').trim() ||
-      (rec.lastResultSummary
-        ? `[${rec.status}]\n${rec.lastResultSummary}`
-        : currentLang === 'en'
-          ? '(No log yet)'
-          : '（暂无日志）');
-    body.textContent = text.slice(-48000);
-    body.scrollTop = body.scrollHeight;
-  }
-}
 
 let isPickerActive = false;
 let selectedElementsSummary = [];
@@ -3810,10 +3651,7 @@ function dockComposerToFooter(composer, panel) {
   if (composer.parentElement === panel && scroll && composer.previousElementSibling === scroll) {
     return; // already docked
   }
-  const dlg = document.getElementById('workerSessionDialog');
-  if (dlg && dlg.parentElement === panel) {
-    panel.insertBefore(composer, dlg);
-  } else if (scroll?.nextSibling) {
+  if (scroll?.nextSibling) {
     panel.insertBefore(composer, scroll.nextSibling);
   } else {
     panel.appendChild(composer);

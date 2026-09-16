@@ -2,9 +2,9 @@
 
 Chrome MV3 **unpacked** 扩展：把已登录浏览器当成可编程层（live-page `action`，以及 `run` 里的 guest `sys`），并在侧栏里跑一个 **Session Workspace** 通用 agent（表 / 画布 / 文档 / 站点 / 代码沙箱）。
 
-开发加载根仍是 **本文件夹**（根上有 `manifest.json`）。陌生人 / Release 加载根是 [`extension/`](extension/)（`python scripts/pack_extension.py` 从已跟踪的 `manifest.json` + `icons/` + `src/` 生成，不含 AGENTS/tests）。显示名：`manifest.name` / `action.default_title` = `爪爪 · 完全解放版`。不面向 CWS，日常改 `src/` 后重新 pack 或直接改 `extension/` 再点 **重新加载**。无 `package.json`，不跑 npm。
+加载根就是 **本文件夹**（根上有 `manifest.json`）——开发和陌生人都加载它。`python scripts/pack_extension.py --zip <路径>` 只在发版时跑：它从已跟踪的 `manifest.json` + `icons/` + `src/` 生成一个不含 `.md` / `tests` 的 `extension/`（**已 gitignore，不入库**）与 Release zip。显示名：`manifest.name` / `action.default_title` = `爪爪 · 完全解放版`。不面向 CWS，改 `src/` 后点 **重新加载**。无 `package.json`，不跑 npm。
 
-产品入口与本地验证：[README.md](README.md)。实现进展与技术方向：[BROWSER_COMPUTER.md](BROWSER_COMPUTER.md)。
+产品入口与本地验证：[README.md](README.md)。
 
 ## 文档怎么读
 
@@ -15,8 +15,7 @@ Chrome MV3 **unpacked** 扩展：把已登录浏览器当成可编程层（live-
 | [src/agent/AGENTS.md](src/agent/AGENTS.md) | Session Workspace：store、工具循环、工具契约、skills、guest FS、`sys` ABI | 改模型循环、工具、prompt、持久化领域 |
 | [src/preview/AGENTS.md](src/preview/AGENTS.md) | 画布标签页（Univer / site） | 改 sheet / docs / site 预览 |
 | [src/sidepanel/README.md](src/sidepanel/README.md) | 侧栏 UI 模块与滚动契约 | 改对话面板布局 / i18n |
-| [BROWSER_COMPUTER.md](BROWSER_COMPUTER.md) | 实现进展与未做边界 | 改持久化 / sys / 长任务方向时 |
-| [REVIEW_BRIEF.md](REVIEW_BRIEF.md) · [ACTION_REPORT.md](ACTION_REPORT.md) · [TECHNICAL_REVIEW.md](TECHNICAL_REVIEW.md) | 2026-09-05 审查快照，不是当前产品法 | 只当需要当时的审查问题；现状以本文件与 nested AGENTS 为准 |
+| 本文件「未实现的边界」 | 持久化 / `sys` / 长任务的硬边界 | 改这三块方向前 |
 
 事实以仓库代码为准。历史名 **PageWand** 仍出现在 `chrome.storage.local` 键（`pagewand_*`）和部分注释里；消息 `target` 用 `pawwork-*`。
 
@@ -97,9 +96,8 @@ Chrome MV3 **unpacked** 扩展：把已登录浏览器当成可编程层（live-
 ```text
 manifest.json              # MV3：SW / side_panel / content_scripts / sandbox / CSP
 icons/                     # 16|32|48|128
-BROWSER_COMPUTER.md        # 实现进展与后续技术方向
-extension/                 # stranger / Release 加载根（pack 自 src）
-scripts/pack_extension.py  # 生成 extension/ 与 zip
+scripts/pack_extension.py  # 发版：生成 gitignore 的 extension/ 与 zip
+tests/                     # runtime-regression（纯 Node）· browser-smoke（Playwright）
 src/
   background.js            # Service worker（type: module）
   content_script.js        # <all_urls> all_frames；伸爪 + action
@@ -120,11 +118,26 @@ src/
 
 `src/preview/vendor/{sheet,docs}-runtime.*` 是已跟踪的 Univer 包，unpacked 加载需要，勿从 `.gitignore` 排除。
 
+## 未实现的边界
+
+这些是当前实现的硬边界，不是待办清单。改持久化 / `sys` / 长任务前先读这节。
+
+- **无 durable journal**：`callId` 与取消登记在 SW 内存，SW 一死即失。没有跨崩溃 exactly-once，也没有自动续跑；`Execution` 崩溃后作废。结果未知的网页写入应先读后置状态再决定是否重试，不要盲目重放工具调用。
+- **持久化仍导出内存快照**：大工作区需要改成记录/文件的增量提交。新文件发布前崩溃可能留下未被引用的 OPFS 文件；orphan GC 未实现，不自动清理无法证明归属的文件。
+- **OPFS 不可用时**新字节写入 IDB；已有 OPFS 引用不会因暂时不可用被清空。
+- **交付物版本不是完整协同编辑**：旧调用方可省略 `expectedRevision`，raw guest 写入推进版本但不携带读版本；没有自动合并，也没有冲突解决界面。
+- **`tabId` 标识标签，不标识导航前后的同一文档**：页面引用未纳入 documentId 与导航代次。CDP attachment 没有 session owner、跨 run 复用与释放策略；网络事件是定长数组，不是带游标与丢失计数的日志。
+- **截图不是原子快照**：捕获前后校验活动标签，但仍是视口合成，不适合需要严格文档身份的视觉执行。
+- **同一 session 的第二次执行返回 busy**，不支持并发 turn。
+- **出不了浏览器**：没有原生 OS 控制、没有本地命令，也没有验证过高保真 Office 往返。若未来需要浏览器外计算，加**可选** native companion，浏览器侧的会话与权限边界仍应保留。
+
 ## 日常约定
 
 - 改代码 → `chrome://extensions` 点本扩展 **重新加载**。offscreen / SW 会重建；`action` 的 `rev` 在 SW 内存，重载后需重新 `snapshot`。
 - 权限见 `manifest.json`：`sidePanel` `activeTab` `tabs` `scripting` `storage` `downloads` `offscreen` `tabGroups` `webNavigation` `userScripts` `debugger`；`host_permissions: <all_urls>`。`userScripts` / `debugger` 只服务 guest `sys`（[src/AGENTS.md](src/AGENTS.md)）。
 - 命令：`toggle-picker` = Alt+Shift+S；`capture-screenshot` = Alt+Shift+C。
 - Git：本地 `main`；`origin` = `https://github.com/Player-YN/PawWork_ZhuaZhua.git`。不要改 `git config`。不要 force-push `main`。
-- 逻辑回归：`node --test tests/runtime-regression.test.mjs`。实机：`node tests/browser-smoke.cjs`（需本机 Playwright；证据在 `output/playwright/`，不入库）。
+- 逻辑回归：`node --test tests/runtime-regression.test.mjs`（磁盘失败恢复与原子性、OPFS 替换失败、慢文档/表格保存、画布重试与冲突、截图目标、流读取限额、fetch 取消、`saveTo`、CDP 并发与权限探测、guest `sleep`、`sys.waitFor`）。
+- 实机烟测（手动，CI 不跑）：`node tests/browser-smoke.cjs <playwright路径>`。默认加载根是仓库根；要验**真正发出去的那棵树**，先 `python scripts/pack_extension.py` 再 `PAW_LOAD_ROOT=extension node tests/browser-smoke.cjs <playwright路径>`。独立 Chromium、一次性 profile，不碰你的浏览器状态。覆盖：IDB/OPFS 关闭重开、真实 QuickJS 错误往返、`run`→文件→artifact 登记、非 offscreen `sys` 请求拒绝、真实 localhost fetch 与正文超时、offscreen RPC 版本冲突拒绝。证据在 `output/playwright/`，不入库。
+- CI（`.github/workflows/ci.yml`）只跑逻辑回归 + pack 形状断言（含「pack 里必须带 TSV 修复」这条防漂移守卫），不装浏览器。
 - BYOK：侧栏填 Key → `pagewand_providers`。无 Key 时 offscreen 仍可启动，`sendMessage` 时再解析模型。
