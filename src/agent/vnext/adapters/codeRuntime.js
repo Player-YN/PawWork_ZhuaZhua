@@ -255,6 +255,7 @@ async function runQuickJS(opts) {
     injectConsole(vm, stdout, stderr);
     injectFs(vm, sandboxFs, hostDeferreds);
     injectSys(vm, opts.sys, hostDeferreds);
+    injectSleep(vm, signal, hostDeferreds, deadline);
     // Harden: privileged host APIs are absent. Access throws so adversarial
     // probes fail closed (exitStatus !== 0) rather than silently returning host data.
     // (QuickJS has its own globalThis — host chrome/window/document never leak.)
@@ -648,6 +649,7 @@ function injectSys(vm, sys, handles) {
           help: function () { return help; },
           capabilities: function () { return __pw_sys_call('capabilities', {}); },
           eval: function (opts) { return __pw_sys_call('eval', opts || {}); },
+          waitFor: function (opts) { return __pw_sys_call('waitFor', opts || {}); },
           fetch: function (opts) { return __pw_sys_call('fetch', opts || {}); },
           cdp: function (opts) { return __pw_sys_call('cdp', opts || {}); },
           download: function (opts) { return __pw_sys_call('download', opts || {}); },
@@ -665,6 +667,69 @@ function injectSys(vm, sys, handles) {
         };
       })();
     `)
+  ).dispose();
+}
+
+/**
+ * Inject a host-backed `sleep(ms)` global. QuickJS has no timers of its own, so
+ * the host resolves the guest promise after a real setTimeout, bounded by the
+ * run deadline and interruptible by the abort signal.
+ * @param {import('quickjs-emscripten').QuickJSContext} vm
+ * @param {AbortSignal|undefined} signal
+ * @param {ReturnType<typeof createHostDeferredBag>} handles
+ * @param {number} deadline
+ */
+function injectSleep(vm, signal, handles, deadline) {
+  const fnHandle = vm.newFunction('__pw_sleep', (msHandle) => {
+    const raw = Number(safeDump(vm, msHandle));
+    const deferred = handles.track(vm.newPromise());
+    let ms = Number.isFinite(raw) ? raw : 0;
+    ms = Math.max(0, Math.min(ms, 120_000));
+    if (Number.isFinite(deadline)) ms = Math.min(ms, Math.max(0, deadline - Date.now()));
+
+    /** @type {ReturnType<typeof setTimeout>|null} */
+    let timer = null;
+    /** @type {(() => void)|null} */
+    let onAbort = null;
+    const cleanup = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (signal && onAbort) {
+        try { signal.removeEventListener('abort', onAbort); } catch { /* ignore */ }
+        onAbort = null;
+      }
+    };
+    const pumpThenRelease = () => {
+      deferred.settled.then(() => {
+        try { if (vm.alive) vm.runtime.executePendingJobs(); } catch { /* ignore */ }
+        releaseHostDeferred(handles, deferred);
+      });
+    };
+    const settleResolve = () => {
+      cleanup();
+      if (!vm.alive) { releaseHostDeferred(handles, deferred); return; }
+      const value = vm.newNumber(ms);
+      deferred.resolve(value);
+      value.dispose();
+      pumpThenRelease();
+    };
+    const settleReject = () => {
+      cleanup();
+      if (!vm.alive) { releaseHostDeferred(handles, deferred); return; }
+      const errH = vm.newError('aborted');
+      deferred.reject(errH);
+      try { errH.dispose(); } catch { /* ignore */ }
+      pumpThenRelease();
+    };
+
+    if (signal?.aborted) { settleReject(); return deferred.handle; }
+    if (signal) { onAbort = () => settleReject(); signal.addEventListener('abort', onAbort, { once: true }); }
+    timer = setTimeout(settleResolve, ms);
+    return deferred.handle;
+  });
+  vm.setProp(vm.global, '__pw_sleep', fnHandle);
+  fnHandle.dispose();
+  vm.unwrapResult(
+    vm.evalCode('globalThis.sleep = function (ms) { return __pw_sleep(ms); };')
   ).dispose();
 }
 

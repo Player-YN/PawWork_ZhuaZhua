@@ -21,6 +21,7 @@ export const SYS_OPS = Object.freeze([
   'tabs.close',
   'tabs.focus',
   'eval',
+  'waitFor',
   'fetch',
   'cdp',
   'download',
@@ -44,6 +45,8 @@ export const SYS_HELP = Object.freeze({
     'sys.tabs.focus': '{ tabId? }',
     'sys.eval':
       '{ code, world?: "MAIN"|"USER", tabId?, frameId? }. code is an async function body; return a JSON value.',
+    'sys.waitFor':
+      '{ code?|selector?|text?, world?, tabId?, frameId?, timeoutMs?, pollMs?, stableMs? }. Polls inside the page until the predicate is met, then returns its JSON value. code = async function body returning the value to wait for (truthy = done). selector = wait until document.querySelector matches. text = wait until document.body text contains it. No ~20s single-eval cap (timeoutMs up to 120000); pollMs is the interval; stableMs > 0 waits until the value stops changing for that long (use it for a streaming answer to settle). Prefer this over hand-rolled eval poll loops.',
     'sys.fetch':
       '{ as: "page"|"extension", url, tabId?, init?, saveTo? }. Default for user-asked open/save/read: as:"page" on their tab (MAIN-world fetch — cookies + origin + Referer; same public IP as this Chrome). as:"extension" is credentials:omit (no cookies) — only when they need the extension network or the page cannot fetch (CORS). Omit as and the host currently treats it as extension — always pass as. saveTo writes /scratch or /artifacts and returns a file receipt. Never acquire/cloud those URLs.',
     'sys.cdp':
@@ -65,13 +68,14 @@ export const SYS_HELP = Object.freeze({
 /** Model-facing guest ISA. Goes on the run tool schema — not a separate tool.
  *  Identity + surprising host facts only. Catalog/recipes live in inspect view=sys / skills. */
 export const SYS_MODEL_HINT = [
-  'Guest is QuickJS — not browser JS, not Node. Globals: only await fs.readFile/writeFile/readdir/… and sys (no chrome/window/document/setTimeout).',
+  'Guest is QuickJS — not browser JS, not Node. Globals: await fs.readFile/writeFile/readdir/…, await sleep(ms) to pause, and sys (no chrome/window/document/setTimeout).',
   'run ~15s (timeoutMs max 120s). sys.fetch saveTo cap 8MB → TOO_LARGE. Oversized eval/cdp or DOM/functions → TOO_LARGE / NOT_CLONEABLE.',
   'sys.help() or inspect view=sys → full catalog (pawwork-sys-v1).',
   'await sys.capabilities() → live browser availability and limits.',
   'sys.tabs.list|current|frames({tabId?})',
   'sys.tabs.open({url,active?}) sys.tabs.navigate({url,tabId?}) sys.tabs.reload({tabId?}) sys.tabs.close({tabId?}) sys.tabs.focus({tabId?})',
   'sys.eval({world:"MAIN"|"USER", code, tabId?, frameId?}) — async function body on http(s) pages only; return JSON.',
+  'sys.waitFor({code|selector|text, world?, tabId?, frameId?, timeoutMs?, pollMs?, stableMs?}) — poll in the page until code returns truthy / selector matches / text appears, then return its JSON value. No ~20s eval cap (timeoutMs up to 120000). stableMs>0 waits for a streaming value to settle. Use this instead of manual sleep+eval poll loops.',
   'sys.fetch({as:"page"|"extension", url, tabId?, init?, saveTo?}) — default as:"page" on the user tab for any URL they asked to open/save/read that needs their session, or may be cookie/referrer/IP-bound, or may show captcha. This Chrome page+extension fetch share the user public IP; acquire/cloud/provider fetch do not. as:"extension" is no cookies — only for cookie-less extension network or when the page cannot fetch (CORS). Always pass as (omit currently means extension). saveTo:"/scratch/…" or "/artifacts/…" keeps bytes out of context.',
   'sys.cdp({method, params?, tabId?, targetId?}) auto-attach send. sys.cdp({action:"attach"|"detach"|"events"|"targets", tabId?, targetId?, clear?})',
   'Already-fired request URLs: cdp attach + Network.enable, then action:"events". Do not dump media via Network.getResponseBody (cap ~6MB).',
@@ -147,6 +151,7 @@ export function wrapSysFromCall(call) {
     help: () => SYS_HELP,
     capabilities: () => call('capabilities', {}),
     eval: (params) => call('eval', params && typeof params === 'object' ? params : {}),
+    waitFor: (params) => call('waitFor', params && typeof params === 'object' ? params : {}),
     fetch: (params) => call('fetch', params && typeof params === 'object' ? params : {}),
     cdp: (params) => call('cdp', params && typeof params === 'object' ? params : {}),
     download: (params) => call('download', params && typeof params === 'object' ? params : {}),

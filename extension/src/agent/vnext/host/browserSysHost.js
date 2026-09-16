@@ -7,6 +7,7 @@ import { isInjectableTabUrl } from '../sessionWorkspace/pageContext.js';
 import { SYS_EVAL_JSON_MAX, SYS_EVAL_SOURCE_MAX, SYS_FETCH_BYTES_MAX, SYS_HELP } from '../sessionWorkspace/browserSys.js';
 
 const SYS_TIMEOUT_MS = 20000;
+const SYS_WAIT_TIMEOUT_MS = 120000;
 const SYS_CDP_TIMEOUT_MS = 60000;
 const SYS_CDP_RESULT_MAX = 6_000_000;
 const SYS_CDP_EVENT_CAP = 300;
@@ -41,7 +42,10 @@ export async function handleWorkspaceSys(request = {}) {
   if (sysCalls.has(callId)) return { ok: false, code: 'SYS_BUSY', error: 'call already in flight' };
   if (sysCalls.size >= 128) return { ok: false, code: 'SYS_BUSY', error: 'too many browser calls' };
   const controller = new AbortController();
-  const maximum = request.op === 'cdp' ? SYS_CDP_TIMEOUT_MS : SYS_TIMEOUT_MS;
+  const maximum =
+    request.op === 'cdp' ? SYS_CDP_TIMEOUT_MS :
+    request.op === 'waitFor' ? SYS_WAIT_TIMEOUT_MS :
+    SYS_TIMEOUT_MS;
   const remaining = Number.isFinite(request.deadline) ? request.deadline - now : maximum;
   if (remaining <= 0) return { ok: false, code: 'SYS_TIMEOUT', error: 'call deadline expired before dispatch' };
   let timedOut = false;
@@ -86,6 +90,7 @@ async function dispatchWorkspaceSys(request = {}) {
     if (op === 'tabs.current') return { ok: true, result: await sysTabsCurrent(params) };
     if (op === 'tabs.frames') return { ok: true, result: await sysTabsFrames(params) };
     if (op === 'eval') return await sysEval(params);
+    if (op === 'waitFor') return await sysWaitFor(params);
     if (op === 'fetch') return await sysFetch(params);
     if (op === 'cdp') return await sysCdp(params);
     if (op === 'download') return await sysDownload(params);
@@ -503,6 +508,134 @@ async function sysEval(params) {
     return { ok: true, result: { world, tabId: tab.id, frameId: first?.frameId ?? frameId ?? 0, value: payload.value } };
   }
   return { ok: true, result: { world, tabId: tab.id, frameId: first?.frameId ?? frameId ?? 0, value: payload ?? null } };
+}
+
+/**
+ * Poll inside the page until a predicate / selector / text is satisfied, then
+ * return its JSON value. The wait loop runs in the page with its own setTimeout,
+ * so it is not bound by the ~20s single-eval cap — timeoutMs can reach 120s.
+ */
+async function sysWaitFor(params) {
+  const mode = params.code != null && String(params.code).trim() ? 'code'
+    : params.selector != null && String(params.selector).trim() ? 'selector'
+    : params.text != null && String(params.text) !== '' ? 'text'
+    : null;
+  if (!mode) return { ok: false, code: 'BAD_INPUT', error: 'sys.waitFor requires code, selector, or text' };
+  if (mode === 'code' && String(params.code).length > SYS_EVAL_SOURCE_MAX) {
+    return { ok: false, code: 'TOO_LARGE', error: `sys.waitFor code exceeds ${SYS_EVAL_SOURCE_MAX} chars` };
+  }
+  const tab = await resolveTab(params);
+  if (!isSysInjectableUrl(tab.url)) {
+    return { ok: false, code: 'NEED_PAGE', error: `tab is not injectable: ${tab.url || '(no url)'}` };
+  }
+  const world = normalizeWorld(params.world);
+  const denied = await userScriptsDenied();
+  if (denied) return denied;
+  params._signal?.throwIfAborted();
+  const timeoutMs = clampWaitTimeout(params.timeoutMs);
+  const pollMs = clampPollMs(params.pollMs);
+  const stableMs = clampStableMs(params.stableMs);
+  const frameId = params.frameId == null ? undefined : Number(params.frameId);
+  const target = { tabId: tab.id };
+  if (Number.isFinite(frameId)) target.frameIds = [frameId];
+  const source = wrapWaitForSource({ mode, params, timeoutMs, pollMs, stableMs });
+  const results = await withTimeout(
+    chrome.userScripts.execute({
+      target,
+      world,
+      injectImmediately: true,
+      js: [{ code: source }]
+    }),
+    timeoutMs + 5000,
+    'sys.waitFor timed out'
+  );
+  const first = Array.isArray(results) ? results[0] : null;
+  if (first?.error) return { ok: false, code: 'EVAL_FAILED', error: String(first.error) };
+  const payload = first && typeof first === 'object' && 'result' in first ? first.result : first;
+  if (payload && typeof payload === 'object' && payload.ok === false) {
+    return payload;
+  }
+  if (payload && typeof payload === 'object' && payload.ok === true) {
+    return { ok: true, result: {
+      world,
+      tabId: tab.id,
+      frameId: first?.frameId ?? frameId ?? 0,
+      value: payload.value ?? null,
+      waitedMs: payload.waitedMs ?? null,
+      stable: payload.stable === true,
+      timedOut: payload.timedOut === true
+    } };
+  }
+  return { ok: false, code: 'SYS_FAILED', error: 'sys.waitFor produced no result' };
+}
+
+/** Build the page-world async IIFE that polls until the condition is met. */
+export function wrapWaitForSource({ mode, params, timeoutMs, pollMs, stableMs }) {
+  let predicateBody;
+  if (mode === 'selector') {
+    const sel = JSON.stringify(String(params.selector));
+    predicateBody = `var __el = document.querySelector(${sel}); return __el ? { matched: true, text: (__el.innerText || "").slice(0, 4000) } : null;`;
+  } else if (mode === 'text') {
+    const txt = JSON.stringify(String(params.text));
+    predicateBody = `return (((document.body && document.body.innerText) || "").indexOf(${txt}) >= 0) ? { matched: true } : null;`;
+  } else {
+    predicateBody = `return await (async function() {\n${String(params.code)}\n})();`;
+  }
+  return [
+    '(async function() {',
+    '  var __t0 = Date.now();',
+    `  var __deadline = __t0 + ${timeoutMs};`,
+    `  var __poll = ${pollMs};`,
+    `  var __stable = ${stableMs};`,
+    '  function __sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }',
+    '  async function __predicate() {',
+    `    ${predicateBody}`,
+    '  }',
+    '  function __ser(v) {',
+    '    var j;',
+    '    try { j = JSON.stringify(v); } catch (e) { return { __err: "NOT_CLONEABLE", msg: String(e && e.message || e) }; }',
+    `    if (j && j.length > ${SYS_EVAL_JSON_MAX}) return { __err: "TOO_LARGE", bytes: j.length };`,
+    '    return { json: j == null ? "null" : j };',
+    '  }',
+    '  var __lastErr = null, __stableJson = null, __stableSince = 0;',
+    '  while (Date.now() < __deadline) {',
+    '    var __v = null;',
+    '    try { __v = await __predicate(); } catch (e) { __lastErr = String(e && e.message || e); __v = null; }',
+    '    if (__v) {',
+    '      var __s = __ser(__v);',
+    '      if (__s.__err) return { ok: false, code: __s.__err, error: __s.msg || null, bytes: __s.bytes || null };',
+    '      if (__stable > 0) {',
+    '        if (__stableJson === __s.json) {',
+    '          if (Date.now() - __stableSince >= __stable) return { ok: true, value: JSON.parse(__s.json), waitedMs: Date.now() - __t0, stable: true };',
+    '        } else { __stableJson = __s.json; __stableSince = Date.now(); }',
+    '      } else {',
+    '        return { ok: true, value: JSON.parse(__s.json), waitedMs: Date.now() - __t0, stable: false };',
+    '      }',
+    '    }',
+    '    await __sleep(__poll);',
+    '  }',
+    '  if (__stable > 0 && __stableJson != null) return { ok: true, value: JSON.parse(__stableJson), waitedMs: Date.now() - __t0, stable: false, timedOut: true };',
+    '  return { ok: false, code: "WAIT_TIMEOUT", error: __lastErr || "condition not met before timeout", waitedMs: Date.now() - __t0 };',
+    '})()'
+  ].join('\n');
+}
+
+function clampWaitTimeout(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n)) return 30000;
+  return Math.max(1000, Math.min(n, SYS_WAIT_TIMEOUT_MS));
+}
+
+function clampPollMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n)) return 500;
+  return Math.max(50, Math.min(n, 5000));
+}
+
+function clampStableMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(n, 15000));
 }
 
 /** Omit as → extension (credentials:omit). Model should pass as:"page" for user session URLs. */

@@ -103,6 +103,20 @@ const path = require('node:path');
       const pending = handleWorkspaceSys({ callId: 'slow', op: 'fetch', deadline: Date.now() + 100, params: { url: `http://127.0.0.1:${port}/slow` } });
       return { capabilities: capabilities.result, data: atob(result.result.base64), timeout: await pending };
     }, server.address().port);
+    evidence.sleep = await page.evaluate(async () => {
+      const { createSandboxCodeClient } = await import('./agent/vnext/adapters/sandboxClient.js');
+      const iframe = document.createElement('iframe');
+      iframe.src = chrome.runtime.getURL('src/sandbox/runtime.html');
+      document.body.append(iframe);
+      const client = createSandboxCodeClient(iframe);
+      try {
+        return await client.run({ code: 'const t = Date.now(); await sleep(120); return Date.now() - t;', timeoutMs: 5000 });
+      } finally { client.dispose(); iframe.remove(); }
+    });
+    evidence.waitForRouting = await page.evaluate(async () => {
+      const { handleWorkspaceSys } = await import('./agent/vnext/host/browserSysHost.js');
+      return handleWorkspaceSys({ op: 'waitFor', params: { text: 'x' } });
+    });
     const assert = require('node:assert/strict');
     for (const entry of evidence.storage) assert.deepEqual(entry.bytes, [4,5,6]);
     assert.match(evidence.sandbox[0].stdout || '', /guest-ok/);
@@ -115,6 +129,9 @@ const path = require('node:path');
     assert.equal(evidence.network.timeout.code, 'SYS_TIMEOUT');
     assert.equal(evidence.versioning.conflict, 'ARTIFACT_CONFLICT');
     assert.equal(evidence.versioning.content, 'first');
+    assert.equal(evidence.sleep.exitStatus, 0);
+    assert.ok(evidence.sleep.value >= 100, `guest sleep waited ${evidence.sleep.value}ms`);
+    assert.equal(evidence.waitForRouting.code, 'NEED_PAGE');
     console.log('Browser storage and sandbox smoke checks passed.');
   } finally {
     fs.writeFileSync(path.join(output, 'browser-evidence.json'), JSON.stringify(evidence, null, 2));
