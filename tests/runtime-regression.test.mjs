@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { aoaToCsv, parseDelimited } from '../src/preview/sheetCodec.js';
 import { DurableSessionWorkspaceStore } from '../src/agent/vnext/sessionWorkspace/durableStore.js';
 import { createGuestSys } from '../src/agent/vnext/sessionWorkspace/browserSys.js';
+import { runCode } from '../src/agent/vnext/adapters/codeRuntime.js';
 import { SessionWorkspaceStore } from '../src/agent/vnext/sessionWorkspace/store.js';
 import { createSessionGuestFs } from '../src/agent/vnext/sessionWorkspace/fs.js';
 import { createArtifact, updateArtifactContent } from '../src/agent/vnext/sessionWorkspace/artifacts.js';
@@ -101,7 +102,7 @@ test('docs drains edits made during a slow save and returns persistence failure'
 });
 
 globalThis.chrome = { debugger: {} };
-const { handleWorkspaceSys, readResponseBytes } = await import('../src/agent/vnext/host/browserSysHost.js');
+const { handleWorkspaceSys, readResponseBytes, wrapWaitForSource } = await import('../src/agent/vnext/host/browserSysHost.js');
 
 test('screenshot rejects an inactive target without capturing another tab', async () => {
   let captures=0;
@@ -249,6 +250,79 @@ test('plan/clarify chrome never matches another session', () => {
   assert.equal(clarifyBelongsToSession('', 'session-b'), false);
   assert.equal(clarifyBelongsToSession('session-a', ''), false);
   assert.equal(clarifyBelongsToSession('', ''), false);
+});
+
+test('guest sleep suspends the QuickJS sandbox without setTimeout, and abort interrupts it', async () => {
+  const slept = await runCode({ code: 'const t = Date.now(); await sleep(60); return Date.now() - t;', timeoutMs: 5000, runtime: 'local-quickjs' });
+  assert.equal(slept.exitStatus, 0, slept.stderr || slept.error);
+  assert.ok(slept.value >= 40, `expected >=40ms, got ${slept.value}`);
+
+  const controller = new AbortController();
+  const pending = runCode({ code: 'await sleep(10000); return "done";', timeoutMs: 15000, signal: controller.signal, runtime: 'local-quickjs' });
+  setTimeout(() => controller.abort(), 50);
+  const aborted = await pending;
+  assert.equal(aborted.exitStatus, 1);
+  assert.equal(aborted.value, undefined);
+});
+
+test('sys.waitFor is a guest ABI call that forwards params to the host', async () => {
+  const calls = [];
+  const sys = createGuestSys({ hostSys: async (op, params) => { calls.push({ op, params }); return { ok: true, result: { value: { ready: true }, stable: true } }; } });
+  const out = await sys.waitFor({ text: 'DONE', tabId: 7, timeoutMs: 40000, stableMs: 800 });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].op, 'waitFor');
+  assert.equal(calls[0].params.text, 'DONE');
+  assert.equal(calls[0].params.tabId, 7);
+  assert.deepEqual(out.value, { ready: true });
+});
+
+test('wrapWaitForSource polls a page predicate until it settles, then times out', async () => {
+  globalThis.__wf_start = Date.now();
+  const readyCode = wrapWaitForSource({ mode: 'code', params: { code: 'return (Date.now() - globalThis.__wf_start) >= 200 ? { hit: 1 } : null;' }, timeoutMs: 5000, pollMs: 40, stableMs: 0 });
+  // eslint-disable-next-line no-eval
+  const ready = await eval(readyCode);
+  assert.equal(ready.ok, true);
+  assert.deepEqual(ready.value, { hit: 1 });
+  assert.ok(ready.waitedMs >= 150, `waited ${ready.waitedMs}ms`);
+
+  const timeoutCode = wrapWaitForSource({ mode: 'code', params: { code: 'return null;' }, timeoutMs: 300, pollMs: 40, stableMs: 0 });
+  // eslint-disable-next-line no-eval
+  const timedOut = await eval(timeoutCode);
+  assert.equal(timedOut.ok, false);
+  assert.equal(timedOut.code, 'WAIT_TIMEOUT');
+});
+
+test('wrapWaitForSource stableMs waits for a changing value to stop moving', async () => {
+  globalThis.__wf_tick_end = Date.now() + 200;
+  const stableCode = wrapWaitForSource({ mode: 'code', params: { code: 'return { v: Date.now() < globalThis.__wf_tick_end ? Date.now() : "settled" };' }, timeoutMs: 5000, pollMs: 40, stableMs: 160 });
+  // eslint-disable-next-line no-eval
+  const settled = await eval(stableCode);
+  assert.equal(settled.ok, true);
+  assert.equal(settled.stable, true);
+  assert.deepEqual(settled.value, { v: 'settled' });
+});
+
+test('sys.waitFor host op validates input, needs a page, and forwards the page result', async () => {
+  const badInput = await handleWorkspaceSys({ op: 'waitFor', params: {} });
+  assert.equal(badInput.code, 'BAD_INPUT');
+
+  const noPage = await handleWorkspaceSys({ op: 'waitFor', params: { text: 'x' } });
+  assert.equal(noPage.code, 'NEED_PAGE');
+
+  chrome.tabs = { get: async (id) => ({ id, url: 'https://example.com' }) };
+  chrome.userScripts = {
+    getScripts: async () => [],
+    execute: async () => [{ result: { ok: true, value: { answer: 42 }, waitedMs: 123, stable: true }, frameId: 0 }]
+  };
+  const ok = await handleWorkspaceSys({ op: 'waitFor', params: { text: 'answer', tabId: 5 } });
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.result.value, { answer: 42 });
+  assert.equal(ok.result.stable, true);
+
+  chrome.userScripts.execute = async () => [{ result: { ok: false, code: 'WAIT_TIMEOUT', error: 'nope' } }];
+  const timedOut = await handleWorkspaceSys({ op: 'waitFor', params: { selector: '#missing', tabId: 5 } });
+  assert.equal(timedOut.code, 'WAIT_TIMEOUT');
+  delete chrome.userScripts;
 });
 
 test('TSV save and reopen preserves tabs inside cells and neighboring columns', () => {
