@@ -33,7 +33,7 @@ export function collectFieldNames(rows) {
 export function csvEscape(value) {
   if (value == null) return '';
   const s = String(value).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  if (/[",\n]/.test(s)) {
+  if (/[",\t\n]/.test(s)) {
     return `"${s.replace(/"/g, '""')}"`;
   }
   return s;
