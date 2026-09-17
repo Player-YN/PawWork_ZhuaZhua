@@ -40,6 +40,7 @@ export function createAccessPolicyUi(deps) {
     el.dataset.mode = policy.mode === 'full' ? 'full' : 'guarded';
     el.dataset.source = policy.source || 'default';
     el.textContent = accessChipLabel(policy, t);
+    el.dataset.short = policy.mode === 'full' ? 'Full' : 'Guarded';
     el.title = accessChipTitle(policy, t);
     el.setAttribute('aria-label', el.title);
     return policy;

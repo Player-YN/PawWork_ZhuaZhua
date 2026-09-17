@@ -230,7 +230,11 @@ export function createExecutionStatus(seed = {}) {
     activeTools: [],
     clarifyOpen: false,
     approvalOpen: false,
-    aborted: false
+    policyBlocked: null,
+    aborted: false,
+    startedAt: 0,
+    endedAt: 0,
+    artifactCount: 0
   };
 }
 
@@ -241,6 +245,13 @@ function cloneActive(list) {
 function currentFromActive(active) {
   if (!active.length) return null;
   return active[active.length - 1].current || null;
+}
+
+function countsDeliverable(name, args = {}, result = {}) {
+  if (name === 'run') return true;
+  if (name === 'acquire' && (args.action === 'image' || args.op === 'image')) return true;
+  if (result?.artifactId || result?.registered === true) return true;
+  return false;
 }
 
 function callId(ev, fallback = '') {
@@ -371,10 +382,14 @@ export function applyExecutionStatus(state, ev, ctx = {}) {
     next.aborted = false;
     next.clarifyOpen = false;
     next.approvalOpen = false;
+    next.policyBlocked = null;
     next.pendingTools = 0;
     next.activeTools = [];
     next.current = null;
     next.summary = [];
+    next.artifactCount = 0;
+    next.startedAt = Number(ev.startedAt) || Date.now();
+    next.endedAt = 0;
     next.executionId = text(ev.executionId, 80) || next.executionId;
     next.sessionId = text(ev.sessionId, 80) || next.sessionId;
     next.next = resolveNext(next, lang);
@@ -536,6 +551,9 @@ export function applyExecutionStatus(state, ev, ctx = {}) {
       }
     }
     if (name === 'clarify' && ev.ok !== false) next.phase = 'waiting_user';
+    if (ok && countsDeliverable(name, args, result)) {
+      next.artifactCount = Math.max(0, Number(next.artifactCount) || 0) + 1;
+    }
     next.current = currentFromActive(next.activeTools);
     if (code && recoveredCodes.has(code) === false && ev.ok === false) {
       next.summary = pushSummary(next.summary, {
@@ -644,12 +662,24 @@ export function applyExecutionStatus(state, ev, ctx = {}) {
 
   if (type === 'assistant-final' || type === 'execution-end') {
     const status = text(ev.status).toLowerCase();
+    const pendingHuman = next.approvalOpen === true || !!next.policyBlocked || next.clarifyOpen === true;
+    // assistant-final is "the model finished talking", not "the human interrupt is gone".
+    if (type === 'assistant-final' && pendingHuman) {
+      next.pendingTools = 0;
+      next.activeTools = [];
+      if (next.approvalOpen) next.phase = 'awaiting_approval';
+      else if (next.clarifyOpen) next.phase = 'waiting_user';
+      else if (next.policyBlocked && (next.phase === 'idle' || next.phase === 'completed')) next.phase = 'running';
+      next.next = resolveNext(next, lang);
+      return next;
+    }
     next.pendingTools = 0;
     next.activeTools = [];
     next.current = null;
     next.clarifyOpen = false;
     next.approvalOpen = false;
     next.policyBlocked = null;
+    next.endedAt = Number(ev.endedAt) || Date.now();
     if (next.aborted || status === 'aborted' || ev.code === 'user_stop') next.phase = 'stopped';
     else if (status === 'failed' || type === 'error') next.phase = 'failed';
     else if (next.task?.status === 'waiting') next.phase = 'waiting_timer';
@@ -673,4 +703,125 @@ export function visibleSummaryRows(summary, limit = 8) {
 export function phaseLabelKey(phase) {
   const known = new Set(['idle', 'running', 'waiting_user', 'waiting_timer', 'paused', 'completed', 'failed', 'stopped', 'awaiting_approval', 'verifying', 'unknown', 'needs_human']);
   return known.has(String(phase || '')) ? `botPhase_${phase}` : 'botPhase_idle';
+}
+
+export const TURN_MEMORY_CAP = 8;
+export const PULSE_COMPLETE_MS = 800;
+const NARRATIVE_HYDRATE = NARRATIVE;
+
+export function disclosureMode(state) {
+  if (!state || typeof state !== 'object') return 'hidden';
+  if (state.approvalOpen || state.phase === 'awaiting_approval') return 'sticky';
+  if (state.policyBlocked) return 'sticky';
+  if (state.clarifyOpen || state.phase === 'waiting_user') return 'sticky';
+  if (state.lease?.kind === 'conflict') return 'sticky';
+  if (state.phase === 'failed' || state.phase === 'paused' || state.phase === 'needs_human' || state.phase === 'unknown') {
+    return 'sticky';
+  }
+  if (state.phase === 'running' || state.phase === 'waiting_timer' || state.phase === 'verifying') return 'live';
+  if (state.phase === 'stopped' || state.phase === 'completed') return 'folded';
+  return 'hidden';
+}
+
+export function projectGlobalPhase(state) {
+  if (!state) return 'idle';
+  if (disclosureMode(state) === 'sticky') return state.phase;
+  if (state.phase === 'completed' || state.phase === 'stopped') return 'idle';
+  return state.phase;
+}
+
+export function shouldShowGlobalStatusWall(state) {
+  void state;
+  return false;
+}
+
+export function shouldKeepApprovalVisible(state, eventType) {
+  const type = String(eventType || '');
+  if (type === 'approval-done') return false;
+  if (type === 'execution-end') return false;
+  if (state?.approvalOpen || state?.policyBlocked || state?.phase === 'awaiting_approval') return true;
+  return false;
+}
+
+export function formatDisclosureDuration(ms) {
+  const totalSec = Math.max(0, Math.round(Number(ms) / 1000) || 0);
+  if (totalSec < 60) return `${totalSec}S`;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}M ${String(s).padStart(2, '0')}S`;
+}
+
+export function formatFoldLine({ phase, durationMs, artifactCount } = {}, t) {
+  const p = String(phase || '');
+  const word =
+    p === 'stopped' ? t('tdFoldStopped') : p === 'failed' ? t('tdFoldFailed') : t('tdFoldDone');
+  const dur = formatDisclosureDuration(durationMs);
+  const n = Math.max(0, Number(artifactCount) || 0);
+  if (!n) return `${word} · ${dur}`;
+  const piece =
+    n === 1 ? t('tdDeliverableOne') : String(t('tdDeliverableMany') || '').replace('{n}', String(n));
+  return `${word} · ${dur} · ${piece}`;
+}
+
+export function foldStubFromState(state, t, extras = {}) {
+  const started = Number(state?.startedAt || extras.startedAt || 0);
+  const ended = Number(state?.endedAt || extras.endedAt || 0) || Date.now();
+  const durationMs = Math.max(0, ended - (started || ended));
+  const mode = disclosureMode(state);
+  return {
+    executionId: text(state?.executionId || extras.executionId, 80),
+    messageId: text(extras.messageId, 80),
+    turnIndex: Number(extras.turnIndex) || 0,
+    mode: mode === 'sticky' ? 'sticky' : mode === 'live' ? 'live' : 'folded',
+    line: formatFoldLine(
+      { phase: state?.phase, durationMs, artifactCount: state?.artifactCount },
+      t
+    ),
+    durationMs,
+    artifactCount: Math.max(0, Number(state?.artifactCount) || 0),
+    hydrated: false
+  };
+}
+
+export function projectStatusForSessionStash(state) {
+  if (!state || typeof state !== 'object') return createExecutionStatus();
+  if (disclosureMode(state) === 'sticky') return state;
+  if (state.phase === 'completed' || state.phase === 'stopped') {
+    return { ...state, phase: 'idle', current: null };
+  }
+  return state;
+}
+
+export function hydrateStatusFromEvents(events, ctx = {}) {
+  let state = createExecutionStatus(ctx);
+  for (const ev of Array.isArray(events) ? events : []) {
+    const type = text(ev?.type);
+    if (!type || NARRATIVE_HYDRATE.has(type)) continue;
+    state = applyExecutionStatus(state, ev, ctx);
+  }
+  return state;
+}
+
+export function rememberEndedProjection(full, stubs, executionId, slice) {
+  const id = text(executionId, 80);
+  const fullMap = full instanceof Map ? full : new Map();
+  const stubMap = stubs instanceof Map ? stubs : new Map();
+  if (!id) return { full: fullMap, stubs: stubMap };
+  stubMap.set(id, {
+    executionId: id,
+    mode: slice?.mode || 'folded',
+    line: slice?.line || '',
+    durationMs: Number(slice?.durationMs) || 0,
+    artifactCount: Number(slice?.artifactCount) || 0,
+    hydrated: true
+  });
+  if (fullMap.has(id)) fullMap.delete(id);
+  fullMap.set(id, { ...(slice || {}), executionId: id, hydrated: true });
+  while (fullMap.size > TURN_MEMORY_CAP) {
+    const drop = fullMap.keys().next().value;
+    fullMap.delete(drop);
+    const stub = stubMap.get(drop);
+    if (stub) stub.hydrated = false;
+  }
+  return { full: fullMap, stubs: stubMap };
 }

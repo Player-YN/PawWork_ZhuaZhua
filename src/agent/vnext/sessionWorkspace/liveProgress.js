@@ -53,6 +53,9 @@ function withClearAnswers(next) {
 }
 
 function applyHostLamp(next, ev, isZh) {
+  // Host current/next now live on turn disclosure. Keep bookkeeping only.
+  next.visible = false;
+  void isZh;
   const type = String(ev?.type || '');
   if (type === 'tool-call') {
     const name = String(ev.name || ev.tool || '');
@@ -82,22 +85,22 @@ function applyHostLamp(next, ev, isZh) {
             : isZh
               ? `正在查看第 ${n} 张`
               : `Reading image ${n}`;
-        next.visible = true;
+        next.visible = false;
         return next;
       }
       if (view === 'group' || view === 'groups') {
         next.label = isZh ? '正在查看已瞄准的内容' : 'Looking at aimed items';
-        next.visible = true;
+        next.visible = false;
         return next;
       }
       if (view === 'skill' || view === 'skills') {
         next.label = isZh ? '正在查阅做法' : 'Reading a playbook';
-        next.visible = true;
+        next.visible = false;
         return next;
       }
       if (view === 'artifacts' || view === 'files') {
         next.label = isZh ? '正在查看交付物' : 'Looking at deliverables';
-        next.visible = true;
+        next.visible = false;
         return next;
       }
     }
@@ -109,12 +112,12 @@ function applyHostLamp(next, ev, isZh) {
       else if (action === 'map') next.label = isZh ? '正在列出站点页面' : 'Listing site URLs';
       else if (action === 'crawl') next.label = isZh ? '正在抓取站点页面' : 'Crawling a few site pages';
       else next.label = isZh ? '正在获取内容' : 'Acquiring content';
-      next.visible = true;
+      next.visible = false;
       return next;
     }
     if (name === 'run') {
       next.label = isZh ? '正在写入交付物' : 'Writing a deliverable';
-      next.visible = true;
+      next.visible = false;
       return next;
     }
     if (name === 'action') {
@@ -125,22 +128,22 @@ function applyHostLamp(next, ev, isZh) {
       else if (op === 'snapshot') next.label = isZh ? '正在读取当前标签' : 'Reading the current tab';
       else if (op === 'wait') next.label = isZh ? '正在等待页面' : 'Waiting on the page';
       else next.label = isZh ? '正在操作页面' : 'Acting on the page';
-      next.visible = true;
+      next.visible = false;
       return next;
     }
     if (name === 'web') {
       next.label = String(args.act || '') === 'read' ? (isZh ? '正在读取网站' : 'Reading the site') : isZh ? '正在写网站' : 'Writing the site';
-      next.visible = true;
+      next.visible = false;
       return next;
     }
     if (name === 'sheet') {
       next.label = String(args.act || '') === 'read' ? (isZh ? '正在读取表格' : 'Reading the sheet') : isZh ? '正在写表格' : 'Writing the sheet';
-      next.visible = true;
+      next.visible = false;
       return next;
     }
     if (name === 'doc') {
       next.label = String(args.act || '') === 'read' ? (isZh ? '正在读取文档' : 'Reading the document') : isZh ? '正在写文档' : 'Writing the document';
-      next.visible = true;
+      next.visible = false;
       return next;
     }
     if (name === 'task') {
@@ -148,7 +151,7 @@ function applyHostLamp(next, ev, isZh) {
       if (op === 'wait') next.label = isZh ? '正在登记等待' : 'Scheduling a wait';
       else if (op === 'complete') next.label = isZh ? '正在完成任务' : 'Completing the task';
       else next.label = isZh ? '正在更新任务' : 'Updating the task';
-      next.visible = true;
+      next.visible = false;
       return next;
     }
     return next;
@@ -165,7 +168,7 @@ function applyHostLamp(next, ev, isZh) {
           next.label = isZh
             ? `已瞄准 ${total} 项，正在查看`
             : `${total} aimed items, reading…`;
-          next.visible = true;
+          next.visible = false;
         }
       }
     }
@@ -184,27 +187,27 @@ function applyHostLamp(next, ev, isZh) {
         : isZh
           ? '正在读取图片'
           : 'Reading image pixels';
-    next.visible = true;
+    next.visible = false;
     return next;
   }
 
   if (type === 'image_request') {
     if (next.phase === 'commentary' && next.buffer.trim()) return next;
     next.label = isZh ? '正在生成图片' : 'Generating image';
-    next.visible = true;
+    next.visible = false;
     return next;
   }
 
   if (type === 'image') {
     if (next.phase === 'commentary' && next.buffer.trim()) return next;
     next.label = isZh ? '图片已写入交付物' : 'Image saved to deliverables';
-    next.visible = true;
+    next.visible = false;
     return next;
   }
 
   if (type === 'image_error') {
     next.label = isZh ? '生成图片未成功' : 'Image generation failed';
-    next.visible = true;
+    next.visible = false;
     return next;
   }
 
@@ -215,7 +218,7 @@ function useCommentaryLabel(next) {
   const clipped = clipCommentary(next.buffer);
   if (clipped) {
     next.label = clipped;
-    next.visible = true;
+    next.visible = false;
   }
   return next;
 }

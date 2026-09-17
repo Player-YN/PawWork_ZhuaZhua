@@ -96,7 +96,6 @@
         <span id="pageFavicon" hidden></span>
       </div>
       <div class="topbar-right">
-        <button type="button" class="access-policy-chip" id="accessPolicyChip" data-mode="guarded" title="守卫模式">Guarded</button>
         <button type="button" class="icon-btn" id="moreBtn" title="更多" aria-label="更多" aria-expanded="false" aria-haspopup="dialog" aria-controls="moreSheet">⋯</button>
         <!-- Hidden legacy hooks (settings/lang/theme/status still driven by JS via more sheet) -->
         <button type="button" id="gearBtn" hidden aria-hidden="true" aria-haspopup="dialog" aria-controls="agentSettingsModal"></button>
@@ -235,7 +234,9 @@
 
     <!-- Thread workspace: history + current task are ONE flat section (same scroll) -->
     <section class="thread-workspace" id="threadWorkspace" aria-label="任务与对话">
-      <section class="bot-status" id="botStatus" hidden aria-live="polite" data-i18n-aria="botStatusAria"></section>
+      <div id="botStatus" class="bot-status visually-hidden is-announcer" hidden></div>
+      <div id="botStatusLive" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+      <div id="botStatusAssertive" class="visually-hidden" aria-live="assertive" aria-atomic="true"></div>
       <div class="history-bar is-collapsed" id="historyBar" hidden>
         <div class="history-header" id="historyHeaderToggle" role="button" tabindex="0" title="展开 / 收起历史" aria-expanded="false" aria-controls="historyList">
           <div class="history-header-left">
@@ -250,7 +251,7 @@
         <div class="history-list" id="historyList" role="list" hidden></div>
       </div>
 
-      <main class="task-stream" id="taskStream" aria-live="polite">
+      <main class="task-stream" id="taskStream">
         <!-- Home empty: tagline lives only as composer placeholder; chips near centered input -->
         <div class="welcome" id="welcome">
           <div class="home-center" id="homeCenter">
@@ -325,6 +326,7 @@
           </select>
         </div>
         <div class="composer-aiming" id="composerAiming" aria-live="polite">全页可访问</div>
+        <button type="button" class="access-policy-chip" id="accessPolicyChip" data-mode="guarded" data-short="Guarded" title="守卫模式">Guarded</button>
         <div class="session-bind-add" id="sessionBindAdd">
           <button
             type="button"

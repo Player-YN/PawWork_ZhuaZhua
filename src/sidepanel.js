@@ -59,6 +59,7 @@ import {
   composerShouldShowStop,
   durationFromThinkSummary,
   rehydrateThinkBlock,
+  resolveLiveDisclosureHost,
   resolveLiveThinkHost,
   sealThinkKeepBody,
   shouldCreateThinkFromEvent
@@ -76,9 +77,13 @@ import {
 import {
   countAimedItems,
   createExecutionStatus,
-  formatAimingText
+  disclosureMode,
+  formatAimingText,
+  projectStatusForSessionStash,
+  shouldKeepApprovalVisible
 } from './sidepanel/executionStatus.js';
 import { createBotStatusUi } from './sidepanel/botStatusUi.js';
+import { createTurnDisclosureUi } from './sidepanel/turnDisclosureUi.js';
 import { createAccessPolicyUi } from './sidepanel/accessPolicyUi.js';
 import { createApprovalUi } from './sidepanel/approvalUi.js';
 import { approvalBelongsToSession } from './sidepanel/sessionIsolation.js';
@@ -238,6 +243,7 @@ function emptySessionUi(sid) {
     liveTurnAnswerEl: null,
     liveProgressState: null,
     executionStatus: createExecutionStatus(),
+    turnDisclosureByExec: null,
     liveTurnProgressEl: null,
     abort: null,
     executionId: null,
@@ -307,7 +313,12 @@ function stashLiveToSession(sid) {
   Object.assign(u, snapshotLiveGlobals());
   u.abort = currentAgentAbort;
   u.executionId = currentWorkspaceTaskId;
-  if (typeof botStatusUi?.snapshot === 'function') u.executionStatus = botStatusUi.snapshot();
+  if (typeof botStatusUi?.snapshot === 'function') {
+    u.executionStatus = projectStatusForSessionStash(botStatusUi.snapshot());
+  }
+  if (typeof turnDisclosureUi?.exportMemory === 'function') {
+    u.turnDisclosureByExec = turnDisclosureUi.exportMemory();
+  }
   try {
     u.composerHtml = composerEl()?.innerHTML || '';
   } catch {
@@ -333,6 +344,9 @@ function loadLiveFromSession(sid) {
   applyLiveGlobals(u);
   if (typeof botStatusUi?.setState === 'function') {
     botStatusUi.setState(u.executionStatus || createExecutionStatus({ sessionId: sid }));
+  }
+  if (typeof turnDisclosureUi?.importMemory === 'function' && u.turnDisclosureByExec) {
+    turnDisclosureUi.importMemory(u.turnDisclosureByExec);
   }
   pendingAttachments = Array.isArray(u.attachments) ? u.attachments.slice() : [];
   selectedArtifactIds.clear();
@@ -534,8 +548,16 @@ const botStatusUi = createBotStatusUi({
   t,
   getLang: () => currentLang,
   getHost: () => $('botStatus'),
+  getPolite: () => $('botStatusLive'),
+  getAssertive: () => $('botStatusAssertive'),
   getSessionId: () => getWorkspaceSessionId(),
   onStop: () => stopAgentRun('user_stop')
+});
+const turnDisclosureUi = createTurnDisclosureUi({
+  t,
+  getLang: () => currentLang,
+  prefersReducedMotion: () =>
+    typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches === true
 });
 const accessPolicyUi = createAccessPolicyUi({
   t,
@@ -2020,6 +2042,22 @@ function refreshBotChrome() {
       : '整页可访问。瞄准项是优先上下文，不是权限门。';
   }
   botStatusUi.apply({ type: 'aiming', count: currentAimedCount() }, botStatusContext());
+  accessPolicyUi.renderChip?.();
+  paintLiveTurnDisclosure();
+}
+
+function paintLiveTurnDisclosure(extra = {}) {
+  const wrap = liveTurnWrap?.isConnected ? liveTurnWrap : resolveLiveDisclosureHost(liveTask?.body, liveTurnWrap).wrap;
+  if (!wrap) return null;
+  if (wrap.isConnected) liveTurnWrap = wrap;
+  const state = botStatusUi.snapshot();
+  const mode = extra.mode || disclosureMode(state);
+  return turnDisclosureUi.paint(wrap, state, {
+    mode,
+    justSettled: extra.justSettled === true,
+    accessPolicy: typeof accessPolicyUi.current === 'function' ? accessPolicyUi.current() : null,
+    immediate: extra.immediate === true
+  });
 }
 
 /**
@@ -4254,6 +4292,7 @@ async function inferSelectionHintChips(token) {
 }
 
 function snapshotTask(task) {
+  turnDisclosureUi.dehydrate?.(task.body);
   return {
     id: task.id,
     title: task.title,
@@ -4311,6 +4350,7 @@ function rebindHistoryThinkBlocks(root) {
   root.querySelectorAll('.think-block').forEach((block) => {
     rehydrateThinkBlock(block, { ariaLabel: t('thinkToggleAria') });
   });
+  turnDisclosureUi.rebind?.(root);
 }
 
 function openHistoryRecord(id) {
@@ -4584,12 +4624,21 @@ function renderSealedThinkBlock(thoughtText) {
   return block;
 }
 
-function appendAssistantTurn(task, { thought = '', content = '' } = {}) {
+function appendAssistantTurn(task, { thought = '', content = '', disclosureStub = null } = {}) {
   if (!task) return null;
   const wrap = document.createElement('div');
   wrap.className = 'agent-turn';
   const thoughtText = String(thought || '').trim();
   if (thoughtText) wrap.appendChild(renderSealedThinkBlock(thoughtText));
+  if (disclosureStub?.line) {
+    turnDisclosureUi.fold(wrap, {
+      executionId: disclosureStub.executionId,
+      phase: disclosureStub.phase || 'completed',
+      startedAt: 0,
+      endedAt: disclosureStub.durationMs || 0,
+      artifactCount: disclosureStub.artifactCount || 0
+    }, disclosureStub);
+  }
   const bubble = document.createElement('div');
   bubble.className = 'msg assistant msg-final';
   const body = document.createElement('div');
@@ -5977,6 +6026,7 @@ function beginLiveTurnUi() {
   finishLiveTurnUi('', { discardEmpty: true });
   liveTurnSealed = false;
   if (!liveTask?.body) return;
+  turnDisclosureUi.foldPreviousPulse?.(liveTask.body);
   liveTurnWrap = document.createElement('div');
   liveTurnWrap.className = 'agent-turn';
   liveTask.append(liveTurnWrap);
@@ -5985,6 +6035,7 @@ function beginLiveTurnUi() {
   liveTurnAnswerText = '';
   liveProgressState = createLiveProgressState();
   hideLiveTurnProgress();
+  turnDisclosureUi.ensure(liveTurnWrap);
 }
 
 function hideLiveTurnProgress() {
@@ -6014,21 +6065,7 @@ function ensureLiveTurnProgress() {
 }
 
 function renderLiveTurnProgress() {
-  const st = liveProgressState;
-  if (!st?.visible || !st.label) {
-    hideLiveTurnProgress();
-    return;
-  }
-  const el = ensureLiveTurnProgress();
-  if (!el) return;
-  const text = el.querySelector('.live-progress-text');
-  if (text && text.textContent !== st.label) {
-    text.textContent = st.label;
-    el.classList.remove('is-tick');
-    void el.offsetWidth;
-    el.classList.add('is-tick');
-  }
-  scrollTaskStream();
+  hideLiveTurnProgress();
 }
 
 function retractUnsealedLiveAnswer() {
@@ -6103,7 +6140,7 @@ function ensureLiveTurnThink() {
     return liveTurnThink;
   }
   liveTurnThink = makeCollapsibleThinking();
-  const before = liveTurnWrap.querySelector('.live-progress, .msg');
+  const before = liveTurnWrap.querySelector('.turn-disclosure, .approval-live, .clarify-live, .live-progress, .msg');
   if (before) liveTurnWrap.insertBefore(liveTurnThink.el, before);
   else liveTurnWrap.appendChild(liveTurnThink.el);
   return liveTurnThink;
@@ -6550,7 +6587,8 @@ function showClarifyLive(ev) {
     host.appendChild(row);
   }
 
-  body.appendChild(host);
+  if (liveTurnWrap?.isConnected) turnDisclosureUi.placeInterrupt(liveTurnWrap, host);
+  else body.appendChild(host);
   task.el?.classList.add('is-clarifying');
   if (sid === getWorkspaceSessionId()) {
     document.querySelector('footer.composer')?.classList.add('is-clarifying');
@@ -6670,7 +6708,19 @@ function handleSessionWorkspaceEvent(request) {
 
   if (!sid || sid === foreground) {
     botStatusUi.apply(ev, botStatusContext({ task: ev.task }));
-    uiState(foreground).executionStatus = botStatusUi.snapshot();
+    uiState(foreground).executionStatus = projectStatusForSessionStash(botStatusUi.snapshot());
+    const kind = ev?.type;
+    if (
+      kind &&
+      kind !== 'assistant-final' &&
+      kind !== 'execution-end' &&
+      kind !== 'thought' &&
+      kind !== 'thought-open' &&
+      kind !== 'text' &&
+      kind !== 'reasoning'
+    ) {
+      paintLiveTurnDisclosure();
+    }
   }
 
   if (taskStatusUi.handleWorkspaceEvent(ev)) return true;
@@ -6716,23 +6766,37 @@ function handleSessionWorkspaceEvent(request) {
   const applyLive = () => {
     if (ev?.type === 'access-policy-changed') {
       accessPolicyUi.setPolicy(ev);
+      paintLiveTurnDisclosure();
       return;
     }
     if (ev?.type === 'policy-blocked') {
       if (approvalBelongsToSession(sid, getWorkspaceSessionId())) approvalUi.showBlocked(ev);
+      paintLiveTurnDisclosure();
       return;
     }
     if (ev?.type === 'approval-required') {
       if (ev.risk === 'payment' || ev.decisionRequired === false) {
         if (approvalBelongsToSession(sid, getWorkspaceSessionId())) approvalUi.showBlocked(ev);
+        paintLiveTurnDisclosure();
         return;
       }
       if (approvalBelongsToSession(sid, getWorkspaceSessionId())) approvalUi.show(ev);
+      paintLiveTurnDisclosure();
       return;
     }
-    if (ev?.type === 'approval-done' || ev?.type === 'execution-end' || ev?.type === 'assistant-final') {
+    if (ev?.type === 'approval-done') {
       if (approvalBelongsToSession(sid, getWorkspaceSessionId())) approvalUi.hide(sid);
-      if (ev?.type === 'approval-done') return;
+      paintLiveTurnDisclosure();
+      return;
+    }
+    if (ev?.type === 'execution-end') {
+      if (approvalBelongsToSession(sid, getWorkspaceSessionId())) approvalUi.hide(sid);
+    }
+    if (ev?.type === 'assistant-final') {
+      const snap = botStatusUi.snapshot();
+      if (!shouldKeepApprovalVisible(snap, 'assistant-final')) {
+        if (approvalBelongsToSession(sid, getWorkspaceSessionId())) approvalUi.hide(sid);
+      }
     }
     if (ev?.type === 'clarify') {
       showClarifyLive({ ...ev, sessionId: sid });
@@ -6889,6 +6953,11 @@ function settleLiveTurnFromTerminalEvent(ev = {}) {
   hideLiveTurnProgress();
   liveProgressState = createLiveProgressState();
   finishLiveThinkBlocks();
+  const snap = botStatusUi.snapshot();
+  paintLiveTurnDisclosure({
+    justSettled: disclosureMode(snap) === 'folded',
+    immediate: ev.type === 'execution-end' && (snap.phase === 'stopped' || ev.status === 'aborted' || ev.code === 'user_stop')
+  });
   const text = streamEventText(ev.content) || String(liveTurnAnswerText || '').trim();
   const sealed = promoteFinalAnswer(text, { force: true }) || {};
   const sid = getLiveSessionId();

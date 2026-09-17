@@ -305,7 +305,13 @@ select:focus-visible {
   .think-dot,
   .think-block.is-live .think-dot,
   .think-block.is-live .think-summary,
-  .think-block.is-live.is-expanded .think-body-wrap {
+  .think-block.is-live.is-expanded .think-body-wrap,
+  .turn-disclosure.is-pulse {
     animation: none !important;
+  }
+  .turn-disclosure,
+  .turn-disclosure-current,
+  .turn-disclosure-line {
+    transition: none !important;
   }
 }

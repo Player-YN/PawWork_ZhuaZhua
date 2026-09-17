@@ -9,6 +9,7 @@ import {
   isThinkExpanded,
   isThinkToggleKey,
   rehydrateThinkBlock,
+  resolveLiveDisclosureHost,
   resolveLiveThinkHost,
   sealThinkKeepBody,
   shouldCreateThinkFromEvent,
@@ -154,6 +155,16 @@ test('streaming and sealed thought stay expandable with aria-expanded', () => {
   toggle.listeners.click({ preventDefault() {}, stopPropagation() {} });
   assert.equal(expanded, true);
   assert.equal(attrs['aria-expanded'], 'true');
+});
+
+test('disclosure host is a sibling slot and never a fake think block', () => {
+  const think = node('think-block is-live', [node('think-summary', [], '思考中')]);
+  const turn = node('agent-turn', [think, node('msg assistant')]);
+  const body = node('task-body', [node('msg user', [], '画一张图'), turn]);
+  const host = resolveLiveDisclosureHost(body, turn);
+  assert.equal(host.wrap, turn);
+  assert.equal(host.think, think);
+  assert.equal(shouldCreateThinkFromEvent({ type: 'execution-start' }), false);
 });
 
 test('no provider thought does not create a think block', () => {

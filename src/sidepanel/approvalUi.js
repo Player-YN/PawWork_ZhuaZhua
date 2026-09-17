@@ -95,7 +95,12 @@ export function createApprovalUi(deps) {
     if (!task?.el && !task?.body) return document.getElementById('approvalLive');
     const node = document.createElement('div');
     node.className = 'clarify-live approval-live';
-    (task.body || task.el).append(node);
+    const wrap = task.el?.querySelector?.('.agent-turn:last-of-type') || task.body || task.el;
+    const disclosure = wrap?.querySelector?.(':scope > .turn-disclosure');
+    const answer = wrap?.querySelector?.(':scope > .msg.assistant');
+    if (disclosure) wrap.insertBefore(node, disclosure.nextSibling);
+    else if (answer) wrap.insertBefore(node, answer);
+    else (task.body || task.el).append(node);
     return node;
   }
 

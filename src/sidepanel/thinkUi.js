@@ -32,6 +32,16 @@ function closestAgentTurn(el) {
  * @param {ParentNode|null|undefined} body
  * @param {Element|null|undefined} currentWrap
  */
+function walkDisclosure(el) {
+  if (!el) return null;
+  if (classHas(el, 'turn-disclosure')) return el;
+  for (const child of el.children || []) {
+    const hit = walkDisclosure(child);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export function resolveLiveThinkHost(body, currentWrap) {
   if (currentWrap && currentWrap.isConnected !== false) {
     return { wrap: currentWrap, think: walkThink(currentWrap, false) };
@@ -48,6 +58,20 @@ export function resolveLiveThinkHost(body, currentWrap) {
   const after = kids.slice(lastUser + 1).filter((el) => classHas(el, 'agent-turn'));
   const wrap = after[after.length - 1] || null;
   return { wrap, think: walkThink(wrap, false) };
+}
+
+/**
+ * Same wrap rule as think. Do not retarget think host to disclosure.
+ * One instrument per turn; reconnect must not stack a second card.
+ */
+export function resolveLiveDisclosureHost(body, currentWrap) {
+  const host = resolveLiveThinkHost(body, currentWrap);
+  const wrap = host.wrap;
+  const disclosure =
+    wrap && typeof wrap.querySelector === 'function'
+      ? wrap.querySelector('.turn-disclosure') || walkDisclosure(wrap)
+      : walkDisclosure(wrap);
+  return { wrap, disclosure, think: host.think };
 }
 
 /** Keep "36S" / "2M 05S" when a fallback seal overwrites 思考中. */

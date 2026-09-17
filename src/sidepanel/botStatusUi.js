@@ -1,55 +1,15 @@
 /**
- * Compact Bot status strip + foldable action summary.
- * Renders host facts from executionStatus.js. Does not invent next steps.
+ * Hidden announcer + nextStatusCopy. The visible instrument is turnDisclosureUi.
+ * Does not invent next steps. Does not paint a completed wall.
  */
 
 import {
   applyExecutionStatus,
-  compactStatusTask,
   createExecutionStatus,
-  formatAimingText,
-  phaseLabelKey,
-  shouldShowDurableTaskCard,
-  visibleSummaryRows
+  formatFoldLine,
+  projectGlobalPhase,
+  shouldShowGlobalStatusWall
 } from './executionStatus.js';
-
-function node(tag, className, content) {
-  const el = document.createElement(tag);
-  if (className) el.className = className;
-  if (content != null) el.textContent = String(content);
-  return el;
-}
-
-function ellipsize(value, max = 42) {
-  const s = String(value || '').replace(/\s+/g, ' ').trim();
-  if (!s) return '';
-  const chars = [...s];
-  if (chars.length <= max) return s;
-  return `${chars.slice(0, max - 1).join('')}…`;
-}
-
-function safeUrl(url) {
-  const s = String(url || '').trim();
-  if (!s) return '';
-  try {
-    const u = new URL(s);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
-    return u.host + (u.pathname && u.pathname !== '/' ? u.pathname : '');
-  } catch {
-    return '';
-  }
-}
-
-function statusWord(status, t) {
-  if (status === 'running') return t('botRowRunning');
-  if (status === 'success') return t('botRowSuccess');
-  if (status === 'error' || status === 'failed') return t('botRowError');
-  if (status === 'recovered') return t('botRowRecovered');
-  if (status === 'waiting') return t('botRowWaiting');
-  if (status === 'unknown') return t('botRowUnknown');
-  if (status === 'needs_human') return t('botRowNeedsHuman');
-  return status;
-}
 
 export function nextStatusCopy(state, t) {
   if (state?.next?.source === 'task.nextAction' && state.next.text) {
@@ -58,14 +18,14 @@ export function nextStatusCopy(state, t) {
   if (state?.phase === 'waiting_user') {
     return { kind: 'meta', text: t('botNextWaitingUser') };
   }
-  if (state?.phase === 'running') return { kind: 'meta', text: t('botNextWaiting') };
+  if (state?.phase === 'awaiting_approval') {
+    return { kind: 'meta', text: t('tdNextAwaitingApproval') };
+  }
+  if (state?.phase === 'waiting_timer') {
+    return { kind: 'meta', text: t('tdNextWaitingTimer') };
+  }
+  if (state?.phase === 'running' || state?.phase === 'verifying') return { kind: 'meta', text: t('botNextWaiting') };
   return null;
-}
-
-function kindWord(kind, t) {
-  const key = `botKind_${kind}`;
-  const label = t(key);
-  return label === key ? kind : label;
 }
 
 /**
@@ -73,6 +33,8 @@ function kindWord(kind, t) {
  *   t: (key: string) => string,
  *   getLang: () => string,
  *   getHost: () => HTMLElement|null,
+ *   getPolite?: () => HTMLElement|null,
+ *   getAssertive?: () => HTMLElement|null,
  *   getSessionId: () => string,
  *   onStop?: () => void
  * }} deps
@@ -81,6 +43,8 @@ export function createBotStatusUi(deps) {
   /** @type {ReturnType<typeof createExecutionStatus>} */
   let state = createExecutionStatus();
   let host = null;
+  let lastPolite = '';
+  let politeTimer = 0;
 
   function ensureHost() {
     const el = deps.getHost?.() || host;
@@ -88,108 +52,78 @@ export function createBotStatusUi(deps) {
     return host;
   }
 
-  function line(label, value, className = '') {
-    const row = node('div', `bot-status-line ${className}`.trim());
-    row.append(node('span', 'bot-status-k', label));
-    const v = node('span', 'bot-status-v', value);
-    v.title = value;
-    row.append(v);
-    return row;
+  function politeEl() {
+    return deps.getPolite?.() || null;
+  }
+
+  function assertiveEl() {
+    return deps.getAssertive?.() || null;
+  }
+
+  function announcePolite(text) {
+    const msg = String(text || '').trim();
+    if (!msg || msg === lastPolite) return;
+    if (state.approvalOpen || state.policyBlocked) return;
+    lastPolite = msg;
+    if (politeTimer) clearTimeout(politeTimer);
+    politeTimer = setTimeout(() => {
+      politeTimer = 0;
+      const el = politeEl();
+      if (el) el.textContent = msg;
+    }, 600);
+  }
+
+  function announceAssertive(text) {
+    const msg = String(text || '').trim();
+    if (!msg) return;
+    const el = assertiveEl();
+    if (el) el.textContent = msg;
+  }
+
+  function announce(prev, ev) {
+    const type = String(ev?.type || '');
+    if (type === 'approval-required' || type === 'policy-blocked') {
+      announceAssertive(state.current?.text || ev?.summary || '');
+      return;
+    }
+    if (state.lease?.kind === 'conflict' && prev?.lease?.kind !== 'conflict') {
+      announceAssertive(deps.t('botLeaseConflict')
+        .replace('{title}', state.lease.title || 'tab')
+        .replace('{name}', state.lease.holderSessionId || 'session'));
+      return;
+    }
+    if (state.phase === 'failed' && prev?.phase !== 'failed') {
+      announceAssertive(deps.t('tdFoldFailed'));
+      return;
+    }
+    if (prev?.phase === state.phase) return;
+    if (state.phase === 'waiting_user') announcePolite(deps.t('tdAnnounceWaitingUser'));
+    if (state.phase === 'completed' || state.phase === 'stopped') {
+      announcePolite(
+        formatFoldLine(
+          { phase: state.phase, durationMs: Math.max(0, (state.endedAt || 0) - (state.startedAt || 0)), artifactCount: state.artifactCount },
+          deps.t
+        )
+      );
+    }
   }
 
   function render() {
     const el = ensureHost();
     if (!el) return state;
-    const lang = deps.getLang?.() === 'en' ? 'en' : 'zh';
-    const t = deps.t;
-    const running = state.phase === 'running' || state.phase === 'waiting_user';
-    const show = state.phase !== 'idle' || state.lease?.kind === 'conflict' || shouldShowDurableTaskCard(state.task);
-    el.hidden = !show;
-    el.className = 'bot-status';
-    el.dataset.phase = state.phase;
-    el.setAttribute('aria-live', 'polite');
-    el.setAttribute('aria-label', t('botStatusAria'));
+    el.hidden = true;
+    el.className = 'bot-status visually-hidden is-announcer';
+    el.dataset.phase = projectGlobalPhase(state);
     el.replaceChildren();
-    if (!show) return state;
-
-    const head = node('div', 'bot-status-head');
-    const phase = node('span', 'bot-status-phase', t(phaseLabelKey(state.phase)));
-    phase.dataset.phase = state.phase;
-    head.append(phase);
-    if (running && typeof deps.onStop === 'function') {
-      const stop = node('button', 'bot-status-stop', t('botStop'));
-      stop.type = 'button';
-      stop.setAttribute('aria-label', t('botStop'));
-      stop.addEventListener('click', (e) => {
-        e.preventDefault();
-        deps.onStop();
-      });
-      head.append(stop);
-    }
-    el.append(head);
-
-    const currentText = state.current?.text || (running ? t('botCurrentNone') : '');
-    if (currentText) el.append(line(t('botCurrent'), currentText, 'is-current'));
-
-    const nextCopy = nextStatusCopy(state, t);
-    if (nextCopy) {
-      el.append(line(t('botNext'), nextCopy.text, nextCopy.kind === 'meta' ? 'is-next is-meta' : 'is-next'));
-    }
-
-    const page = state.targetPage;
-    if (page && (page.title || page.url)) {
-      const shown = ellipsize(page.title || safeUrl(page.url), 36);
-      const extra = page.title && page.url ? ` · ${ellipsize(safeUrl(page.url), 28)}` : '';
-      el.append(line(t('botPage'), `${shown}${extra}`, 'is-page'));
-    }
-
-    el.append(line(t('botAiming'), formatAimingText(state.aiming?.count || 0, lang), 'is-aim'));
-
-    if (state.lease?.kind === 'conflict') {
-      const title = ellipsize(state.lease.title || (state.lease.tabId ? `#${state.lease.tabId}` : 'tab'), 28);
-      const holder = ellipsize(state.lease.holderSessionId || '', 16);
-      const msg = t('botLeaseConflict').replace('{title}', title).replace('{name}', holder || 'session');
-      el.append(line(t('botLease'), msg, 'is-lease is-conflict'));
-    } else if (state.lease?.kind === 'owned' && running) {
-      el.append(line(t('botLease'), t('botLeaseOwned'), 'is-lease'));
-    }
-
-    const task = compactStatusTask(state.task);
-    if (shouldShowDurableTaskCard(task)) {
-      const bits = [t(`durableTaskStatus_${task.status}`)];
-      if (task.dueAt) bits.push(task.dueAt);
-      if (task.nextAction) bits.push(ellipsize(task.nextAction, 36));
-      el.append(line(t('botTask'), bits.filter(Boolean).join(' · '), 'is-task'));
-    } else if (state.phase !== 'running') {
-      el.append(line(t('botTask'), t('botTaskNone'), 'is-task is-faint'));
-    }
-
-    const rows = visibleSummaryRows(state.summary, 8);
-    if (rows.length) {
-      const details = node('details', 'bot-status-summary');
-      const summary = node('summary', '', `${t('botSummary')} · ${rows.length}`);
-      const list = node('ol', 'bot-status-rows');
-      for (const row of rows) {
-        const li = node('li', 'bot-status-row');
-        li.dataset.status = row.status;
-        const mark = node('span', 'bot-status-row-mark', statusWord(row.status, t));
-        const body = node(
-          'span',
-          'bot-status-row-text',
-          [kindWord(row.kind, t), row.label, row.object].filter(Boolean).join(' · ')
-        );
-        li.append(mark, body);
-        list.append(li);
-      }
-      details.append(summary, list);
-      el.append(details);
-    }
+    void shouldShowGlobalStatusWall(state);
     return state;
   }
 
   function apply(ev, ctx = {}) {
+    const prev = state;
     state = applyExecutionStatus(state, ev, { lang: deps.getLang?.() || 'zh', ...ctx });
     render();
+    announce(prev, ev);
     return state;
   }
 
@@ -209,5 +143,5 @@ export function createBotStatusUi(deps) {
     return state;
   }
 
-  return { apply, reset, render, setState, snapshot, ensureHost };
+  return { apply, reset, render, setState, snapshot, ensureHost, announce };
 }
