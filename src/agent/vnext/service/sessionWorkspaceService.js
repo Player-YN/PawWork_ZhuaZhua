@@ -68,6 +68,9 @@ import {
 } from '../host/accessPolicy.js';
 import { installDispatchTicketStorage, dispatchTicketStorageInstalled, putDispatchTicket, dropTicketsForExecution, dropDispatchTicket, listDispatchTickets } from '../host/dispatchTicket.js';
 import { hashOperationPayload, sha256Hex } from '../host/payloadHash.js';
+import { resolveUploadSource, hashUploadBytes } from '../sessionWorkspace/uploadSource.js';
+import { UPLOAD_BYTES_MAX } from '../host/uploadChannel.js';
+import { clampWaitTimeout } from '../sessionWorkspace/browserSys.js';
 import { applyVerifyToJournalState, verifyPostconditions } from '../host/postcondition.js';
 import { createUserStopError, isAbortLike } from '../host/userStop.js';
 import {
@@ -517,7 +520,7 @@ export class SessionWorkspaceService {
 
   async _resolveActionIntent(payload, sessionId, executionId, signal) {
     const op = String(payload?.op || '');
-    const MUTATIONS = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll']);
+    const MUTATIONS = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll', 'upload']);
     if (!MUTATIONS.has(op)) return { ok: true, skipped: true };
     this._throwIfAborted(signal);
     let rev = payload.rev;
@@ -568,6 +571,10 @@ export class SessionWorkspaceService {
       url: out?.url || req.url,
       snapshotOk: false
     };
+    if (req.op === 'upload') {
+      facts.filesCount = out?.result?.filesCount ?? out?.filesCount;
+      facts.siteAccepted = 'unknown';
+    }
     if (req.op === 'download') {
       const downloadId = out?.result?.downloadId ?? out?.downloadId;
       if (downloadId && typeof chrome !== 'undefined' && chrome.downloads?.search) {
@@ -586,7 +593,76 @@ export class SessionWorkspaceService {
     return facts;
   }
 
+  async _resolveUploadDocument(params = {}, sessionId, signal) {
+    const tabId = params.tabId ?? params.defaultTabId;
+    let documentId = params.documentId || '';
+    let frameUrl = params.url || params.expectedUrl || params.frameUrl || '';
+    if (documentId && frameUrl) return { documentId, frameUrl, tabId };
+    if (!tabId) return { documentId, frameUrl, tabId };
+    try {
+      const framesOut = await callBrowserSys({
+        sessionId,
+        executionId: this._activeBySession.get(sessionId)?.executionId,
+        signal,
+        op: 'tabs.frames',
+        params: { tabId, defaultTabId: tabId }
+      });
+      const list = framesOut?.result || framesOut;
+      const rows = Array.isArray(list) ? list : [];
+      const frame = rows.find((row) => Number(row.frameId) === Number(params.frameId ?? 0)) || rows[0];
+      if (frame) {
+        documentId = documentId || frame.documentId || '';
+        frameUrl = frameUrl || frame.url || '';
+      }
+    } catch {
+      /* documentId stays optional; SW will resolve again */
+    }
+    return { documentId, frameUrl, tabId };
+  }
+
+  async _prepareUploadParams(params, sessionId, signal) {
+    const executionId = this._activeBySession.get(sessionId)?.executionId;
+    const fs = createSessionGuestFs(this.runtime.store, { sessionId, executionId });
+    const source = await resolveUploadSource({
+      store: this.runtime.store,
+      fs,
+      sessionId,
+      path: params.path,
+      itemId: params.itemId,
+      artifactId: params.artifactId,
+      filename: params.filename,
+      mimeType: params.mimeType,
+      signal
+    });
+    if (!source.ok) return source;
+    if (source.bytes.byteLength > UPLOAD_BYTES_MAX) {
+      return { ok: false, code: 'TOO_LARGE', error: `upload exceeds ${UPLOAD_BYTES_MAX} bytes` };
+    }
+    const bytesHash = await hashUploadBytes(source.bytes);
+    const target = await this._resolveUploadDocument(params, sessionId, signal);
+    return {
+      ok: true,
+      params: {
+        ...params,
+        path: source.path,
+        filename: source.filename,
+        mimeType: source.mimeType,
+        bytesHash,
+        bytes: source.bytes,
+        documentId: params.documentId || target.documentId,
+        url: params.url || target.frameUrl,
+        itemId: source.itemId || params.itemId,
+        artifactId: source.artifactId || params.artifactId
+      }
+    };
+  }
+
   async _gatedPageAction(payload, sessionId, signal) {
+    if (payload?.op === 'upload') {
+      const prepared = await this._prepareUploadParams(payload, sessionId, signal);
+      if (!prepared.ok) return prepared;
+      payload = { ...payload, ...prepared.params };
+    }
     const executionId = payload?.executionId || this._activeBySession.get(sessionId)?.executionId;
     let resolved;
     try {
@@ -626,7 +702,13 @@ export class SessionWorkspaceService {
         expectedText: payload?.expectedText || payload?.postText,
         expectedUrl: payload?.expectedUrl || payload?.postUrl,
         expectAbsent: payload?.expectAbsent || payload?.postAbsent,
-        expectVisible: payload?.expectVisible || payload?.postVisible
+        expectVisible: payload?.expectVisible || payload?.postVisible,
+        path: payload?.path,
+        bytesHash: payload?.bytesHash,
+        itemId: payload?.itemId,
+        artifactId: payload?.artifactId,
+        uploadMethod: payload?.method,
+        bytes: payload?.bytes
       },
       {
         journal: this._journal,
@@ -652,8 +734,22 @@ export class SessionWorkspaceService {
     );
   }
 
-  _gatedSys(op, params, context, sessionId, signal) {
+  async _gatedSys(op, params, context, sessionId, signal) {
+    if (op === 'waitFor') {
+      const clock = context?.deadline;
+      if (clock && typeof clock.extendToCover === 'function') {
+        clock.extendToCover(clampWaitTimeout(params?.timeoutMs) + 2000);
+      }
+    }
+    if (op === 'upload') {
+      const prepared = await this._prepareUploadParams(params, sessionId, context?.signal || signal);
+      if (!prepared.ok) return prepared;
+      params = prepared.params;
+    }
     const executionId = this._activeBySession.get(sessionId)?.executionId;
+    const deadlineAt = context?.deadline && typeof context.deadline.expiresAt === 'number'
+      ? context.deadline.expiresAt
+      : context?.deadline;
     return gatedDispatch(
       {
         channel: 'sys',
@@ -664,7 +760,13 @@ export class SessionWorkspaceService {
         tabId: params?.tabId ?? params?.defaultTabId,
         documentId: params?.documentId,
         url: params?.url,
-        method: params?.init?.method || params?.method,
+        frameUrl: params?.frameUrl || params?.url,
+        method: op === 'upload' ? undefined : (params?.init?.method || params?.method),
+        uploadMethod: op === 'upload' ? params?.method : undefined,
+        path: params?.path,
+        bytesHash: params?.bytesHash,
+        itemId: params?.itemId,
+        artifactId: params?.artifactId,
         code: params?.code,
         init: params?.init,
         filename: params?.filename,
@@ -683,7 +785,7 @@ export class SessionWorkspaceService {
             sessionId,
             executionId,
             signal: context?.signal || signal,
-            deadline: context?.deadline,
+            deadline: deadlineAt,
             op,
             params: {
               ...(params && typeof params === 'object' ? params : {}),

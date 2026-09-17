@@ -133,6 +133,7 @@ export function currentFromToolCall(name, args = {}, lang = 'zh') {
     else if (op === 'scroll') label = isZh ? '正在滚动页面' : 'Scrolling the page';
     else if (op === 'wait') label = isZh ? '正在等待页面' : 'Waiting on the page';
     else if (op === 'snapshot') label = isZh ? '正在读取当前标签' : 'Reading the current tab';
+    else if (op === 'upload') label = isZh ? '正在上传文件' : 'Uploading a file';
     else label = isZh ? '正在操作页面' : 'Acting on the page';
   } else if (name === 'run') {
     label = object

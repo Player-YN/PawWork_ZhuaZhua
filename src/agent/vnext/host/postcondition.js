@@ -48,6 +48,14 @@ export async function verifyPostconditions(row = {}, ctx = {}) {
   if (row.risk === 'payment' && row.confidence === 'known') {
     return { status: 'skipped', source: 'payment-never-dispatched', detail: 'known payment must not enter verifier' };
   }
+  const verifyOp = String(row.op || row.intent?.op || '');
+  if (verifyOp === 'upload') {
+    return {
+      status: 'skipped',
+      source: 'upload-site-unknown',
+      detail: 'siteAccepted remains unknown; host cannot mark upload verified'
+    };
+  }
   const posts = Array.isArray(row.postconditions) && row.postconditions.length
     ? row.postconditions
     : defaultPostconditions(row);

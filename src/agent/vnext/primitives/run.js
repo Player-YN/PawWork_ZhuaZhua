@@ -30,6 +30,7 @@ export async function run(ctx, input = {}) {
   const signal = ctx.signal;
   const fs = ctx.fs || null;
   const sys = ctx.sys || null;
+  const deadline = input.deadline || ctx.deadline;
   const exec = typeof ctx.runCode === 'function' ? ctx.runCode : runCode;
 
   return exec({
@@ -39,6 +40,7 @@ export async function run(ctx, input = {}) {
     files,
     signal,
     timeoutMs,
+    deadline,
     fs,
     sys
   });

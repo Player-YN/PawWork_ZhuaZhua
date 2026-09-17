@@ -4,28 +4,42 @@
  */
 
 import { isInjectableTabUrl } from '../sessionWorkspace/pageContext.js';
-import { SYS_EVAL_JSON_MAX, SYS_EVAL_SOURCE_MAX, SYS_FETCH_BYTES_MAX, SYS_HELP } from '../sessionWorkspace/browserSys.js';
+import { SYS_EVAL_JSON_MAX, SYS_EVAL_SOURCE_MAX, SYS_FETCH_BYTES_MAX, SYS_HELP, SYS_UPLOAD_BYTES_MAX, SYS_WAIT_TIMEOUT_MS, clampWaitTimeout } from '../sessionWorkspace/browserSys.js';
 import { acquireTabLease, assertTabLeaseOwnerActive } from './tabLease.js';
 import { readDocumentTarget, targetError } from './documentTarget.js';
 import { consumeDispatchTicket } from './dispatchTicket.js';
 import { classifyRisk, needsDispatchTicket } from './riskClassify.js';
 import { hashOperationPayload } from './payloadHash.js';
+import {
+  applyUploadToTab,
+  assertUploadGuestPath,
+  coerceUploadBytes,
+  hashUploadPayloadBytes,
+  UPLOAD_BYTES_MAX
+} from './uploadChannel.js';
 
 function classifySysRequest(request, extras = {}) {
   const params = request.params && typeof request.params === 'object' ? request.params : {};
+  const isUpload = request.op === 'upload';
   return {
     channel: 'sys',
     op: request.op,
     sysOp: request.op,
-    url: extras.url || params.url,
-    method: extras.method || params.init?.method || params.method,
+    url: extras.url || extras.frameUrl || params.url,
+    frameUrl: extras.frameUrl || extras.url || params.url,
+    method: isUpload ? '' : (extras.method || params.init?.method || params.method),
+    uploadMethod: extras.uploadMethod || (isUpload ? (params.method || extras.method) : undefined),
+    path: extras.path || params.path,
+    bytesHash: extras.bytesHash,
+    itemId: extras.itemId || params.itemId,
+    artifactId: extras.artifactId || params.artifactId,
     code: params.code ?? params.source,
     action: params.action,
     tabId: extras.tabId ?? params.tabId,
     documentId: extras.documentId || params.documentId,
     init: params.init,
     bodyText: typeof params.init?.body === 'string' ? params.init.body : '',
-    filename: params.filename
+    filename: extras.filename || params.filename
   };
 }
 
@@ -34,26 +48,44 @@ async function authorizeSysDispatch(request, extras = {}) {
   const classified = classifyRisk(classifyInput);
   if (!needsDispatchTicket(classified)) return { ok: true, classified, skipped: true };
   const params = request.params && typeof request.params === 'object' ? request.params : {};
-  const payloadHash = await hashOperationPayload({
-    channel: 'sys',
-    op: request.op,
-    sysOp: request.op,
-    url: params.url || '',
-    method: params.init?.method || params.method || '',
-    code: params.code ?? params.source,
-    tabId: extras.tabId ?? params.tabId,
-    documentId: params.documentId || ''
-  });
+  const isUpload = request.op === 'upload';
+  const payloadHash = await hashOperationPayload(isUpload
+    ? {
+        channel: 'sys',
+        op: request.op,
+        sysOp: request.op,
+        url: extras.frameUrl || extras.url || params.url || '',
+        frameUrl: extras.frameUrl || extras.url || '',
+        method: '',
+        path: extras.path || params.path || '',
+        bytesHash: extras.bytesHash || '',
+        itemId: extras.itemId || params.itemId || '',
+        artifactId: extras.artifactId || params.artifactId || '',
+        tabId: extras.tabId ?? params.tabId,
+        documentId: extras.documentId || params.documentId || ''
+      }
+    : {
+        channel: 'sys',
+        op: request.op,
+        sysOp: request.op,
+        url: params.url || '',
+        method: params.init?.method || params.method || '',
+        code: params.code ?? params.source,
+        tabId: extras.tabId ?? params.tabId,
+        documentId: params.documentId || ''
+      });
   return consumeDispatchTicket({
     ...request,
     payloadHash,
     tabId: extras.tabId ?? params.tabId,
-    documentId: params.documentId || ''
+    documentId: isUpload
+      ? (extras.documentId || params.documentId || '')
+      : (params.documentId || '')
   }, { ...classifyInput, params });
 }
 
 const SYS_TIMEOUT_MS = 20000;
-const SYS_WAIT_TIMEOUT_MS = 120000;
+const SYS_UPLOAD_TIMEOUT_MS = 120000;
 const SYS_CDP_TIMEOUT_MS = 60000;
 const SYS_CDP_RESULT_MAX = 6_000_000;
 const SYS_CDP_EVENT_CAP = 300;
@@ -92,6 +124,7 @@ export async function handleWorkspaceSys(request = {}) {
   const maximum =
     request.op === 'cdp' ? SYS_CDP_TIMEOUT_MS :
     request.op === 'waitFor' ? SYS_WAIT_TIMEOUT_MS :
+    request.op === 'upload' ? SYS_UPLOAD_TIMEOUT_MS :
     SYS_TIMEOUT_MS;
   const remaining = Number.isFinite(request.deadline) ? request.deadline - now : maximum;
   if (remaining <= 0) return { ok: false, code: 'SYS_TIMEOUT', error: 'call deadline expired before dispatch' };
@@ -129,7 +162,7 @@ async function dispatchWorkspaceSys(request = {}) {
         debugger: typeof chrome.debugger?.attach === 'function',
         screenshot: typeof chrome.tabs?.captureVisibleTab === 'function',
         download: typeof chrome.downloads?.download === 'function',
-        limits: { fetchBytes: SYS_FETCH_BYTES_MAX, evalChars: SYS_EVAL_JSON_MAX, cdpChars: SYS_CDP_RESULT_MAX },
+        limits: { fetchBytes: SYS_FETCH_BYTES_MAX, evalChars: SYS_EVAL_JSON_MAX, cdpChars: SYS_CDP_RESULT_MAX, uploadBytes: SYS_UPLOAD_BYTES_MAX },
         cancellation: 'Extension fetch is abortable; dispatched page/CDP side effects may have completed. Verify state before retrying.'
       } };
     }
@@ -145,6 +178,7 @@ async function dispatchWorkspaceSys(request = {}) {
     if (op === 'cdp') return await sysCdp(params, request);
     if (op === 'download') return await sysDownload(params, request);
     if (op === 'screenshot') return await sysScreenshot(params, request);
+    if (op === 'upload') return await sysUpload(params, request);
     if (op === 'tabs.open') return await sysTabsOpen(params, request);
     if (op === 'tabs.navigate') return await sysTabsNavigate(params, request);
     if (op === 'tabs.reload') return await sysTabsReload(params, request);
@@ -305,6 +339,100 @@ async function sysScreenshot(params, request = {}) {
       format,
       contentType: parsed.contentType,
       base64: parsed.base64
+    }
+  };
+}
+
+async function sysUpload(params, request = {}) {
+  const method = String(params.method || 'auto').toLowerCase();
+  if (!['auto', 'input', 'drop', 'cdp'].includes(method)) {
+    return { ok: false, code: 'BAD_INPUT', error: 'sys.upload method must be auto|input|drop|cdp' };
+  }
+  const pathGate = assertUploadGuestPath(params.path);
+  if (!pathGate.ok) return pathGate;
+  const bytes = coerceUploadBytes(params.bytes);
+  if (!bytes) return { ok: false, code: 'BAD_INPUT', error: 'upload bytes missing (host must read guest FS)' };
+  if (bytes.byteLength > UPLOAD_BYTES_MAX) {
+    return { ok: false, code: 'TOO_LARGE', error: `upload exceeds ${UPLOAD_BYTES_MAX} bytes` };
+  }
+  const tab = await resolveTab(params);
+  if (!isSysInjectableUrl(tab.url)) {
+    return { ok: false, code: 'NEED_PAGE', error: `tab is not injectable: ${tab.url || '(no url)'}` };
+  }
+  const leased = await acquireSysTab(request, tab.id, 'upload');
+  if (leased) return leased;
+  const frameId = params.frameId == null ? 0 : Number(params.frameId);
+  const document = await readDocumentTarget(chrome, tab.id, frameId, {
+    documentId: params.documentId,
+    url: params.expectedUrl
+  });
+  const frameUrl = document.url || tab.url || '';
+  const bytesHash = await hashUploadPayloadBytes(bytes);
+  const filename = String(params.filename || pathGate.path.split('/').pop() || 'upload.bin');
+  const mimeType = String(params.mimeType || '').trim() || 'application/octet-stream';
+  params._signal?.throwIfAborted();
+  const gate = await authorizeSysDispatch(request, {
+    tabId: tab.id,
+    documentId: document.documentId,
+    url: frameUrl,
+    frameUrl,
+    path: pathGate.path,
+    bytesHash,
+    uploadMethod: method,
+    filename,
+    itemId: params.itemId,
+    artifactId: params.artifactId
+  });
+  if (!gate.ok) return gate;
+  const spec = {
+    tabId: tab.id,
+    documentId: document.documentId,
+    frameId,
+    bytes,
+    filename,
+    mimeType,
+    method,
+    selector: params.selector,
+    accept: params.accept,
+    name: params.name
+  };
+  let applied;
+  if (method === 'cdp') {
+    const debuggee = { tabId: tab.id };
+    const key = debuggeeKey(debuggee);
+    cdpOwners.set(key, {
+      sessionId: String(request.sessionId || ''),
+      executionId: String(request.executionId || ''),
+      debuggee
+    });
+    applied = await applyUploadToTab(chrome, spec, {
+      ensureAttached: async () => ensureCdpAttached(debuggee),
+      send: (cdpMethod, cdpParams) => chrome.debugger.sendCommand(debuggee, cdpMethod, cdpParams || {})
+    });
+  } else {
+    applied = await applyUploadToTab(chrome, spec);
+  }
+  if (!applied || applied.ok === false) return applied;
+  return {
+    ok: true,
+    result: {
+      ok: true,
+      op: 'upload',
+      methodUsed: applied.methodUsed,
+      tabId: tab.id,
+      documentId: document.documentId,
+      frameId,
+      path: pathGate.path,
+      filename,
+      mimeType,
+      bytes: bytes.byteLength,
+      filesCount: applied.filesCount ?? 0,
+      changeDispatched: applied.changeDispatched === true,
+      trusted: applied.trusted === true,
+      target: applied.target || {},
+      siteAccepted: 'unknown',
+      warning: applied.warning,
+      methodTried: applied.methodTried
     }
   };
 }
@@ -746,12 +874,6 @@ export function wrapWaitForSource({ mode, params, timeoutMs, pollMs, stableMs })
     '  return { ok: false, code: "WAIT_TIMEOUT", error: __lastErr || "condition not met before timeout", waitedMs: Date.now() - __t0 };',
     '})()'
   ].join('\n');
-}
-
-function clampWaitTimeout(ms) {
-  const n = Number(ms);
-  if (!Number.isFinite(n)) return 30000;
-  return Math.max(1000, Math.min(n, SYS_WAIT_TIMEOUT_MS));
 }
 
 function clampPollMs(ms) {

@@ -55,7 +55,12 @@ function classifyInputFromRequest(req) {
     expectedRevision: req.expectedRevision,
     filename: req.filename,
     init: req.init,
-    params: req.params
+    params: req.params,
+    path: req.path,
+    bytesHash: req.bytesHash,
+    itemId: req.itemId,
+    artifactId: req.artifactId,
+    uploadMethod: req.uploadMethod || (req.op === 'upload' ? req.method : undefined)
   };
 }
 

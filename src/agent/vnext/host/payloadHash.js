@@ -49,6 +49,9 @@ export function canonicalPayload(input = {}) {
     codeChars: code ? code.length : 0,
     codeHash: input.codeHash || '',
     artifactId: input.artifactId || '',
+    itemId: input.itemId || '',
+    path: input.path || '',
+    bytesHash: input.bytesHash || '',
     expectedRevision: input.expectedRevision ?? null,
     tabId: input.tabId ?? null,
     documentId: input.documentId || '',
@@ -56,14 +59,22 @@ export function canonicalPayload(input = {}) {
   });
 }
 
-export async function sha256Hex(text) {
-  const bytes = new TextEncoder().encode(String(text || ''));
+export async function sha256Bytes(bytes) {
+  const u8 = bytes instanceof Uint8Array
+    ? bytes
+    : bytes instanceof ArrayBuffer
+      ? new Uint8Array(bytes)
+      : new TextEncoder().encode(String(bytes || ''));
   if (globalThis.crypto?.subtle?.digest) {
-    const buf = await crypto.subtle.digest('SHA-256', bytes);
+    const buf = await crypto.subtle.digest('SHA-256', u8);
     return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
   }
   const { createHash } = await import('node:crypto');
-  return createHash('sha256').update(Buffer.from(bytes)).digest('hex');
+  return createHash('sha256').update(Buffer.from(u8)).digest('hex');
+}
+
+export async function sha256Hex(text) {
+  return sha256Bytes(new TextEncoder().encode(String(text || '')));
 }
 
 export async function hashOperationPayload(input = {}) {

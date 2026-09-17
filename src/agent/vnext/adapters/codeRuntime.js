@@ -28,6 +28,7 @@
  */
 
 import { SYS_HELP } from '../sessionWorkspace/browserSys.js';
+import { createRunDeadline } from '../sessionWorkspace/runDeadline.js';
 
 /** @type {'quickjs' | 'function-sandbox'} */
 let _activeKind = 'quickjs';
@@ -203,6 +204,9 @@ async function runQuickJS(opts) {
   const codeIn = String(opts.code || '');
   const entry = opts.entry != null ? String(opts.entry) : null;
   const timeoutMs = clampTimeout(opts.timeoutMs);
+  const deadlineClock = opts.deadline && typeof opts.deadline.expiresAt === 'number'
+    ? opts.deadline
+    : createRunDeadline(timeoutMs);
   const signal = opts.signal;
   const start = Date.now();
 
@@ -242,11 +246,7 @@ async function runQuickJS(opts) {
   runtime.setMemoryLimit(clampMemoryLimit(opts.memoryLimitBytes));
   runtime.setMaxStackSize(1024 * 512);
 
-  const deadline = Date.now() + timeoutMs;
-  const deadlineInterrupt = shouldInterruptAfterDeadline
-    ? shouldInterruptAfterDeadline(deadline)
-    : () => Date.now() > deadline;
-  runtime.setInterruptHandler(() => Boolean(signal?.aborted) || deadlineInterrupt());
+  runtime.setInterruptHandler(() => Boolean(signal?.aborted) || Date.now() > deadlineClock.expiresAt);
 
   const vm = runtime.newContext();
   const hostDeferreds = createHostDeferredBag();
@@ -255,7 +255,7 @@ async function runQuickJS(opts) {
     injectConsole(vm, stdout, stderr);
     injectFs(vm, sandboxFs, hostDeferreds);
     injectSys(vm, opts.sys, hostDeferreds);
-    injectSleep(vm, signal, hostDeferreds, deadline);
+    injectSleep(vm, signal, hostDeferreds, deadlineClock);
     // Harden: privileged host APIs are absent. Access throws so adversarial
     // probes fail closed (exitStatus !== 0) rather than silently returning host data.
     // (QuickJS has its own globalThis — host chrome/window/document never leak.)
@@ -303,7 +303,7 @@ async function runQuickJS(opts) {
 
     const promiseHandle = evalResult.value;
     // User code returns a Promise (async IIFE). Resolve it on the host.
-    const settled = await raceVmPromise(vm, promiseHandle, timeoutMs, signal);
+    const settled = await raceVmPromise(vm, promiseHandle, timeoutMs, signal, deadlineClock);
     promiseHandle.dispose();
 
     if (settled.aborted) {
@@ -654,6 +654,7 @@ function injectSys(vm, sys, handles) {
           cdp: function (opts) { return __pw_sys_call('cdp', opts || {}); },
           download: function (opts) { return __pw_sys_call('download', opts || {}); },
           screenshot: function (opts) { return __pw_sys_call('screenshot', opts || {}); },
+          upload: function (opts) { return __pw_sys_call('upload', opts || {}); },
           tabs: {
             list: function (opts) { return __pw_sys_call('tabs.list', opts || {}); },
             current: function (opts) { return __pw_sys_call('tabs.current', opts || {}); },
@@ -685,7 +686,10 @@ function injectSleep(vm, signal, handles, deadline) {
     const deferred = handles.track(vm.newPromise());
     let ms = Number.isFinite(raw) ? raw : 0;
     ms = Math.max(0, Math.min(ms, 120_000));
-    if (Number.isFinite(deadline)) ms = Math.min(ms, Math.max(0, deadline - Date.now()));
+    const expireAt = deadline && typeof deadline === 'object' && typeof deadline.expiresAt === 'number'
+      ? deadline.expiresAt
+      : Number(deadline);
+    if (Number.isFinite(expireAt)) ms = Math.min(ms, Math.max(0, expireAt - Date.now()));
 
     /** @type {ReturnType<typeof setTimeout>|null} */
     let timer = null;
@@ -793,7 +797,7 @@ function hostValueToHandle(vm, value) {
  * @param {number} timeoutMs
  * @param {AbortSignal} [signal]
  */
-async function raceVmPromise(vm, promiseHandle, timeoutMs, signal) {
+async function raceVmPromise(vm, promiseHandle, timeoutMs, signal, deadlineClock) {
   // Drain any immediate microtasks
   try {
     vm.runtime.executePendingJobs();
@@ -824,10 +828,29 @@ async function raceVmPromise(vm, promiseHandle, timeoutMs, signal) {
   // Async path via resolvePromise
   let timer = null;
   let onAbort = null;
+  let unsubDeadline = null;
   const timeoutPromise = new Promise((resolve) => {
-    timer = setTimeout(() => {
-      resolve({ aborted: true, error: `run timeout after ${timeoutMs}ms` });
-    }, timeoutMs);
+    const arm = () => {
+      if (timer) clearTimeout(timer);
+      const remain = deadlineClock && typeof deadlineClock.remaining === 'function'
+        ? deadlineClock.remaining()
+        : timeoutMs;
+      if (remain <= 0) {
+        resolve({ aborted: true, error: `run timeout after ${timeoutMs}ms` });
+        return;
+      }
+      timer = setTimeout(() => {
+        if (deadlineClock && typeof deadlineClock.remaining === 'function' && deadlineClock.remaining() > 0) {
+          arm();
+          return;
+        }
+        resolve({ aborted: true, error: `run timeout after ${timeoutMs}ms` });
+      }, remain);
+    };
+    arm();
+    if (deadlineClock && typeof deadlineClock.subscribe === 'function') {
+      unsubDeadline = deadlineClock.subscribe(arm);
+    }
   });
 
   const abortPromise = signal
@@ -878,6 +901,7 @@ async function raceVmPromise(vm, promiseHandle, timeoutMs, signal) {
   } finally {
     if (pump) clearInterval(pump);
     if (timer) clearTimeout(timer);
+    if (typeof unsubDeadline === 'function') unsubDeadline();
     if (signal && onAbort) signal.removeEventListener('abort', onAbort);
   }
 }

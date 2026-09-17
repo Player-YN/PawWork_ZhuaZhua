@@ -85,7 +85,7 @@ const PAYMENT_HOST_RE =
 
 const ACTION_READ = new Set(['snapshot', 'wait', 'resolve_name', 'resolve_intent']);
 const ACTION_FILL = new Set(['fill', 'fill_form', 'select', 'scroll']);
-const ACTION_MUTATE = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll']);
+const ACTION_MUTATE = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll', 'upload']);
 
 const SYS_READ = new Set([
   'help',
@@ -339,6 +339,29 @@ function classifyAction(input = {}) {
     });
   }
 
+  if (op === 'upload') {
+    const uploadMethod = String(input.uploadMethod || input.method || input.params?.method || 'auto').toLowerCase();
+    if (uploadMethod === 'cdp') {
+      return verdict({
+        risk: RISK_RAW,
+        confidence: CONF_KNOWN,
+        effectConfidence: CONF_UNKNOWN,
+        reason: 'action:upload:cdp',
+        summary: '上传走显式 CDP（调试条）',
+        signals: ['upload-cdp'],
+        target: base
+      });
+    }
+    return verdict({
+      risk: RISK_COMMIT,
+      confidence: CONF_KNOWN,
+      reason: 'action:upload',
+      summary: `上传文件到页面「${name || 'file input'}」`,
+      signals: ['action-upload'],
+      target: base
+    });
+  }
+
   if (ACTION_FILL.has(op)) {
     return verdict({
       risk: RISK_REVERSIBLE,
@@ -571,6 +594,38 @@ function classifySys(input = {}) {
       signals: ['sys-close']
     });
   }
+  if (op === 'upload') {
+    if (paymentHost(url)) {
+      return verdict({
+        risk: RISK_PAYMENT,
+        confidence: CONF_KNOWN,
+        reason: 'url:payment-host',
+        summary: `已知支付页上的 upload`,
+        signals: ['payment-host', 'sys-upload'],
+        url
+      });
+    }
+    const uploadMethod = String(input.uploadMethod || input.method || input.params?.method || 'auto').toLowerCase();
+    if (uploadMethod === 'cdp') {
+      return verdict({
+        risk: RISK_RAW,
+        confidence: CONF_KNOWN,
+        effectConfidence: CONF_UNKNOWN,
+        reason: 'sys:upload:cdp',
+        summary: 'sys.upload 显式 CDP（调试条）',
+        signals: ['upload-cdp'],
+        url
+      });
+    }
+    return verdict({
+      risk: RISK_COMMIT,
+      confidence: CONF_KNOWN,
+      reason: 'sys:upload',
+      summary: `上传 ${input.path || input.filename || 'file'}`.trim(),
+      signals: ['sys-upload'],
+      url
+    });
+  }
   if (op === 'download') {
     return verdict({
       risk: RISK_COMMIT,
@@ -746,6 +801,11 @@ export function ticketBindingFields(input = {}) {
   if (op === 'eval' || op === 'waitFor' || pageFetch) {
     fields.tabId = true;
     fields.documentId = !!String(input.params?.documentId || '');
+    return fields;
+  }
+  if (op === 'upload') {
+    fields.tabId = true;
+    fields.documentId = !!String(input.documentId || input.params?.documentId || '');
     return fields;
   }
   if (['tabs.close', 'tabs.focus', 'tabs.navigate', 'tabs.reload', 'cdp', 'screenshot'].includes(op)) {

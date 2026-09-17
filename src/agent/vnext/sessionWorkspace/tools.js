@@ -26,6 +26,7 @@ import { acquire as acquirePrimitive } from '../primitives/acquire.js';
 import { generateSessionImage } from './imageGen.js';
 import { guessMimeFromName } from './artifactValidate.js';
 import { coerceToUint8Array } from './fs.js';
+import { createRunDeadline, clampRunTimeout } from './runDeadline.js';
 import { readHtmlPreviewKind } from './htmlPreviewMarker.js';
 import {
   getSkill,
@@ -826,7 +827,11 @@ export function createSessionTools(env) {
         entry: { type: 'string' },
         entryFile: { type: 'string' },
         files: { type: 'object', additionalProperties: { type: 'string' } },
-        timeoutMs: { type: 'number' },
+        timeoutMs: {
+          type: 'number',
+          description:
+            'If this program calls sys.waitFor, timeoutMs must be >= that wait (waitFor default 30000, max 120000). Host will also extend the run deadline to cover an in-flight waitFor. Default 15000.'
+        },
         op: {
           type: 'string',
           enum: RUN_OPS,
@@ -887,30 +892,39 @@ export function createSessionTools(env) {
         const codeFs = createCodeFsBridge(fs);
         const sysController = new AbortController();
         const cancelSys = () => sysController.abort();
-        const sysTimeout = Math.max(1, Math.min(Number(input.timeoutMs) || 15000, 120000));
-        const sysTimer = setTimeout(cancelSys, sysTimeout);
+        const sysTimeout = clampRunTimeout(input.timeoutMs);
+        const runDeadline = createRunDeadline(sysTimeout);
+        let sysTimer = setTimeout(cancelSys, Math.max(1, runDeadline.remaining()));
+        const unsubDeadline = runDeadline.subscribe(() => {
+          clearTimeout(sysTimer);
+          const remain = runDeadline.remaining();
+          if (remain <= 0) cancelSys();
+          else sysTimer = setTimeout(cancelSys, remain);
+        });
         signal?.addEventListener('abort', cancelSys, { once: true });
         if (signal?.aborted) cancelSys();
         const sys = createGuestSys({
           fs: codeFs,
           signal: sysController.signal,
-          deadline: Date.now() + sysTimeout,
+          deadline: runDeadline,
           hostSys: typeof env.hostSys === 'function' ? env.hostSys : null,
           defaultTabId: env.activeTab?.tabId ?? env.activeTab?.id ?? null
         });
         let result;
         try {
           result = await runCodePrimitive(
-            { fs: codeFs, sys, signal, timeoutMs: input.timeoutMs },
+            { fs: codeFs, sys, signal, timeoutMs: input.timeoutMs, deadline: runDeadline },
             {
               code: String(input.code),
               entry: input.entry,
               entryFile: input.entryFile,
               files: input.files,
-              timeoutMs: input.timeoutMs
+              timeoutMs: input.timeoutMs,
+              deadline: runDeadline
             }
           );
         } finally {
+          unsubDeadline();
           clearTimeout(sysTimer);
           signal?.removeEventListener('abort', cancelSys);
           cancelSys();
@@ -1519,8 +1533,8 @@ export function createSessionTools(env) {
       properties: {
         op: {
           type: 'string',
-          enum: ['snapshot', 'fill_form', 'click', 'fill', 'select', 'press', 'scroll', 'wait'],
-          description: 'Live-tab op. Schema enum is the list; snapshot before mutate.'
+          enum: ['snapshot', 'fill_form', 'click', 'fill', 'select', 'press', 'scroll', 'wait', 'upload'],
+          description: 'Live-tab op. Schema enum is the list; snapshot before mutate. File chooser: op=upload with path, not fill.'
         },
         ref: {
           type: 'string',
@@ -1558,7 +1572,26 @@ export function createSessionTools(env) {
         ms: {
           type: 'number',
           description: 'wait timeout cap (default 5000, host-cap 5000). Bare wait without text/ref sleeps this many ms (default 300)'
-        }
+        },
+        path: {
+          type: 'string',
+          description: 'upload: guest FS path under /scratch (usual), /artifacts, or /context. Exactly one of path, itemId, artifactId.'
+        },
+        itemId: {
+          type: 'string',
+          description: 'upload: bound WebItem / 图片N. Host copies bytes to /scratch; does not mutate the item.'
+        },
+        artifactId: {
+          type: 'string',
+          description: 'upload: this-session artifact; host resolves primaryPath.'
+        },
+        method: {
+          type: 'string',
+          enum: ['auto', 'input', 'drop', 'cdp'],
+          description: 'upload channel. auto = input.files then script drop. Never CDP unless method=cdp.'
+        },
+        filename: { type: 'string', description: 'upload: override File.name' },
+        mimeType: { type: 'string', description: 'upload: override File.type' }
       },
       required: ['op']
     },
@@ -1583,6 +1616,12 @@ export function createSessionTools(env) {
           key: input.key,
           text: input.text,
           ms: input.ms,
+          path: input.path,
+          itemId: input.itemId,
+          artifactId: input.artifactId,
+          method: input.method,
+          filename: input.filename,
+          mimeType: input.mimeType,
           tabId: env.activeTab?.tabId ?? env.activeTab?.id,
           url: env.activeTab?.url,
           executionId: execution?.executionId

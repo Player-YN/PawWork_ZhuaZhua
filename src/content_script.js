@@ -4018,16 +4018,22 @@ ${fragment}
   }
 
   function clickActionTarget(el) {
+    const tag = (el.tagName || '').toLowerCase();
+    const type = actionControlType(el);
+    if (tag === 'input' && type === 'file') {
+      return { ok: false, code: 'FILE_CHOOSER', error: 'native file chooser; use action op=upload with path' };
+    }
     scrollActionTarget(el);
     try { el.focus({ preventScroll: true }); } catch (_) {}
     try { el.click(); } catch (_) {}
+    return { ok: true };
   }
 
   function fillActionTarget(el, value) {
     const tag = (el.tagName || '').toLowerCase();
     const type = actionControlType(el);
     if (tag === 'input' && type === 'file') {
-      return { ok: false, error: 'file inputs cannot be set by script', code: 'FILE_INPUT' };
+      return { ok: false, error: 'file inputs cannot be filled; use action op=upload with path', code: 'FILE_INPUT' };
     }
     if (tag === 'input' && (type === 'checkbox' || type === 'radio')) {
       const token = parseCheckedToken(value);
@@ -4257,8 +4263,22 @@ ${fragment}
     const afterExtra = { source: resolved.source, ref: resolved.ref };
 
     if (op === 'click') {
-      clickActionTarget(el);
+      const clicked = clickActionTarget(el);
+      if (clicked && clicked.ok === false) return clicked;
       return { ok: true, op, after: actionAfter(el, afterExtra) };
+    }
+
+    if (op === 'mark_upload') {
+      const token = String(request.token || '').replace(/[^\w.-]/g, '');
+      if (!token) return { ok: false, code: 'BAD_INPUT', error: 'mark_upload token required' };
+      el.setAttribute('data-paw-upload', token);
+      return {
+        ok: true,
+        op,
+        tag: (el.tagName || '').toLowerCase(),
+        type: actionControlType(el),
+        hidden: typeof isElementVisible === 'function' ? !isElementVisible(el) : false
+      };
     }
 
     if (op === 'scroll') {

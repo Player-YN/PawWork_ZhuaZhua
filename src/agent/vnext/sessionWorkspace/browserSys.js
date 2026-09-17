@@ -5,9 +5,20 @@
  * This is the programmable surface, not a product feature list.
  */
 
+import { extendDeadlineForWaitFor } from './runDeadline.js';
+
 export const SYS_EVAL_JSON_MAX = 1_000_000;
 export const SYS_FETCH_BYTES_MAX = 8 * 1024 * 1024;
 export const SYS_EVAL_SOURCE_MAX = 100_000;
+export const SYS_UPLOAD_BYTES_MAX = 8 * 1024 * 1024;
+export const SYS_WAIT_TIMEOUT_MS = 120_000;
+export const SYS_WAIT_DEFAULT_MS = 30_000;
+
+export function clampWaitTimeout(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n)) return SYS_WAIT_DEFAULT_MS;
+  return Math.max(1000, Math.min(n, SYS_WAIT_TIMEOUT_MS));
+}
 
 export const SYS_OPS = Object.freeze([
   'help',
@@ -25,7 +36,8 @@ export const SYS_OPS = Object.freeze([
   'fetch',
   'cdp',
   'download',
-  'screenshot'
+  'screenshot',
+  'upload'
 ]);
 
 export const SYS_HELP = Object.freeze({
@@ -53,7 +65,9 @@ export const SYS_HELP = Object.freeze({
       'CDP pipe. Send: { method, params?, tabId?, targetId? } (auto-attach). Session: { action: "attach"|"detach"|"events"|"targets", tabId?, targetId?, clear? }. Already-fired request URLs: attach + Network.enable, then action:"events". Do not dump media via Network.getResponseBody (cap ~6MB TOO_LARGE); hand URLs to sys.fetch as:"page".',
     'sys.download':
       '{ url, filename? } or { base64, filename, mimeType? }. Host calls chrome.downloads.download: this profile cookie jar + this-machine IP, no tab Referer. Not extension fetch (that is credentials:omit). Prefer sys.fetch as:"page" when login/Referer/captcha matter; download is the large-file shelf when the URL still works without document Referer.',
-    'sys.screenshot': '{ tabId?, format?: "png"|"jpeg", saveTo? } — target must be visible; otherwise TAB_NOT_VISIBLE. saveTo writes to guest FS.'
+    'sys.screenshot': '{ tabId?, format?: "png"|"jpeg", saveTo? } — target must be visible; otherwise TAB_NOT_VISIBLE. saveTo writes to guest FS.',
+    'sys.upload':
+      '{ tabId?, path | itemId | artifactId, ref?, selector?, method?: "auto"|"input"|"drop"|"cdp", filename?, mimeType? }. Attach a guest-FS file to the page file input or dropzone. path may be /scratch (usual), /artifacts, or /context. Default auto uses MAIN-world input.files + change, then script drop. Never eval, never action.fill, never CDP unless method:"cdp". Receipt siteAccepted is always unknown — the host cannot prove the site imported the file. Cap 8MB.'
   },
   walls: [
     'chrome://, extension pages (including preview editors), and other-extension pages are not injectable',
@@ -82,13 +96,14 @@ export const SYS_MODEL_HINT = [
   'sys.download({url, filename?}) uses chrome.downloads on this profile (host cookies, no tab Referer) or sys.download({base64, filename, mimeType?}). Prefer page fetch when login/Referer/captcha matter.',
   'Browser targets use explicit tabId/defaultTabId, never focused-tab fallback. eval/waitFor/page fetch pin the current documentId; pass documentId/expectedUrl from a prior observation when acting on that observation. TARGET_CHANGED means observe again. Lost receipts (SYS_OUTCOME_UNKNOWN/RPC_OUTCOME_UNKNOWN/ACTION_OUTCOME_UNKNOWN) are not proof of failure: inspect state before any retry. Execution end revokes future dispatch and releases tab/CDP ownership; it does not roll back already dispatched effects.',
   'sys.screenshot({tabId?, format?, saveTo?}) — visible target only.',
+  'file chooser: sys.upload / action op=upload, not eval, not action.fill, not cdp by default.',
   'Errors carry e.code. SYS_ABORTED/SYS_TIMEOUT can mean an already dispatched action has completed: inspect state before retrying.'
 ].join(' ');
 
 /**
  * Host-facing guest object. `hostSys(op, params)` must return
  * `{ ok, result?, error?, code? }` or throw.
- * @param {{ hostSys?: Function, defaultTabId?: number|null }} [opts]
+ * @param {{ hostSys?: Function, defaultTabId?: number|null, deadline?: object|number }} [opts]
  */
 export function createGuestSys(opts = {}) {
   const host = opts.hostSys;
@@ -98,6 +113,10 @@ export function createGuestSys(opts = {}) {
   async function call(op, params = {}) {
     opts.signal?.throwIfAborted();
     const name = String(op || '');
+    if (name === 'upload' && (params?.bytes != null || params?.base64 != null || params?.chunks != null)) {
+      throw Object.assign(new Error('sys.upload accepts path/itemId/artifactId only — host reads the bytes'), { code: 'BAD_INPUT' });
+    }
+    if (name === 'waitFor') extendDeadlineForWaitFor(opts.deadline, params?.timeoutMs);
     const saveTo = params?.saveTo;
     if (saveTo != null && (!['fetch', 'screenshot'].includes(name) ||
       typeof saveTo !== 'string' || !/^\/(scratch|artifacts)\/.+/.test(saveTo) ||
@@ -114,7 +133,15 @@ export function createGuestSys(opts = {}) {
       params && typeof params === 'object'
         ? { ...params, defaultTabId: params.tabId != null ? params.tabId : defaultTabId }
         : { defaultTabId };
-    const res = await host(name, payload, { signal: opts.signal, deadline: opts.deadline });
+    if (name === 'upload') {
+      delete payload.bytes;
+      delete payload.base64;
+      delete payload.chunks;
+    }
+    const deadlineAt = opts.deadline && typeof opts.deadline.expiresAt === 'number'
+      ? opts.deadline.expiresAt
+      : opts.deadline;
+    const res = await host(name, payload, { signal: opts.signal, deadline: opts.deadline || deadlineAt });
     if (res == null) {
       const err = new Error('SYS_DENIED: no response from browser host');
       err.code = 'SYS_DENIED';
@@ -157,6 +184,7 @@ export function wrapSysFromCall(call) {
     cdp: (params) => call('cdp', params && typeof params === 'object' ? params : {}),
     download: (params) => call('download', params && typeof params === 'object' ? params : {}),
     screenshot: (params) => call('screenshot', params && typeof params === 'object' ? params : {}),
+    upload: (params) => call('upload', params && typeof params === 'object' ? params : {}),
     tabs: {
       list: (params) => call('tabs.list', params && typeof params === 'object' ? params : {}),
       current: (params) => call('tabs.current', params && typeof params === 'object' ? params : {}),

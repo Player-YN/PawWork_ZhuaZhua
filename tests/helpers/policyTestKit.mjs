@@ -33,7 +33,7 @@ export function classifyForRequest(request = {}, extra = {}) {
   const params = extra.params || request.params || {};
   const channel = extra.channel ||
     (extra.sysOp || request.sysOp || (request.op && String(request.op).includes('.')) ? 'sys' : extra.channel) ||
-    (['eval', 'waitFor', 'fetch', 'cdp', 'download', 'screenshot', 'help', 'capabilities'].includes(request.op) ||
+    (['eval', 'waitFor', 'fetch', 'cdp', 'download', 'screenshot', 'upload', 'help', 'capabilities'].includes(request.op) ||
       String(request.op || '').startsWith('tabs.')
       ? 'sys'
       : 'action');
@@ -51,7 +51,12 @@ export function classifyForRequest(request = {}, extra = {}) {
     tabId: extra.tabId ?? request.tabId ?? params.tabId,
     documentId: extra.documentId || request.documentId || params.documentId,
     action: extra.action || params.action,
-    hints: extra.hints
+    hints: extra.hints,
+    path: extra.path || request.path || params.path,
+    bytesHash: extra.bytesHash || request.bytesHash || params.bytesHash,
+    itemId: extra.itemId || request.itemId || params.itemId,
+    artifactId: extra.artifactId || request.artifactId || params.artifactId,
+    uploadMethod: extra.uploadMethod || request.uploadMethod || (request.op === 'upload' || extra.op === 'upload' ? (params.method || request.method) : undefined)
   });
 }
 
@@ -59,7 +64,7 @@ function seedHashInput(request = {}, extra = {}, channel) {
   if (extra.hashInput) return extra.hashInput;
   const op = extra.op || request.op;
   if (channel === 'sys') {
-    return {
+    const base = {
       channel: 'sys',
       op,
       sysOp: extra.sysOp || op,
@@ -69,6 +74,19 @@ function seedHashInput(request = {}, extra = {}, channel) {
       tabId: extra.tabId ?? request.tabId ?? request.params?.tabId,
       documentId: extra.documentId || request.documentId || request.params?.documentId
     };
+    if (op === 'upload') {
+      return {
+        ...base,
+        method: '',
+        url: extra.url || extra.frameUrl || request.url || request.params?.url,
+        frameUrl: extra.frameUrl || extra.url || request.frameUrl || request.params?.url,
+        path: extra.path || request.path || request.params?.path,
+        bytesHash: extra.bytesHash || request.bytesHash || request.params?.bytesHash,
+        itemId: extra.itemId || request.itemId || request.params?.itemId,
+        artifactId: extra.artifactId || request.artifactId || request.params?.artifactId
+      };
+    }
+    return base;
   }
   return {
     channel: 'action',
@@ -82,7 +100,12 @@ function seedHashInput(request = {}, extra = {}, channel) {
     documentId: extra.documentId || request.documentId || extra.control?.documentId || '',
     frameId: extra.frameId ?? request.frameId ?? extra.control?.frameId ?? 0,
     value: request.value,
-    fields: request.fields
+    fields: request.fields,
+    path: extra.path || request.path,
+    bytesHash: extra.bytesHash || request.bytesHash,
+    itemId: extra.itemId || request.itemId,
+    artifactId: extra.artifactId || request.artifactId,
+    uploadMethod: extra.uploadMethod || request.method
   };
 }
 
@@ -93,7 +116,7 @@ export async function seedAutoTicket(request, extra = {}) {
   const nonce = extra.nonce || request.ticketNonce || newNonce();
   const params = extra.params || request.params || {};
   const channel = extra.channel ||
-    (['eval', 'waitFor', 'fetch', 'cdp', 'download', 'screenshot', 'help', 'capabilities'].includes(request.op) ||
+    (['eval', 'waitFor', 'fetch', 'cdp', 'download', 'screenshot', 'upload', 'help', 'capabilities'].includes(request.op) ||
       String(request.op || '').startsWith('tabs.')
       ? 'sys'
       : 'action');

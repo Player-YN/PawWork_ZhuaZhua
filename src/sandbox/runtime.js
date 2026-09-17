@@ -1,10 +1,12 @@
 /** Manifest-sandboxed guest host. No chrome.* — FS and sys are postMessage RPCs. */
 import { runCode } from '../agent/vnext/adapters/codeRuntime.js';
+import { createRunDeadline } from '../agent/vnext/sessionWorkspace/runDeadline.js';
 
 const CHANNEL = 'pawwork-code-sandbox-v1';
 const fsPending = new Map();
 const sysPending = new Map();
 const controllers = new Map();
+const clocks = new Map();
 let requestSeq = 0;
 
 function callHostFs(runId, method, args) {
@@ -70,9 +72,22 @@ window.addEventListener('message', async (event) => {
     return;
   }
 
+  if (msg.type === 'extend-deadline') {
+    const clock = clocks.get(msg.runId);
+    if (clock && Number.isFinite(msg.expiresAt)) {
+      clock.extendToCover(Number(msg.expiresAt) - Date.now());
+    }
+    return;
+  }
+
   if (msg.type !== 'run') return;
   const controller = new AbortController();
   controllers.set(msg.runId, controller);
+  const deadline = createRunDeadline(msg.payload?.timeoutMs);
+  if (Number.isFinite(msg.payload?.expiresAt)) {
+    deadline.extendToCover(Number(msg.payload.expiresAt) - Date.now());
+  }
+  clocks.set(msg.runId, deadline);
   try {
     const result = await runCode({
       code: msg.payload?.code || '',
@@ -80,6 +95,7 @@ window.addEventListener('message', async (event) => {
       entryFile: msg.payload?.entryFile || undefined,
       files: msg.payload?.files || undefined,
       timeoutMs: msg.payload?.timeoutMs,
+      deadline,
       memoryLimitBytes: msg.payload?.memoryLimitBytes,
       signal: controller.signal,
       fs: createFs(msg.runId),
@@ -97,6 +113,7 @@ window.addEventListener('message', async (event) => {
     }, '*');
   } finally {
     controllers.delete(msg.runId);
+    clocks.delete(msg.runId);
     for (const pendingMap of [fsPending, sysPending]) {
       for (const [id, pending] of pendingMap) {
         if (!id.startsWith(`${msg.runId}:`)) continue;

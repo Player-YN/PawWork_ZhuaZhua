@@ -35,6 +35,8 @@ Desktop.ini
 # Logs / caches
 *.log
 .cache/
+**/__pycache__/
+*.pyc
 output/playwright/*-profile/
 .playwright-cli/
 

@@ -71,7 +71,7 @@ test('action and sys host files authorize before chrome side effects', () => {
   assert.match(page, /authorizePageActionDispatch/);
   assert.match(page, /consumeDispatchTicket/);
   const sys = readFileSync(join(src, 'browserSysHost.js'), 'utf8');
-  for (const name of ['sysEval', 'sysDownload', 'sysTabsClose', 'sysCdp', 'sysFetchAsExtension', 'sysScreenshot']) {
+  for (const name of ['sysEval', 'sysDownload', 'sysTabsClose', 'sysCdp', 'sysFetchAsExtension', 'sysScreenshot', 'sysUpload']) {
     assert.match(sys, new RegExp(`async function ${name}[\\s\\S]*authorizeSysDispatch`));
   }
   const service = readFileSync(join(root, 'src/agent/vnext/service/sessionWorkspaceService.js'), 'utf8');

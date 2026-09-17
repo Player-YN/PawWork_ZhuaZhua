@@ -11,6 +11,7 @@ import {
   CONF_KNOWN
 } from './riskClassify.js';
 import { hashOperationPayload } from './payloadHash.js';
+import { applyUploadToTab, hashUploadPayloadBytes, coerceUploadBytes } from './uploadChannel.js';
 
 const snapshots = createPageSnapshotRegistry();
 const lastControls = new Map();
@@ -19,7 +20,7 @@ export function invalidatePageActionTarget(tabId) {
   snapshots.invalidate(tabId);
   lastControls.delete(Number(tabId));
 }
-const MUTATIONS = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll']);
+const MUTATIONS = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll', 'upload']);
 
 function rememberControls(tabId, controls) {
   lastControls.set(Number(tabId), Array.isArray(controls) ? controls : []);
@@ -52,7 +53,13 @@ export function actionHashInput(op, request, control, extra = {}) {
     documentId: control?.documentId || extra.documentId || '',
     frameId: extra.frameId ?? control?.frameId ?? null,
     value: request.value,
-    fields: request.fields
+    fields: request.fields,
+    path: extra.path || request.path || '',
+    bytesHash: extra.bytesHash || request.bytesHash || '',
+    itemId: extra.itemId || request.itemId || '',
+    artifactId: extra.artifactId || request.artifactId || '',
+    method: op === 'upload' ? '' : extra.method,
+    uploadMethod: op === 'upload' ? (extra.uploadMethod || request.method || 'auto') : undefined
   };
 }
 
@@ -92,7 +99,13 @@ function classifyInputFromControl(op, request, control, extra = {}) {
     hints: control?.hints,
     tabId: extra.tabId ?? request.tabId,
     frameId: extra.frameId ?? control?.frameId,
-    documentId: control?.documentId || extra.documentId
+    documentId: control?.documentId || extra.documentId,
+    path: extra.path || request.path,
+    bytesHash: extra.bytesHash || request.bytesHash,
+    itemId: extra.itemId || request.itemId,
+    artifactId: extra.artifactId || request.artifactId,
+    uploadMethod: extra.uploadMethod || request.method,
+    method: extra.method || request.method
   };
 }
 
@@ -100,10 +113,16 @@ async function authorizePageActionDispatch(request, extra = {}) {
   const op = String(extra.op || request.op || '').toLowerCase();
   if (!MUTATIONS.has(op)) return { ok: true, skipped: true };
   const control = extra.control || lookupControl(extra.tabId, extra.ref || request.ref, request.name || request.label);
-  const classifyInput = classifyInputFromControl(op, request, control, extra);
+  let bytesHash = extra.bytesHash || request.bytesHash || '';
+  if (op === 'upload') {
+    const bytes = coerceUploadBytes(request.bytes);
+    if (bytes) bytesHash = await hashUploadPayloadBytes(bytes);
+  }
+  const hashExtra = { ...extra, bytesHash };
+  const classifyInput = classifyInputFromControl(op, request, control, hashExtra);
   const classified = classifyRisk(classifyInput);
   if (!needsDispatchTicket(classified) && classified.risk === 'read') return { ok: true, classified, skipped: true };
-  const payloadHash = await hashOperationPayload(actionHashInput(op, request, control, extra));
+  const payloadHash = await hashOperationPayload(actionHashInput(op, request, control, hashExtra));
   return consumeDispatchTicket({
     ...request,
     payloadHash,
@@ -403,7 +422,7 @@ async function resolveMutationIntent(request, tabId, snapshot) {
   } else if (request.name || request.label) {
     hit = await resolveNameAcrossFrames(tabId, request.name || request.label, snapshot);
     if (hit.code) return { ok: false, error: hit.error, code: hit.code };
-  } else if (op === 'press' || (op === 'wait' && request.ms != null && !request.text)) {
+  } else if (op === 'press' || op === 'upload' || (op === 'wait' && request.ms != null && !request.text)) {
     hit = { frameId: 0, local: '', frameUrl: '', documentId: '' };
   } else {
     return { ok: false, error: 'need ref or name', code: 'NO_TARGET' };
@@ -430,7 +449,12 @@ async function resolveMutationIntent(request, tabId, snapshot) {
     documentId: control.documentId,
     frameUrl: control.frameUrl,
     ref: prefixed,
-    control
+    control,
+    path: request.path,
+    bytesHash: request.bytesHash,
+    itemId: request.itemId,
+    artifactId: request.artifactId,
+    uploadMethod: request.method
   };
   const classifyInput = classifyInputFromControl(op, request, control, extra);
   const classified = { ...classifyRisk(classifyInput), source: CLASSIFIED_SOURCE_SW };
@@ -585,6 +609,76 @@ async function waitTextAnyFrame(tabId, request) {
   );
 }
 
+async function executePageUpload(request, tabId, frameId, expectedFrame, localRef) {
+  const bytes = coerceUploadBytes(request.bytes);
+  if (!bytes) return { ok: false, code: 'BAD_INPUT', error: 'upload bytes missing (host must read guest FS)' };
+  let selector = request.selector ? String(request.selector) : '';
+  const token = `paw-upload-${Date.now().toString(36)}`;
+  if (localRef) {
+    try {
+      const marked = await sendPageActionToFrame(tabId, frameId, {
+        op: 'mark_upload',
+        ref: localRef,
+        token
+      }, expectedFrame);
+      if (marked?.ok) selector = `[data-paw-upload="${CSS && CSS.escape ? CSS.escape(token) : token}"]`;
+    } catch {
+      /* auto still scans file inputs */
+    }
+  }
+  const spec = {
+    tabId,
+    documentId: expectedFrame?.documentId || request.documentId,
+    frameId,
+    bytes,
+    filename: request.filename,
+    mimeType: request.mimeType,
+    method: request.method || 'auto',
+    selector,
+    accept: request.accept,
+    name: request.name
+  };
+  let applied;
+  if (String(request.method || 'auto').toLowerCase() === 'cdp') {
+    const debuggee = { tabId };
+    applied = await applyUploadToTab(chrome, spec, {
+      ensureAttached: async () => {
+        try {
+          await chrome.debugger.attach(debuggee, '1.3');
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          if (/Another debugger|already attached|attached/i.test(msg)) {
+            throw Object.assign(new Error(msg), { code: 'CDP_BUSY' });
+          }
+          throw Object.assign(new Error(msg), { code: 'SYS_DENIED' });
+        }
+      },
+      send: (method, params) => chrome.debugger.sendCommand(debuggee, method, params || {})
+    });
+  } else {
+    applied = await applyUploadToTab(chrome, spec);
+  }
+  if (!applied || applied.ok === false) return applied;
+  return {
+    ok: true,
+    op: 'upload',
+    methodUsed: applied.methodUsed,
+    tabId,
+    documentId: spec.documentId,
+    frameId,
+    path: request.path,
+    filename: spec.filename,
+    mimeType: spec.mimeType,
+    bytes: bytes.byteLength,
+    filesCount: applied.filesCount ?? 0,
+    changeDispatched: applied.changeDispatched === true,
+    trusted: applied.trusted === true,
+    target: applied.target || {},
+    siteAccepted: 'unknown',
+    warning: applied.warning
+  };
+}
+
 export function handleWorkspacePageAction(request) {
   const key = Number(request?.tabId ?? request?.defaultTabId);
   const previous = actionQueues.get(key) || Promise.resolve();
@@ -721,7 +815,7 @@ async function executeWorkspacePageAction(request) {
     if (hit.code) return hit;
     frameId = hit.frameId;
     localRef = hit.local;
-  } else if (op === 'press' || (op === 'wait' && request?.ms != null && !request?.text && !request?.ref)) {
+  } else if (op === 'press' || op === 'upload' || (op === 'wait' && request?.ms != null && !request?.text && !request?.ref)) {
     frameId = 0;
   } else {
     return { ok: false, error: 'need ref or name', code: 'NO_TARGET' };
@@ -747,6 +841,11 @@ async function executeWorkspacePageAction(request) {
       documentId: expectedFrame?.documentId || found?.documentId || request.documentId,
       frameUrl: expectedFrame?.url || found?.frameUrl || '',
       ref: prefixed,
+      path: request.path,
+      bytesHash: request.bytesHash,
+      itemId: request.itemId,
+      artifactId: request.artifactId,
+      uploadMethod: request.method,
       control: {
         ...(found || {}),
         name: found?.name || request?.name || request?.label,
@@ -757,6 +856,11 @@ async function executeWorkspacePageAction(request) {
       }
     });
     if (!gate.ok) return gate;
+  }
+  if (op === 'upload') {
+    const raw = await executePageUpload(request, tabId, frameId, expectedFrame, localRef);
+    const snap = await observeAfterAction(tabId);
+    return attachFreshSnapshot(raw, snap);
   }
   let raw;
   try {

@@ -5,6 +5,8 @@
  * no extension APIs. Filesystem and sys calls are relayed to the offscreen host.
  * The sandbox never receives chrome.*, DOM handles, or a reference to Workspace storage.
  */
+import { createRunDeadline, clampRunTimeout } from '../sessionWorkspace/runDeadline.js';
+
 const CHANNEL = 'pawwork-code-sandbox-v1';
 
 export function createSandboxCodeClient(iframe) {
@@ -110,6 +112,7 @@ export function createSandboxCodeClient(iframe) {
   function cleanupRun(runId, run) {
     runs.delete(runId);
     if (run.timer) clearTimeout(run.timer);
+    if (typeof run.unsub === 'function') run.unsub();
     if (run.signal && run.onAbort) run.signal.removeEventListener('abort', run.onAbort);
   }
 
@@ -124,18 +127,33 @@ export function createSandboxCodeClient(iframe) {
       if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       const runId = crypto.randomUUID ? crypto.randomUUID() : `run_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       return new Promise((resolve, reject) => {
-        const timeoutMs = Math.max(1, Math.min(Number(opts.timeoutMs) || 15000, 120000));
+        const timeoutMs = clampRunTimeout(opts.timeoutMs);
+        const deadline = opts.deadline && typeof opts.deadline.remaining === 'function'
+          ? opts.deadline
+          : createRunDeadline(timeoutMs);
         const onAbort = () => {
           target.postMessage({ channel: CHANNEL, type: 'abort', runId }, '*');
         };
-        const timer = setTimeout(() => {
+        const armHostTimer = () => {
           const run = runs.get(runId);
           if (!run) return;
-          target.postMessage({ channel: CHANNEL, type: 'abort', runId }, '*');
-          cleanupRun(runId, run);
-          reject(new Error(`sandbox host timeout after ${timeoutMs + 2000}ms`));
-        }, timeoutMs + 2000);
-        runs.set(runId, { resolve, reject, fs: opts.fs, sys: opts.sys, signal: opts.signal, onAbort, timer });
+          if (run.timer) clearTimeout(run.timer);
+          const remain = Math.max(1, deadline.remaining()) + 2000;
+          run.timer = setTimeout(() => {
+            const live = runs.get(runId);
+            if (!live) return;
+            target.postMessage({ channel: CHANNEL, type: 'abort', runId }, '*');
+            cleanupRun(runId, live);
+            reject(new Error(`sandbox host timeout after ${timeoutMs + 2000}ms`));
+          }, remain);
+        };
+        const onDeadline = (expiresAt) => {
+          target.postMessage({ channel: CHANNEL, type: 'extend-deadline', runId, expiresAt }, '*');
+          armHostTimer();
+        };
+        const unsub = deadline.subscribe(onDeadline);
+        runs.set(runId, { resolve, reject, fs: opts.fs, sys: opts.sys, signal: opts.signal, onAbort, timer: null, unsub });
+        armHostTimer();
         opts.signal?.addEventListener('abort', onAbort, { once: true });
         target.postMessage({
           channel: CHANNEL,
@@ -147,6 +165,7 @@ export function createSandboxCodeClient(iframe) {
             entryFile: opts.entryFile == null ? null : String(opts.entryFile),
             files: opts.files && typeof opts.files === 'object' ? opts.files : null,
             timeoutMs,
+            expiresAt: deadline.expiresAt,
             memoryLimitBytes: opts.memoryLimitBytes
           }
         }, '*');
