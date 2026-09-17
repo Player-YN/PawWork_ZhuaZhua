@@ -23,8 +23,17 @@ import {
   splitBase64Chunks,
   bytesToBase64,
   hashUploadPayloadBytes,
+  omitUploadBytes,
+  buildPageActionTransport,
+  buildStagedUploadEnvelope,
+  dispatchStagedUpload,
+  putUploadStageChunk,
+  takeUploadStage,
+  resetUploadStages,
+  uploadOwnerKey,
   UPLOAD_BYTES_MAX,
-  UPLOAD_CHUNK_SIZE
+  UPLOAD_CHUNK_SIZE,
+  UPLOAD_RUNTIME_MESSAGE_CHAR_MAX
 } from '../src/agent/vnext/host/uploadChannel.js';
 import { resolveUploadSource } from '../src/agent/vnext/sessionWorkspace/uploadSource.js';
 import {
@@ -300,6 +309,21 @@ test('applyUploadToTab auto never calls the CDP helper', async () => {
   });
   assert.equal(out.ok, true);
   assert.equal(cdpCalled, false);
+});
+
+test('action upload on a known payment host is PAYMENT even when method is cdp', () => {
+  const pay = classifyRisk({
+    channel: 'action',
+    op: 'upload',
+    name: 'Upload',
+    url: 'https://checkout.stripe.com/c/pay',
+    uploadMethod: 'cdp',
+    method: 'cdp'
+  });
+  assert.equal(pay.risk, 'payment');
+  assert.equal(pay.confidence, 'known');
+  assert.equal(decideAccess('full', pay), 'deny');
+  assert.equal(decideAccess('guarded', pay), 'deny');
 });
 
 test('typed upload is known external-commit; payment host stays PAYMENT; CDP is raw', () => {
@@ -640,4 +664,254 @@ test('host extends the run deadline for waitFor instead of raising every run def
   const huge = createRunDeadline(15_000);
   extendDeadlineForWaitFor(huge, 999_000);
   assert.ok(huge.remaining() <= WAIT_FOR_MAX_MS + WAIT_FOR_DEADLINE_SLACK_MS + 50);
+});
+
+test('pre-authorize page-action envelopes omit file bytes', () => {
+  const raw = {
+    op: 'upload',
+    path: '/scratch/a.png',
+    bytes: PNG,
+    base64: 'abc',
+    chunks: ['x'],
+    rev: 't1',
+    params: { bytes: PNG, path: '/scratch/a.png' }
+  };
+  const intent = buildPageActionTransport(raw, { op: 'resolve_intent', targetOp: 'upload' });
+  assert.equal(intent.op, 'resolve_intent');
+  assert.equal(intent.targetOp, 'upload');
+  assert.equal(intent.path, '/scratch/a.png');
+  assert.equal(intent.bytes, undefined);
+  assert.equal(intent.base64, undefined);
+  assert.equal(intent.chunks, undefined);
+  assert.equal(intent.params.bytes, undefined);
+  assert.equal(omitUploadBytes(raw).rev, 't1');
+});
+
+test('offscreen→SW upload envelope chunks below the runtime message cap and apply carries no bytes', () => {
+  const bytes = new Uint8Array(400 * 1024);
+  bytes.set(PNG, 0);
+  const envelope = buildStagedUploadEnvelope({
+    path: '/scratch/big.bin',
+    bytes,
+    bytesHash: 'deadbeef',
+    tabId: 3,
+    filename: 'big.bin'
+  });
+  assert.equal(envelope.ok, true);
+  assert.ok(envelope.stageMessages.length >= 2);
+  for (const msg of envelope.stageMessages) {
+    assert.equal(msg.op, 'upload.stage');
+    assert.ok(JSON.stringify(msg).length <= UPLOAD_RUNTIME_MESSAGE_CHAR_MAX);
+    assert.ok(String(msg.params.b64 || '').length <= UPLOAD_CHUNK_SIZE);
+  }
+  assert.equal(envelope.applyParams.bytes, undefined);
+  assert.equal(envelope.applyParams.base64, undefined);
+  assert.equal(envelope.applyParams.stageId, envelope.stageId);
+  assert.equal(envelope.applyParams.path, '/scratch/big.bin');
+  const eight = new Uint8Array(UPLOAD_BYTES_MAX);
+  const big = buildStagedUploadEnvelope({ path: '/scratch/8.bin', bytes: eight, bytesHash: 'ab' });
+  assert.equal(big.ok, true);
+  assert.equal(big.applyParams.bytes, undefined);
+  for (const msg of big.stageMessages) {
+    assert.ok(JSON.stringify(msg).length <= UPLOAD_RUNTIME_MESSAGE_CHAR_MAX);
+  }
+});
+
+test('upload.stage does not inject; apply without a ticket stays TICKET_REQUIRED', async () => {
+  installTestPolicy();
+  resetTabLeases();
+  resetUploadStages();
+  const { scripting } = installSysChrome();
+  const bytesHash = await hashUploadPayloadBytes(PNG);
+  const envelope = buildStagedUploadEnvelope({
+    path: '/scratch/a.png',
+    bytes: PNG,
+    bytesHash,
+    filename: 'a.png',
+    tabId: 11,
+    documentId: 'doc-a'
+  });
+  for (const msg of envelope.stageMessages) {
+    const staged = await handleWorkspaceSys({
+      sessionId: 's',
+      executionId: 'e',
+      op: 'upload.stage',
+      params: msg.params
+    });
+    assert.equal(staged.ok, true);
+    assert.equal(staged.result.injected, false);
+  }
+  assert.equal(scripting.filter((c) => c.hasFunc).length, 0);
+  const bare = await handleWorkspaceSys({
+    sessionId: 's',
+    executionId: 'e',
+    op: 'upload',
+    params: { ...envelope.applyParams, tabId: 11, documentId: 'doc-a' }
+  });
+  assert.equal(bare.code, 'TICKET_REQUIRED');
+  assert.equal(scripting.filter((c) => c.hasFunc).length, 0);
+  resetUploadStages();
+  resetTestPolicy();
+});
+
+test('staged upload with a matching ticket dispatches; forged assembled hash is rejected', async () => {
+  installTestPolicy();
+  resetTabLeases();
+  resetUploadStages();
+  const { scripting } = installSysChrome();
+  const bytesHash = await hashUploadPayloadBytes(PNG);
+  const envelope = buildStagedUploadEnvelope({
+    path: '/scratch/a.png',
+    bytes: PNG,
+    bytesHash,
+    filename: 'a.png',
+    tabId: 11,
+    documentId: 'doc-a'
+  });
+  const req = {
+    sessionId: 's',
+    executionId: 'e',
+    op: 'upload',
+    params: { ...envelope.applyParams, tabId: 11, documentId: 'doc-a', filename: 'a.png' }
+  };
+  Object.assign(req, await seedAutoTicket(req, {
+    channel: 'sys',
+    path: '/scratch/a.png',
+    bytesHash,
+    tabId: 11,
+    documentId: 'doc-a',
+    url: 'https://example.com/app',
+    frameUrl: 'https://example.com/app'
+  }));
+  for (const msg of envelope.stageMessages) {
+    const staged = await handleWorkspaceSys({
+      sessionId: 's',
+      executionId: 'e',
+      op: 'upload.stage',
+      params: msg.params
+    });
+    assert.equal(staged.ok, true);
+  }
+  const out = await handleWorkspaceSys(req);
+  assert.equal(out.ok, true);
+  assert.equal(out.result.siteAccepted, 'unknown');
+  assert.ok(scripting.some((c) => c.world === 'MAIN' && c.hasFunc));
+
+  resetUploadStages();
+  const otherHash = await hashUploadPayloadBytes(new Uint8Array([1, 2, 3]));
+  const mismatch = buildStagedUploadEnvelope({
+    path: '/scratch/a.png',
+    bytes: PNG,
+    bytesHash: otherHash,
+    filename: 'a.png',
+    tabId: 11,
+    documentId: 'doc-a'
+  });
+  const bad = {
+    sessionId: 's',
+    executionId: 'e',
+    op: 'upload',
+    params: { ...mismatch.applyParams, tabId: 11, documentId: 'doc-a', filename: 'a.png' }
+  };
+  Object.assign(bad, await seedAutoTicket(bad, {
+    channel: 'sys',
+    path: '/scratch/a.png',
+    bytesHash: otherHash,
+    tabId: 11,
+    documentId: 'doc-a',
+    url: 'https://example.com/app',
+    frameUrl: 'https://example.com/app'
+  }));
+  for (const msg of mismatch.stageMessages) {
+    await handleWorkspaceSys({
+      sessionId: 's',
+      executionId: 'e',
+      op: 'upload.stage',
+      params: msg.params
+    });
+  }
+  const forged = await handleWorkspaceSys(bad);
+  assert.equal(forged.code, 'APPROVAL_MISMATCH');
+  resetUploadStages();
+  resetTestPolicy();
+});
+
+test('payment deny never stages bytes to SW; send is not called', async () => {
+  installTestPolicy({ mode: 'full' });
+  resetUploadStages();
+  let stages = 0;
+  let applies = 0;
+  const bytesHash = await hashUploadPayloadBytes(PNG);
+  const out = await gatedDispatch(
+    {
+      channel: 'sys',
+      op: 'upload',
+      path: '/scratch/card.png',
+      bytesHash,
+      bytes: PNG,
+      uploadMethod: 'cdp',
+      sessionId: 's',
+      executionId: 'e',
+      tabId: 22,
+      documentId: 'doc-pay',
+      url: 'https://checkout.stripe.com/c/pay',
+      frameUrl: 'https://checkout.stripe.com/c/pay'
+    },
+    {
+      journal: createCallJournal(createMemoryCallJournal()),
+      readPolicy: async () => ({ mode: 'full' }),
+      putTicket: async () => {},
+      send: async (req) =>
+        dispatchStagedUpload(req, {
+          sendStage: async () => {
+            stages += 1;
+            return { ok: true };
+          },
+          sendApply: async () => {
+            applies += 1;
+            return { ok: true };
+          }
+        })
+    }
+  );
+  assert.equal(out.code, 'PAYMENT_DENIED');
+  assert.equal(stages, 0);
+  assert.equal(applies, 0);
+  resetUploadStages();
+  resetTestPolicy();
+});
+
+test('dispatchStagedUpload is the authorized send path: stage then apply without bytes', async () => {
+  const seen = [];
+  const bytesHash = await hashUploadPayloadBytes(PNG);
+  const out = await dispatchStagedUpload(
+    { path: '/scratch/a.png', bytes: PNG, bytesHash, tabId: 11 },
+    {
+      sendStage: async (msg) => {
+        seen.push(msg);
+        return { ok: true };
+      },
+      sendApply: async (params) => {
+        seen.push({ op: 'upload', params });
+        return { ok: true, result: { siteAccepted: 'unknown' } };
+      }
+    }
+  );
+  assert.equal(out.ok, true);
+  assert.ok(seen.some((row) => row.op === 'upload.stage'));
+  const apply = seen.find((row) => row.op === 'upload');
+  assert.equal(apply.params.bytes, undefined);
+  assert.ok(apply.params.stageId);
+  const owner = uploadOwnerKey('s', 'e');
+  const staged = putUploadStageChunk({
+    stageId: 'stg_test',
+    owner,
+    index: 0,
+    total: 1,
+    b64: bytesToBase64(PNG),
+    bytesHash
+  });
+  assert.equal(staged.ok, true);
+  assert.equal(takeUploadStage('stg_test', owner).ok, true);
+  resetUploadStages();
 });

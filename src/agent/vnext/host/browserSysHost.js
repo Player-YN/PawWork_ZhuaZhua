@@ -15,6 +15,9 @@ import {
   assertUploadGuestPath,
   coerceUploadBytes,
   hashUploadPayloadBytes,
+  putUploadStageChunk,
+  takeUploadStage,
+  uploadOwnerKey,
   UPLOAD_BYTES_MAX
 } from './uploadChannel.js';
 
@@ -172,6 +175,7 @@ async function dispatchWorkspaceSys(request = {}) {
     // Reads above do not dispatch effects. Fence every other execution-owned call.
     await assertTabLeaseOwnerActive(request.sessionId, request.executionId);
     params._signal?.throwIfAborted();
+    if (op === 'upload.stage') return await sysUploadStage(params, request);
     if (op === 'eval') return await sysEval(params, request);
     if (op === 'waitFor') return await sysWaitFor(params, request);
     if (op === 'fetch') return await sysFetch(params, request);
@@ -343,6 +347,20 @@ async function sysScreenshot(params, request = {}) {
   };
 }
 
+async function sysUploadStage(params, request = {}) {
+  const owner = uploadOwnerKey(request.sessionId, request.executionId);
+  const stored = putUploadStageChunk({
+    stageId: params.stageId,
+    owner,
+    index: params.index,
+    total: params.total,
+    b64: params.b64,
+    bytesHash: params.bytesHash || request.bytesHash
+  });
+  if (!stored.ok) return stored;
+  return { ok: true, result: { ...stored, injected: false } };
+}
+
 async function sysUpload(params, request = {}) {
   const method = String(params.method || 'auto').toLowerCase();
   if (!['auto', 'input', 'drop', 'cdp'].includes(method)) {
@@ -350,9 +368,12 @@ async function sysUpload(params, request = {}) {
   }
   const pathGate = assertUploadGuestPath(params.path);
   if (!pathGate.ok) return pathGate;
-  const bytes = coerceUploadBytes(params.bytes);
-  if (!bytes) return { ok: false, code: 'BAD_INPUT', error: 'upload bytes missing (host must read guest FS)' };
-  if (bytes.byteLength > UPLOAD_BYTES_MAX) {
+  const owner = uploadOwnerKey(request.sessionId, request.executionId);
+  const inline = coerceUploadBytes(params.bytes);
+  if (!inline && !params.stageId) {
+    return { ok: false, code: 'BAD_INPUT', error: 'upload bytes missing (host must read guest FS)' };
+  }
+  if (inline && inline.byteLength > UPLOAD_BYTES_MAX) {
     return { ok: false, code: 'TOO_LARGE', error: `upload exceeds ${UPLOAD_BYTES_MAX} bytes` };
   }
   const tab = await resolveTab(params);
@@ -367,7 +388,12 @@ async function sysUpload(params, request = {}) {
     url: params.expectedUrl
   });
   const frameUrl = document.url || tab.url || '';
-  const bytesHash = await hashUploadPayloadBytes(bytes);
+  const bytesHash = inline
+    ? await hashUploadPayloadBytes(inline)
+    : String(params.bytesHash || '');
+  if (!bytesHash) {
+    return { ok: false, code: 'BAD_INPUT', error: 'upload bytesHash required when staging' };
+  }
   const filename = String(params.filename || pathGate.path.split('/').pop() || 'upload.bin');
   const mimeType = String(params.mimeType || '').trim() || 'application/octet-stream';
   params._signal?.throwIfAborted();
@@ -383,7 +409,23 @@ async function sysUpload(params, request = {}) {
     itemId: params.itemId,
     artifactId: params.artifactId
   });
-  if (!gate.ok) return gate;
+  if (!gate.ok) {
+    if (params.stageId) takeUploadStage(params.stageId, owner);
+    return gate;
+  }
+  let bytes = inline;
+  if (!bytes) {
+    const taken = takeUploadStage(params.stageId, owner);
+    if (!taken.ok) return taken;
+    bytes = taken.bytes;
+    const assembled = await hashUploadPayloadBytes(bytes);
+    if (assembled !== bytesHash) {
+      return { ok: false, code: 'APPROVAL_MISMATCH', error: 'assembled upload hash does not match ticket' };
+    }
+  }
+  if (bytes.byteLength > UPLOAD_BYTES_MAX) {
+    return { ok: false, code: 'TOO_LARGE', error: `upload exceeds ${UPLOAD_BYTES_MAX} bytes` };
+  }
   const spec = {
     tabId: tab.id,
     documentId: document.documentId,

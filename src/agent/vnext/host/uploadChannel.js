@@ -145,6 +145,186 @@ export function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+export function base64ToBytes(b64) {
+  const s = String(b64 || '');
+  if (typeof Buffer !== 'undefined') return new Uint8Array(Buffer.from(s, 'base64'));
+  if (typeof atob !== 'function') return new Uint8Array();
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/** Chrome runtime messages stay well under the ~64MB IPC cap when file bytes are staged. */
+export const UPLOAD_RUNTIME_MESSAGE_CHAR_MAX = 700_000;
+const UPLOAD_STAGE_MAX = 8;
+const UPLOAD_STAGE_TTL_MS = 120_000;
+
+/** @type {Map<string, { owner: string, chunks: Array<string|undefined>, total: number, bytesHash: string, createdAt: number }>} */
+const uploadStages = new Map();
+
+export function createUploadStageId() {
+  const rand = globalThis.crypto?.randomUUID
+    ? globalThis.crypto.randomUUID().slice(0, 12)
+    : Math.random().toString(36).slice(2, 10);
+  return `stg_${Date.now().toString(36)}_${rand}`;
+}
+
+function gcUploadStages(now = Date.now()) {
+  for (const [id, row] of uploadStages) {
+    if (!row || now - Number(row.createdAt || 0) > UPLOAD_STAGE_TTL_MS) uploadStages.delete(id);
+  }
+  while (uploadStages.size > UPLOAD_STAGE_MAX) {
+    const oldest = uploadStages.keys().next().value;
+    if (!oldest) break;
+    uploadStages.delete(oldest);
+  }
+}
+
+export function resetUploadStages() {
+  uploadStages.clear();
+}
+
+export function dropUploadStagesForOwner(owner) {
+  const key = String(owner || '');
+  if (!key) return 0;
+  let n = 0;
+  for (const [id, row] of uploadStages) {
+    if (row?.owner === key) {
+      uploadStages.delete(id);
+      n += 1;
+    }
+  }
+  return n;
+}
+
+export function putUploadStageChunk(input = {}) {
+  gcUploadStages();
+  const stageId = String(input.stageId || '');
+  const owner = String(input.owner || '');
+  const index = Number(input.index);
+  const total = Number(input.total);
+  const b64 = String(input.b64 || '');
+  if (!stageId || !owner) return { ok: false, code: 'BAD_INPUT', error: 'upload stage id and owner required' };
+  if (!Number.isInteger(index) || index < 0 || !Number.isInteger(total) || total < 1 || index >= total || total > 64) {
+    return { ok: false, code: 'BAD_INPUT', error: 'invalid upload stage index' };
+  }
+  if (b64.length > UPLOAD_CHUNK_SIZE) {
+    return { ok: false, code: 'TOO_LARGE', error: 'upload stage chunk exceeds transport cap' };
+  }
+  let row = uploadStages.get(stageId);
+  if (!row) {
+    if (uploadStages.size >= UPLOAD_STAGE_MAX) gcUploadStages();
+    if (uploadStages.size >= UPLOAD_STAGE_MAX) {
+      return { ok: false, code: 'SYS_BUSY', error: 'too many upload stages in flight' };
+    }
+    row = {
+      owner,
+      chunks: Array(total),
+      total,
+      bytesHash: String(input.bytesHash || ''),
+      createdAt: Date.now()
+    };
+    uploadStages.set(stageId, row);
+  } else if (row.owner !== owner) {
+    return { ok: false, code: 'SYS_DENIED', error: 'upload stage owner mismatch' };
+  } else if (row.total !== total) {
+    return { ok: false, code: 'BAD_INPUT', error: 'upload stage total mismatch' };
+  }
+  if (input.bytesHash && row.bytesHash && String(input.bytesHash) !== row.bytesHash) {
+    return { ok: false, code: 'APPROVAL_MISMATCH', error: 'upload stage hash mismatch' };
+  }
+  row.chunks[index] = b64;
+  const stored = row.chunks.filter((part) => typeof part === 'string').length;
+  return { ok: true, stageId, stored, total, injected: false };
+}
+
+export function takeUploadStage(stageId, owner) {
+  const id = String(stageId || '');
+  const key = String(owner || '');
+  const row = uploadStages.get(id);
+  if (!row) return { ok: false, code: 'BAD_INPUT', error: 'upload stage not found' };
+  if (row.owner !== key) return { ok: false, code: 'SYS_DENIED', error: 'upload stage owner mismatch' };
+  uploadStages.delete(id);
+  if (row.chunks.some((part) => typeof part !== 'string')) {
+    return { ok: false, code: 'BAD_INPUT', error: 'upload stage incomplete' };
+  }
+  const bytes = base64ToBytes(row.chunks.join(''));
+  if (bytes.byteLength > UPLOAD_BYTES_MAX) {
+    return { ok: false, code: 'TOO_LARGE', error: `upload exceeds ${UPLOAD_BYTES_MAX} bytes` };
+  }
+  if (!bytes.byteLength) return { ok: false, code: 'BAD_INPUT', error: 'upload stage assembled empty bytes' };
+  return { ok: true, bytes, bytesHash: row.bytesHash };
+}
+
+/**
+ * Strip file bytes from any pre-authorize page-action / sys envelope.
+ * Intent resolution and snapshots must not carry the payload.
+ */
+export function omitUploadBytes(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const next = { ...payload };
+  delete next.bytes;
+  delete next.base64;
+  delete next.chunks;
+  if (next.params && typeof next.params === 'object' && !Array.isArray(next.params)) {
+    next.params = { ...next.params };
+    delete next.params.bytes;
+    delete next.params.base64;
+    delete next.params.chunks;
+  }
+  return next;
+}
+
+export function buildPageActionTransport(payload, patch = {}) {
+  return omitUploadBytes({ ...(payload && typeof payload === 'object' ? payload : {}), ...patch });
+}
+
+/**
+ * Product path: chunk file bytes for offscreen→SW, then apply with stageId only.
+ */
+export function buildStagedUploadEnvelope(params = {}) {
+  const bytes = coerceUploadBytes(params.bytes);
+  if (!bytes) return { ok: false, code: 'BAD_INPUT', error: 'upload bytes missing' };
+  if (bytes.byteLength > UPLOAD_BYTES_MAX) {
+    return { ok: false, code: 'TOO_LARGE', error: `upload exceeds ${UPLOAD_BYTES_MAX} bytes` };
+  }
+  const stageId = String(params.stageId || createUploadStageId());
+  const chunks = splitBase64Chunks(bytesToBase64(bytes), UPLOAD_CHUNK_SIZE);
+  const stageMessages = chunks.map((b64, index) => ({
+    op: 'upload.stage',
+    params: {
+      stageId,
+      index,
+      total: chunks.length,
+      b64,
+      bytesHash: params.bytesHash || ''
+    }
+  }));
+  const applyParams = omitUploadBytes({ ...params, stageId, bytesHash: params.bytesHash || '' });
+  return { ok: true, stageId, stageMessages, applyParams };
+}
+
+export function uploadOwnerKey(sessionId, executionId) {
+  return `${String(sessionId || '')}:${String(executionId || '')}`;
+}
+
+/**
+ * After journal authorize: stage chunks, then apply without inline bytes.
+ */
+export async function dispatchStagedUpload(params, { sendStage, sendApply } = {}) {
+  const envelope = buildStagedUploadEnvelope(params);
+  if (!envelope.ok) return envelope;
+  if (typeof sendStage !== 'function' || typeof sendApply !== 'function') {
+    return { ok: false, code: 'SYS_DENIED', error: 'upload stage transport is unavailable' };
+  }
+  for (const msg of envelope.stageMessages) {
+    const staged = await sendStage(msg);
+    if (staged && staged.ok === false) return staged;
+  }
+  return sendApply(envelope.applyParams, envelope);
+}
+
 export function splitBase64Chunks(b64, size = UPLOAD_CHUNK_SIZE) {
   const s = String(b64 || '');
   const out = [];

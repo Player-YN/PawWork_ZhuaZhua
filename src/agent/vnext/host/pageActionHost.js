@@ -11,7 +11,13 @@ import {
   CONF_KNOWN
 } from './riskClassify.js';
 import { hashOperationPayload } from './payloadHash.js';
-import { applyUploadToTab, hashUploadPayloadBytes, coerceUploadBytes } from './uploadChannel.js';
+import {
+  applyUploadToTab,
+  hashUploadPayloadBytes,
+  coerceUploadBytes,
+  takeUploadStage,
+  uploadOwnerKey
+} from './uploadChannel.js';
 
 const snapshots = createPageSnapshotRegistry();
 const lastControls = new Map();
@@ -610,7 +616,18 @@ async function waitTextAnyFrame(tabId, request) {
 }
 
 async function executePageUpload(request, tabId, frameId, expectedFrame, localRef) {
-  const bytes = coerceUploadBytes(request.bytes);
+  let bytes = coerceUploadBytes(request.bytes);
+  if (!bytes && request.stageId) {
+    const taken = takeUploadStage(request.stageId, uploadOwnerKey(request.sessionId, request.executionId));
+    if (!taken.ok) return taken;
+    bytes = taken.bytes;
+    if (request.bytesHash) {
+      const assembled = await hashUploadPayloadBytes(bytes);
+      if (assembled !== String(request.bytesHash)) {
+        return { ok: false, code: 'APPROVAL_MISMATCH', error: 'assembled upload hash does not match ticket' };
+      }
+    }
+  }
   if (!bytes) return { ok: false, code: 'BAD_INPUT', error: 'upload bytes missing (host must read guest FS)' };
   let selector = request.selector ? String(request.selector) : '';
   const token = `paw-upload-${Date.now().toString(36)}`;

@@ -69,7 +69,11 @@ import {
 import { installDispatchTicketStorage, dispatchTicketStorageInstalled, putDispatchTicket, dropTicketsForExecution, dropDispatchTicket, listDispatchTickets } from '../host/dispatchTicket.js';
 import { hashOperationPayload, sha256Hex } from '../host/payloadHash.js';
 import { resolveUploadSource, hashUploadBytes } from '../sessionWorkspace/uploadSource.js';
-import { UPLOAD_BYTES_MAX } from '../host/uploadChannel.js';
+import {
+  UPLOAD_BYTES_MAX,
+  buildPageActionTransport,
+  dispatchStagedUpload
+} from '../host/uploadChannel.js';
 import { clampWaitTimeout } from '../sessionWorkspace/browserSys.js';
 import { applyVerifyToJournalState, verifyPostconditions } from '../host/postcondition.js';
 import { createUserStopError, isAbortLike } from '../host/userStop.js';
@@ -526,26 +530,24 @@ export class SessionWorkspaceService {
     let rev = payload.rev;
     let snap = null;
     if (!rev) {
-      snap = await this._pageAction({
-        ...payload,
+      snap = await this._pageAction(buildPageActionTransport(payload, {
         op: 'snapshot',
         sessionId,
         executionId,
         tabId: payload.tabId
-      }, signal);
+      }), signal);
       if (!snap?.ok) return snap;
       rev = snap.rev;
     }
     this._throwIfAborted(signal);
-    const resolved = await this._pageAction({
-      ...payload,
+    const resolved = await this._pageAction(buildPageActionTransport(payload, {
       op: 'resolve_intent',
       targetOp: op,
       rev,
       sessionId,
       executionId,
       tabId: payload.tabId
-    }, signal);
+    }), signal);
     this._throwIfAborted(signal);
     if (!resolved?.ok) return resolved;
     return { ...resolved, rev };
@@ -718,18 +720,34 @@ export class SessionWorkspaceService {
         dropTicket: (operationId) => this._dropTicket(operationId),
         readPolicy: () => this._readPolicy(),
         verifyFacts: (out, req) => this._verifyActionFacts(out, req),
-        send: (req) =>
-          this._pageAction({
-            ...req,
-            sessionId,
-            executionId: req.executionId || executionId,
-            tabId: req.tabId ?? payload?.tabId,
-            documentId: req.documentId || resolved?.documentId,
-            url: req.url || resolved?.frameUrl || payload?.url,
-            ticketNonce: req.ticketNonce,
-            payloadHash: req.payloadHash,
-            operationId: req.operationId
-          }, signal)
+        send: (req) => {
+          const deliver = (body) =>
+            this._pageAction({
+              ...body,
+              sessionId,
+              executionId: req.executionId || executionId,
+              tabId: req.tabId ?? payload?.tabId,
+              documentId: req.documentId || resolved?.documentId,
+              url: req.url || resolved?.frameUrl || payload?.url,
+              ticketNonce: req.ticketNonce,
+              payloadHash: req.payloadHash,
+              operationId: req.operationId
+            }, signal);
+          if (payload?.op === 'upload' && req.bytes) {
+            return dispatchStagedUpload(req, {
+              sendStage: (msg) =>
+                callBrowserSys({
+                  sessionId,
+                  executionId: req.executionId || executionId,
+                  signal,
+                  op: 'upload.stage',
+                  params: msg.params
+                }),
+              sendApply: (applyParams) => deliver(applyParams)
+            });
+          }
+          return deliver(req);
+        }
       }
     );
   }
@@ -780,21 +798,38 @@ export class SessionWorkspaceService {
         putTicket: (ticket) => this._putTicket(ticket),
         readPolicy: () => this._readPolicy(),
         verifyFacts: (out, req) => this._verifySysFacts(out, req),
-        send: (req) =>
-          callBrowserSys({
-            sessionId,
-            executionId,
-            signal: context?.signal || signal,
-            deadline: deadlineAt,
-            op,
-            params: {
-              ...(params && typeof params === 'object' ? params : {}),
-              defaultTabId: params?.defaultTabId ?? params?.tabId
-            },
-            operationId: req.operationId,
-            payloadHash: req.payloadHash,
-            ticketNonce: req.ticketNonce
-          })
+        send: (req) => {
+          const apply = (applyParams) =>
+            callBrowserSys({
+              sessionId,
+              executionId,
+              signal: context?.signal || signal,
+              deadline: deadlineAt,
+              op,
+              params: {
+                ...(applyParams && typeof applyParams === 'object' ? applyParams : {}),
+                defaultTabId: applyParams?.defaultTabId ?? applyParams?.tabId
+              },
+              operationId: req.operationId,
+              payloadHash: req.payloadHash,
+              ticketNonce: req.ticketNonce
+            });
+          if (op === 'upload' && params?.bytes) {
+            return dispatchStagedUpload(params, {
+              sendStage: (msg) =>
+                callBrowserSys({
+                  sessionId,
+                  executionId,
+                  signal: context?.signal || signal,
+                  deadline: deadlineAt,
+                  op: 'upload.stage',
+                  params: msg.params
+                }),
+              sendApply: (applyParams) => apply(applyParams)
+            });
+          }
+          return apply(params);
+        }
       }
     );
   }
