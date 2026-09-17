@@ -10,6 +10,7 @@ import { SessionWorkspaceStore } from '../src/agent/vnext/sessionWorkspace/store
 import { createSessionGuestFs } from '../src/agent/vnext/sessionWorkspace/fs.js';
 import { createArtifact, updateArtifactContent } from '../src/agent/vnext/sessionWorkspace/artifacts.js';
 import { clarifyBelongsToSession } from '../src/sidepanel/sessionIsolation.js';
+import { installTestPolicy, seedAutoTicket } from './helpers/policyTestKit.mjs';
 
 // Stages writes until commit, so a transaction error cannot publish partial data.
 function memoryIdb() {
@@ -101,8 +102,16 @@ test('docs drains edits made during a slow save and returns persistence failure'
   assert.equal((await context.saveNow()).ok,false); assert.equal(context.dirty,true);
 });
 
-globalThis.chrome = { debugger: {} };
+globalThis.chrome = { debugger: {}, webNavigation: { getFrame: async ({tabId, frameId}) => ({
+  frameId, documentId: `doc-${tabId}-${frameId}`, documentLifecycle: 'active', url: 'https://example.com'
+}) } };
 const { handleWorkspaceSys, readResponseBytes, wrapWaitForSource } = await import('../src/agent/vnext/host/browserSysHost.js');
+installTestPolicy({ mode: 'full' });
+async function sys(req) {
+  const next = { sessionId: req.sessionId || 's', executionId: req.executionId || 'e', ...req };
+  Object.assign(next, await seedAutoTicket(next, { channel: 'sys', op: next.op, params: next.params }));
+  return handleWorkspaceSys(next);
+}
 
 test('screenshot rejects an inactive target without capturing another tab', async () => {
   let captures=0;
@@ -145,20 +154,28 @@ test('saveTo writes binary bytes and returns a small file receipt', async () => 
 });
 
 test('parallel CDP commands share attachment; another debugger is not treated as ours', async () => {
+  installTestPolicy({ mode: 'full' });
   let attaches=0;
   chrome.tabs={get:async id=>({id,url:'https://example.com'})};
   chrome.debugger={attach:async()=>{attaches++;await new Promise(r=>setImmediate(r));},
     sendCommand:async()=>({value:1}),detach:async()=>{},getTargets:async()=>[]};
-  const results=await Promise.all([1,2].map(()=>handleWorkspaceSys({op:'cdp',params:{tabId:73,method:'Runtime.evaluate'}})));
+  const reqs=[];
+  for (let i=0;i<2;i+=1) {
+    const req={sessionId:'s',executionId:'e',op:'cdp',params:{tabId:73,method:'Runtime.evaluate'}};
+    Object.assign(req, await seedAutoTicket(req,{channel:'sys',op:'cdp',params:req.params}));
+    reqs.push(req);
+  }
+  const results=await Promise.all(reqs.map((req)=>handleWorkspaceSys(req)));
   assert.equal(attaches,1); assert.ok(results.every(result=>result.ok));
   await handleWorkspaceSys({op:'cdp',params:{tabId:73,action:'detach'}});
   chrome.debugger.attach=async()=>{throw new Error('Another debugger is already attached to the tab')};
   chrome.debugger.sendCommand=async()=>{throw new Error('Another debugger is already attached to the tab')};
-  const busy=await handleWorkspaceSys({op:'cdp',params:{tabId:74,action:'attach'}});
+  const busy=await sys({op:'cdp',params:{tabId:74,action:'attach'}});
   assert.equal(busy.code,'CDP_BUSY');
 });
 
 test('CDP reclaim works when this extension still owns the pipe', async () => {
+  installTestPolicy({ mode: 'full' });
   let probed=0;
   chrome.tabs={get:async id=>({id,url:'https://example.com'})};
   chrome.debugger={
@@ -167,7 +184,7 @@ test('CDP reclaim works when this extension still owns the pipe', async () => {
     detach:async()=>{},
     getTargets:async()=>[]
   };
-  const result=await handleWorkspaceSys({op:'cdp',params:{tabId:80,action:'attach'}});
+  const result=await sys({op:'cdp',params:{tabId:80,action:'attach'}});
   assert.equal(result.ok,true); assert.equal(probed,1);
   await handleWorkspaceSys({op:'cdp',params:{tabId:80,action:'detach'}});
 });

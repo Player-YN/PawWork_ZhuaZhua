@@ -52,6 +52,11 @@ src/sidepanel/
   sessionIsolation.js # session-scoped broadcast / plan-card / preview-tab match
   executionSync.js   # parse offscreen activeExecution (live run vs leftover store rows)
   taskStatus.js      # durable task cards; listTasks scoped to active session
+  thinkUi.js         # one think bar per turn; Enter/Space + aria-expanded; seal keeps body
+  executionStatus.js # host-fact current / next=task.nextAction only; approval/journal phases
+  botStatusUi.js     # compact status strip; omits next unless store nextAction
+  accessPolicyUi.js  # Guarded / Full Access chip + one-time risk dialog
+  approvalUi.js      # host delete/ambiguous approval; payment wait has no approve button
   tabLeaseUi.js      # TAB_LEASED / NEED_EXPLICIT_TAB human copy (no new-profile flow)
   README.md
 ```
@@ -93,6 +98,12 @@ Trajectory controls live in **`trajectoryUi.js`** (`createTrajectoryUi({ t, getL
 5. i18n: edit strings in `i18n.js`; orchestrator keeps `currentLang` + `applyI18n()`.
 
 Durable task cards（`taskStatus.js`）≠ 对话流里的 live `.task-card`（仍在 `sidepanel.js` 的 `createTaskCard`）。
+
+对话流里右对齐的粉胶囊是 **用户气泡**（`.msg.user`）。文案刚好是「继续」时也不是控件：durable `resume` 只出现在 `paused` 任务卡上；clarify 的「继续」只在多问题澄清条里。思考条复用逻辑在 `thinkUi.js`（一轮一条，禁止再叠一条「思考中」）。有真实 provider thought 时块必须在：流式与封条后都可展开，默认折叠，`aria-expanded` 与 Enter/Space。行动摘要不能顶替它。`#turnJumpRail` 走右槽，不盖思考条展开箭头。
+
+`#botStatus` 只投影宿主事实：current ← 最近 `tool-call`/`tool-result`；next **仅** `task.nextAction`，否则不画。Stop 走 `abortCurrentExecution({sessionId})`。选区是可选瞄准，不是权限门。
+
+交付物轨主 chip 是五家族（`docs` / `data` / `web` / `media` / `files`）。`design`/`slides` 不是主 chip，legacy 数据折进其它。打开面与徽标由 `artifactCapability.js` 单一映射驱动；未知文件进检查器，text-like 安全只读，未知 HTML/JS 不在 extension origin 执行。
 
 ## Next extractions candidates
 

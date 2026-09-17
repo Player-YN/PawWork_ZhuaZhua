@@ -2,7 +2,7 @@
 
 扩展页，由 SW 打开（`chrome.runtime.getURL('src/preview/…')`）。**不是** content script，也不是 agent 循环。读写经 `sheet_host` / artifact RPC 回到 SW → offscreen store。`canvas_host` 对已删除的 Design/Slides 返回 `NO_CANVAS`。
 
-分类器：`agent/vnext/sessionWorkspace/openClassify.js` 的 `previewEntryForKind` / `previewEntryForItem`。
+分类仍由 `openClassify.js` 做 kind / MIME / 魔数。打开面、家族与徽标走 `artifactCapability.js`（`previewEntryForItem` / `previewViewForItem` 是它的再导出）。shelf 与预览不得另写一套 if-else。
 
 ## 页面
 
@@ -10,8 +10,8 @@
 |----|------|----------|
 | `sheet.html` | Univer Sheets（`vendor/sheet-runtime.*`） | csv / tsv / xlsx / json-workbook |
 | `docs.html` | Univer Docs（`vendor/docs-runtime.*`） | docx / json-document / html-document |
-| `site.html` | 自有 HTML 运行时 | `data-paw-kind=site` |
-| `artifactPreview.html` | 通用查看 | 图片 / PDF 只读重建 / 其它二进制卡片 / 普通 HTML |
+| `site.html` | 静态 HTML+CSS 宿主 + postMessage bridge | `data-paw-kind=site`。**不是**任意 guest JS 运行时。用户 `<script>` / on* 被 `siteSanitize` 剥掉。bridge（ready/click/serialize/nudge）跑在 `sandbox.pages` 的 `siteFrame.html` + 外部 `siteFrame.js`，无 chrome.*、无 extension-origin 同源。禁止把内联 `<script>` 塞进 srcdoc。动态行为另立安全 runtime |
+| `artifactPreview.html` | 通用查看 | 图片/svg、PDF 只读重建、音视频、text-like 转义只读、未知检查器。未知 HTML 不 `srcdoc` 执行。文案：`?lang=en\|zh` 优先，**不**把页面上写死的 `zh-CN` 当用户语言 |
 | `print.html` | 系统打印 | PDF 交付：`delivery: browser_print` → Save as PDF |
 | `preview.html` | 旧草稿预览 | 遗留 `open_draft_preview` |
 
@@ -23,6 +23,7 @@
 
 ## 宿主约定
 
-- Query：`sessionId`、`artifactId`。页 load 后发 `sheet_tab_ready` / `html_tab_ready` / `docs_tab_ready`。
+- Query：`sessionId`、`artifactId`；预览语言可选 `lang=en|zh`。
+- 页 load 后发 `sheet_tab_ready` / `html_tab_ready` / `docs_tab_ready`。
 - 同一 session+artifact 复用标签（SW 里 `sheetTabByKey` / `htmlTabByKey`）。
-- `artifactPreview` 对 PDF/raster：显示可以重建，**写回/下载保持原始 bytes**。
+- **预览/检查器**走 `readArtifactPreview`（默认 64K，硬顶 8M）。**下载/编辑器载入**走 `downloadArtifact` / `readArtifactChunk`，必须原字节完整。截断只能显式拒绝，不能把 truncated 前缀当完整文件。

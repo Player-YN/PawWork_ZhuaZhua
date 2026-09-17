@@ -18,6 +18,7 @@ function storeWithSession(sessionId = 's1') {
   const store = new SessionWorkspaceStore();
   const service = new SessionWorkspaceService({
     store,
+    memoryJournal: true,
     callModel: async () => ({ text: 'ok' })
   });
   service.ensureSession(sessionId);

@@ -8,7 +8,7 @@ Service worker 会被 Chrome 杀掉。会话仓库、AI SDK、`run` 沙箱客户
 
 | 面 | 路径 | 现状 |
 |----|------|------|
-| Service worker | `background.js` | `manifest.background.type=module`。标签 / 下载 / 预览页 / office RPC / offscreen 转发 / **`workspace_page_action` 跨 frame 扇出** / **`workspace_sys`** / **tab 租约（SW 内存）** / **`chrome.alarms` 唤醒 due task** |
+| Service worker | `background.js` | `manifest.background.type=module`。标签 / 下载 / 预览页 / office RPC / offscreen 转发 / **`workspace_page_action` 跨 frame 扇出** / **`workspace_sys`** / **tab 租约（storage.session）** / **`chrome.alarms` 唤醒 due task** |
 | Offscreen | `offscreen/runtime.html` + `runtime.js` | `SessionWorkspaceService.create()`；收 `workspace_rpc_execute`。内嵌 sandbox iframe，**不**把 workspace boot 闸在 handshake 上 |
 | Content script | `content_script.js` | `matches: <all_urls>`，`run_at: document_idle`，**`all_frames: true`**。伸爪选区 + 每 frame 的 action。经典脚本（IIFE），`executeScript` 可再注入 |
 | Sidepanel | `sidepanel.html` + `sidepanel.js` | 对话 UI。`workspaceRpc` → background。编排器仍是 `sidepanel.js` |
@@ -26,7 +26,7 @@ CSP：`extension_pages` 允许 `'wasm-unsafe-eval'`（QuickJS / Univer）；sand
 ```text
 侧栏 / 预览页
   chrome.runtime.sendMessage { target: pawwork-background, action, … }
-    workspace_rpc          → ensurePawWorkOffscreen + forward（最多 8 次）
+    workspace_rpc          → ensurePawWorkOffscreen + 契约检查（仅只读调用最多重试 8 次；写入不重试）
     workspace_page_action  → handleWorkspacePageAction → 各 frame content_script
     sheet_host             → 打开/复用 sheet.html，再 pawwork_sheet_rpc
     canvas_host            → docs.html 同类 RPC（无 Design/Slides）
@@ -56,7 +56,7 @@ sidepanel  workspaceRpc(method, params)     # vnext/host/workspaceClient.js
   → SessionWorkspaceService[method]
 ```
 
-`method` 必须是 service 上的公开 async 方法（不以 `_` 开头）。常见：`sendMessage`、`getWorkspaceState`、`abortExecution`、`answerClarify`、`listTasks` / `getTask` / `updateTask`、group/clipboard/artifact CRUD、`listSkills`。完整列表看 `sessionWorkspaceService.js` 的 `async` 方法。`getTaskSchedule` / `runDueTasks` 给 SW scheduler，不是侧栏主路径。
+`method` 必须在 `workspaceRpcContract.js` 的显式清单内；按 Chrome 原生 sender 区分侧栏、预览与内部调度。`getTaskSchedule` / `runDueTasks` / `getBrowserRuntimeState` 只给 SW；offscreen 拒绝侧栏绕过 SW 直调。新增公开 async 方法不自动暴露。侧栏和四种预览共用 `workspaceClient.js`，完整参数语义仍由领域方法验证。
 
 ## `action` 运输
 
@@ -76,11 +76,15 @@ Background：
 - `chrome.webNavigation.getAllFrames` 列 frame；跳过 `chrome://` / `chrome-extension://` / `edge://` / `devtools://` / `view-source:`。
 - 缺脚本的 frame：`chrome.scripting.executeScript` 注入 `src/content_script.js`（回退 `content_script.js`）。
 - 各 frame 本地 `aN` 编成不透明 `f{frameId}.aN`。
-- `rev` 存在 SW 内存 `pageActionRevByTab`（`t1`, `t2`, …）。SW 重启后需重新 `snapshot`。
-- 对 tab 的副作用（`action` snapshot/mutate、`sys.eval`、`sys.waitFor`、`sys.fetch(as:page)`、`sys.tabs.navigate/reload/focus`、`sys.cdp`）先在 SW `tabLeases` 上 `tryAcquire`；他 session 占用 → `TAB_LEASED`。`action` 必须带本轮显式 `tabId`（来自 `activeTab`，不再 fallback 到 Chrome 焦点标签）→ 缺则 `NEED_EXPLICIT_TAB`，且不登记租约。`sys.tabs.open` 成功后 `grantTabLease`。`sys.tabs.list` / `current` / extension-fetch / screenshot / download / `tabs.close` **不**占这把锁。
-- 释放：offscreen `execution-end`、`sendMessage` finally、`abortExecution` → `workspace_tab_lease_release` / `releaseTabLeasesByExecution`；`tabs.onRemoved` 释放该 `tabId`。这把锁不是 journal，SW 一死整表丢。预览页 `workLock` 是同 session 画布 UI 锁，不是这把 live-page 租约。
+- `pageActionHost.js` 从 background 抽出；同 tab 的 action 排队。`documentTarget.js` 为快照保存 frameId/documentId/URL，用随机不透明 rev，SW 重启后必须重新 snapshot。
+- `action` 的全部 mutate（包括 name-only 和 bare press）需要 rev；每次派发前核对文档，消息用 `tabs.sendMessage` 的 documentId 定向。导航、history/fragment 变化使旧快照失效。
+- 页面操作先成功写入 storage.session 的租约；`tabs.close` 同样占锁。`sys.cdp` 的 targetId 先归一到 page tabId，不能绕过锁。`sys.tabs.current` 不再 fallback 当前焦点；缺省只允许已注入的本轮 defaultTabId。
+- `execution-end`、finally、abort 通过 `browserExecution.js` 精确释放 sessionId+executionId：先撤销后续派发，再取消 sys/断开 CDP，最后放锁。SW 首次执行前与 offscreen 活动执行对账，恢复失败不继续派发。浏览器重启/扩展重载会清空 storage.session 租约与 session 政策覆盖。
+- `action` mutate 与关键 `sys` 副作用走双门：offscreen `gatedDispatch`（分类 + journal + 审批 + one-shot ticket）后，SW `consumeDispatchTicket` 再分类一次。已知付款即使有 ticket 也不派发。Guarded 的 raw eval/CDP 在 SW 再拦一次。
+- `sys.eval/waitFor/fetch(as:page)` 使用 documentIds 定向，可以传 documentId/expectedUrl。未知写入回执要先观察再决定，不能自动重放；确认动作后的观察失败单列 observationError。
+- 预览页 workLock 仍是同 session 画布 UI 锁，不与 live tab 租约合并。
 - 合并 snapshot 后 `controls` 再截到 80 条。
-- `fill_form` 按 `frameId` 拆开发送。
+- `fill_form` 按 `frameId` 拆开发送，出现失败/未知回执停止后续 frame；返回已知的部分结果，不伪装为原子事务。
 - `wait` + `text`（无 `ref`）对所有 frame 并行等，任一命中即停。
 - `name` 回退：内部 `op: resolve_name`（不在模型 schema 里）。
 - 限制页（`chrome://`、`edge://`、`about:`、`devtools://`、`view-source:`、Web Store、扩展页）→ `NEED_PAGE`。

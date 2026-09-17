@@ -23,7 +23,7 @@ sidepanel workspaceRpc('sendMessage')
 | `vnext/sessionWorkspace/` | 领域：store、group、artifact、FS、prompt、tools、office、sendMessage |
 | `vnext/primitives/` | `acquire` / `run` 宿主原语（工具层调用，不是模型直接 API） |
 | `vnext/adapters/` | QuickJS `codeRuntime`、sandboxClient、`vendor/ai-sdk-loader.mjs` |
-| `vnext/host/` | `workspaceRpc` 客户端、`userStop`、`rpcError`、`browserSysHost`（SW `workspace_sys`）、`tabLease`、`taskScheduler` |
+| `vnext/host/` | `workspaceRpc`、`browserSysHost`、`tabLease`、`taskScheduler`、`accessPolicy`、`riskClassify`、`dispatchTicket`、`callJournal`、`operationGate`、`postcondition` |
 | `vnext/skills/` | 打包 playbook（`SKILL.md` + `skillSource.js`）。**不是工具** |
 | `llm.js` `provider.js` `modelCatalog.js` | BYOK OpenAI-compatible HTTPS；每轮 `resolveLanguageModel` |
 | `webAcquireSettings.js` | `pagewand_web_acquire` |
@@ -49,7 +49,15 @@ sidepanel workspaceRpc('sendMessage')
 | `sys.cdp` | CDP 管道：`{ method, params }` 自动 attach；`action: attach\|detach\|events\|targets` |
 | `sys.download` / `sys.screenshot` | `chrome.downloads.download`：本 profile cookie jar + 本机 IP，无标签 Referer（不是 extension fetch）。登录态/Referer/验证码优先 `as:'page'`。截图为视口合成 |
 
-`eval` / page `fetch` 走 `chrome.userScripts.execute`。`sys.cdp` 走 `chrome.debugger`（一条管道，不是网络/PDF 产品）。DevTools 已挂上时会 `CDP_BUSY`。返回值必须能 JSON 序列化。`eval` / page `fetch` / `cdp` 只允许 http(s) 可注入页；扩展预览页返回 `NEED_PAGE`（MAIN world 不能碰到 `chrome.*`）。除 `tabs.current` 外，未带 `tabId`/`defaultTabId` 也是 `NEED_PAGE`。`eval` / page `fetch` / `tabs.navigate|reload|focus` / `cdp` 会先占 SW tab 租约，他 session 占用同一 tab → `TAB_LEASED`。`SYS_ABORTED` / `SYS_TIMEOUT` 表示等待结束，不表示副作用已撤销。可见标签截图失败为 `TAB_NOT_VISIBLE` / `TARGET_CHANGED`。`targetId` 会先经 `getTargets` 校验 URL。
+`eval` / page `fetch` 走 `chrome.userScripts.execute`。`sys.cdp` 走 `chrome.debugger`（一条管道，不是网络/PDF 产品）。DevTools 已挂上时会 `CDP_BUSY`。返回值必须能 JSON 序列化。`eval` / page `fetch` / `cdp` 只允许 http(s) 可注入页；扩展预览页返回 `NEED_PAGE`（MAIN world 不能碰到 `chrome.*`）。包括 `tabs.current` 在内，需要目标标签的操作未带 `tabId`/`defaultTabId` 都是 `NEED_PAGE`，不回退焦点标签。`eval` / `waitFor` / page `fetch` / `tabs.navigate|reload|focus|close` / `cdp` 会先占 storage.session 中的 tab 租约，他 session 占用同一 tab → `TAB_LEASED`。可变 `sys` 还要过 Access Policy + journal ticket：Guarded 拒绝 raw eval/可变 CDP；Full Access best-effort 放行，**不能**当成绝不付款/删除。`SYS_ABORTED` / `SYS_TIMEOUT` 表示等待结束，不表示副作用已撤销。可见标签截图失败为 `TAB_NOT_VISIBLE` / `TARGET_CHANGED`。`targetId` 经 `getTargets` 校验 URL 并归一到 page tabId，按 execution 归属与释放 CDP。`eval/waitFor/page-fetch` 用 documentIds 定向，可传 documentId/expectedUrl 校验先前观察。
+
+宿主政策与 journal（不是 task，不是 audit）：
+
+- 模式：`guarded` | `full`。默认 Guarded。`pagewand_access_policy`（local）+ `pagewand_access_policy_session`（session）。
+- 分类在 `riskClassify.js`：忽略模型 `risk`/`intent`。已知付款 deny；已知删除要 `approvalGate` one-shot（UI 不是 clarify）。
+- `operationGate.gatedDispatch` 在 offscreen 写 journal、等人、发 ticket；SW `consumeDispatchTicket` 是最后一道门。
+- journal 库：`pawwork-call-journal-v1`。启动把未收束的 `dispatched` 标 `unknown`。verified 不重放。
+- `postcondition.js` 只认宿主事实。不可证明的 POST/send → `needs_human`。
 
 `sys.fetch` / `sys.screenshot` 可传 `saveTo: '/scratch/…' | '/artifacts/…'`：宿主写入 guest FS，返回文件回执；`run` 登记交付物。调用携带身份与截止时间，错误保留 `code`。停止可中止扩展 fetch，但已派发的页面/CDP 副作用可能已发生，超时后需查证状态。
 
@@ -77,7 +85,9 @@ Guest FS（`fs.js`）：
 
 清单：`canvasInventory.js` 的 `SESSION_TOOL_NAMES`（含 `task`）。`toolSchedule.js` 原样返回该列表。
 
-System prompt 原则在 `prompt.js`（`SYSTEM_PROMPT_VERSION = 'v10-durable-task'`）。具体配方在 skills，按需 `inspect view=skill` 载入，不靠宿主关键词路由。
+System prompt 原则在 `prompt.js`（`SYSTEM_PROMPT_VERSION = 'v12-truthful-status'`：UNKNOWN / STALE / documentId；宿主状态不读思考）。具体配方在 skills，按需 `inspect view=skill` 载入，不靠宿主关键词路由。侧栏 current/next **不**写进 prompt。
+
+交付物打开：`openClassify.js` 负责 kind；`artifactCapability.js` 是家族 × 打开面 × 徽标的单一映射。主 chip 是 `docs` / `data` / `web` / `media` / `files`；`design`/`slides` 只兼容旧数据。未知 HTML/JS 不得在 extension origin 执行。仅文件名的 `.html` 保持中性，不假装 proven site/doc；首次打开分类后可持久化 `capability` hint。site 本波 = 可编辑/可渲染的静态 HTML+CSS + 宿主 postMessage bridge（`src/sandbox/siteFrame.*`），**不是**任意 guest JS。
 
 ## 当前工具清单
 
@@ -86,12 +96,12 @@ System prompt 原则在 `prompt.js`（`SYSTEM_PROMPT_VERSION = 'v10-durable-task
 | `inspect` | `sessionWorkspace/tools.js` | 只读查找：`view` = groups / group / item / artifacts / files / skill / workbook / range / html / sys |
 | `acquire` | 同上 | 把未知公开网带进会话：search / fetch / map / crawl / image / note。已打开或需登录/验证码的 URL 走 `run` + `sys.fetch as:"page"` |
 | `run` | 同上 | 访客机：sandbox JS/TS + fs + `sys`。`op` 是登记 ABI（persist / scratch / register workbook\|document\|html）。日常改画布走 sheet / doc / web |
-| `clarify` | 同上 | 暂停本轮：问题或 plan 卡。用户 `answerClarify` 后继续 |
+| `clarify` | 同上 | 模型主动提问或 plan 卡。删除/模糊提交的门是宿主 `answerApproval`，不依赖模型调用 clarify |
 | `action` | 同上 | 本轮 `activeTab` 的显式 `tabId` live-page（snapshot 后同代 mutate）。无 tabId → `NEED_EXPLICIT_TAB`。运输见 [../AGENTS.md](../AGENTS.md) |
 | `task` | `sessionWorkspace/taskTool.js` | 可选 durable 进度：`inspect` / `plan` / `checkpoint` / `wait` / `complete` / `schedule`。`wait`/`complete` 成功即 yield。`schedule` 只建未来/周期任务 |
 | `sheet` | `sessionWorkspace/officeTools.js` | Univer 表：`act` = read / write / snapshot |
 | `doc` | 同上 | Univer 文档：`act` = read / write |
-| `web` | 同上 | `data-paw-kind=site`：`act` = read / write / undo / clone / capture |
+| `web` | 同上 | `data-paw-kind=site`：`act` = read / write / undo / clone / capture。画布是静态 HTML+CSS；宿主 bridge 在 sandbox frame，用户脚本仍被剥 |
 
 Office 无对应 canvas 时返回 `NO_CANVAS`（工具仍在 schema 里）。没有 Design/Slides（tldraw）。网站复刻走 `web act=clone`。
 
@@ -113,7 +123,7 @@ BYOK：`llm.js` → `pagewand_providers`。`run`：`vnext/adapters`（QuickJS / 
 |------|------|
 | `op` | `snapshot` \| `fill_form` \| `click` \| `fill` \| `select` \| `press` \| `scroll` \| `wait` |
 | `ref` | 最近一次 snapshot 的不透明控件 id，如 `f0.a12` |
-| `rev` | 同代快照世代，如 `t7` |
+| `rev` | 不透明快照标识；所有 mutate 必填，不要自行拼接 |
 | `name` | 无障碍名回退（label / aria-label / placeholder） |
 | `value` | `fill` / `select` |
 | `fields` | `fill_form`：`[{ ref, value }]` 或 `[{ name, value }]` |
@@ -132,6 +142,13 @@ BYOK：`llm.js` → `pagewand_providers`。`run`：`vnext/adapters`（QuickJS / 
 | `FILE_INPUT` | `input[type=file]`，脚本填不了 |
 | `NEED_PAGE` | 限制页 / 无 host / 空结果 / frame 发不出去 |
 | `NEED_EXPLICIT_TAB` | action 未带本轮 `tabId`（不再默默打 Chrome 当前焦点标签） |
-| `TAB_LEASED` | 该 tab 正被另一 session 的 execution 占用（SW 内存租约） |
+| `TAB_LEASED` | 该 tab 正被另一 session 的 execution 占用（storage.session 租约，跨 SW 重启、非跨浏览器重启） |
 | `NO_TARGET` | 无名无 ref、name 零命中、wait 超时、无匹配 option |
 | `BAD_INPUT` | 缺 `op` / 缺 `fields` / 缺 `value` 等 |
+
+### BOT 执行边界补充
+
+普通 send 不建 task；同 session 在第一次 await 之前预占执行槽。旧 execution 的 abort 不得命中新执行。
+`RPC_OUTCOME_UNKNOWN` / `SYS_OUTCOME_UNKNOWN` / `ACTION_OUTCOME_UNKNOWN` 不是失败证明；先读取页面或交付物后置状态，再决定下一步。传输层不替模型重放写入。
+`action` 确认回执不等于目标已实现；`observationError` 表示动作已有回执，但后续 snapshot 未成功。task complete 的 evidence 仍由模型填写，尚无宿主后置条件引擎。
+所有新增 RPC 均需修改显式清单及对应 bot-rpc 回归；禁止恢复反射分发。

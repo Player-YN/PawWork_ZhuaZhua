@@ -18,6 +18,7 @@ import { SessionWorkspaceStore } from '../src/agent/vnext/sessionWorkspace/store
 import { createTask } from '../src/agent/vnext/sessionWorkspace/tasks.js';
 import { formatTabLeaseMessage, tabLeasePayload } from '../src/sidepanel/tabLeaseUi.js';
 import { I18N } from '../src/sidepanel/i18n.js';
+import { installTestPolicy, seedAutoTicket } from './helpers/policyTestKit.mjs';
 
 function t(key) {
   return I18N.zh[key] || key;
@@ -77,9 +78,9 @@ test('page action without tabId is NEED_EXPLICIT_TAB and does not register a lea
 });
 
 test('resolvePageActionTab no longer silently queries the Chrome focused tab', async () => {
-  const src = await readFile(new URL('../src/background.js', import.meta.url), 'utf8');
+  const src = await readFile(new URL('../src/agent/vnext/host/pageActionHost.js', import.meta.url), 'utf8');
   const start = src.indexOf('async function resolvePageActionTab');
-  const end = src.indexOf('const pageActionRevByTab');
+  const end = src.indexOf('async function decorateTabLeaseDenied');
   assert.ok(start >= 0 && end > start);
   const fn = src.slice(start, end);
   assert.doesNotMatch(fn, /active:\s*true/);
@@ -92,6 +93,7 @@ test('runDueTasks skips a due task whose target tab is leased by another session
   const leases = new Map();
   const service = new SessionWorkspaceService({
     store,
+    memoryJournal: true,
     callModel: async () => ({ text: 'should not run' }),
     peekTabLease: (tabId) => leases.get(Number(tabId)) || null
   });
@@ -114,8 +116,11 @@ test('runDueTasks skips a due task whose target tab is leased by another session
 });
 
 test('sys eval/page-fetch/cdp honor tab leases; list and extension fetch do not', async () => {
+  installTestPolicy({ mode: 'full' });
   resetTabLeases();
   globalThis.chrome = {
+    webNavigation: { getFrame: async ({tabId, frameId}) => ({ frameId,
+      documentId: `doc-${tabId}-${frameId}`, documentLifecycle: 'active', url: 'https://example.com' }) },
     tabs: {
       get: async (id) => ({ id, url: 'https://example.com', title: 'Example' }),
       create: async ({ url }) => ({ id: 77, url, title: 'New' }),
@@ -136,12 +141,9 @@ test('sys eval/page-fetch/cdp honor tab leases; list and extension fetch do not'
     }
   };
   const { handleWorkspaceSys } = await import('../src/agent/vnext/host/browserSysHost.js');
-  const first = await handleWorkspaceSys({
-    sessionId: 's1',
-    executionId: 'e1',
-    op: 'eval',
-    params: { tabId: 55, code: 'return 1' }
-  });
+  const firstReq = { sessionId: 's1', executionId: 'e1', op: 'eval', params: { tabId: 55, code: 'return 1' } };
+  Object.assign(firstReq, await seedAutoTicket(firstReq, { channel: 'sys', op: 'eval', params: firstReq.params }));
+  const first = await handleWorkspaceSys(firstReq);
   assert.equal(first.ok, true);
   const blocked = await handleWorkspaceSys({
     sessionId: 's2',
@@ -181,12 +183,9 @@ test('sys eval/page-fetch/cdp honor tab leases; list and extension fetch do not'
   assert.equal(stealOpen.code, 'TAB_LEASED');
 
   releaseTabLeasesByExecution('s1', 'e1');
-  const after = await handleWorkspaceSys({
-    sessionId: 's2',
-    executionId: 'e2',
-    op: 'cdp',
-    params: { tabId: 55, action: 'attach' }
-  });
+  const afterReq = { sessionId: 's2', executionId: 'e2', op: 'cdp', params: { tabId: 55, action: 'attach' } };
+  Object.assign(afterReq, await seedAutoTicket(afterReq, { channel: 'sys', op: 'cdp', params: afterReq.params }));
+  const after = await handleWorkspaceSys(afterReq);
   assert.equal(after.ok, true);
   resetTabLeases();
 });

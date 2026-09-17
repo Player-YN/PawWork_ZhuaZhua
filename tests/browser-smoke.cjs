@@ -11,19 +11,23 @@ const path = require('node:path');
   const loadRoot = process.env.PAW_LOAD_ROOT ? path.resolve(process.env.PAW_LOAD_ROOT) : root;
   const output = path.join(root, 'output/playwright');
   fs.mkdirSync(output, { recursive: true });
-  const evidence = { storage: [], sandbox: [], errors: [], console: [] };
+  const evidence = { status: 'running', storage: [], sandbox: [], errors: [], console: [] };
   const server = require('node:http').createServer((req, res) => {
     res.setHeader('content-type', 'text/plain');
     if (req.url === '/slow') { res.write('partial'); return; }
     res.end('browser-network-ok');
   });
-  const context = await chromium.launchPersistentContext(path.join(output, 'smoke-profile'), {
-    headless: true, channel: 'chromium',
+  const profile = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'pawwork-smoke-'));
+  const context = await chromium.launchPersistentContext(profile, {
+    headless: process.env.PAW_HEADLESS !== 'false',
+    ...(process.env.PAW_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PAW_CHROMIUM_EXECUTABLE } : { channel: 'chromium' }),
     args: [`--disable-extensions-except=${loadRoot}`, `--load-extension=${loadRoot}`]
   });
   try {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+    const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker', { timeout: 15000 }).catch(() => {
+      throw new Error('Extension service worker did not start. Check extension loading support and managed policies; do not bypass organization policies.');
+    });
     const id = new URL(worker.url()).hostname;
     const page = await context.newPage();
     page.on('pageerror', error => evidence.errors.push(error.message));
@@ -99,6 +103,11 @@ const path = require('node:path');
         return { conflict, content: read.content, revision: saved.artifact.revision };
       } finally { await workspaceRpc('deleteSession', { sessionId }); }
     });
+    evidence.rpcBoundary = await page.evaluate(async () => {
+      const scheduler = await chrome.runtime.sendMessage({ target: 'pawwork-background', action: 'workspace_rpc', method: 'getTaskSchedule', params: {} });
+      const bypass = await chrome.runtime.sendMessage({ target: 'pawwork-offscreen', action: 'workspace_rpc_execute', method: 'listSessions', params: {} });
+      return { scheduler, bypass };
+    });
     evidence.network = await page.evaluate(async (port) => {
       const { handleWorkspaceSys } = await import('./agent/vnext/host/browserSysHost.js');
       const capabilities = await handleWorkspaceSys({ op: 'capabilities' });
@@ -128,6 +137,8 @@ const path = require('node:path');
     assert.equal(evidence.transfer.content, 'hello');
     assert.equal(evidence.transfer.artifactCount, 1);
     assert.equal(evidence.senderGate.code, 'SYS_DENIED');
+    assert.equal(evidence.rpcBoundary.scheduler.code, 'RPC_DENIED');
+    assert.equal(evidence.rpcBoundary.bypass.code, 'RPC_DENIED');
     assert.equal(evidence.network.data, 'browser-network-ok');
     assert.equal(evidence.network.timeout.code, 'SYS_TIMEOUT');
     assert.equal(evidence.versioning.conflict, 'ARTIFACT_CONFLICT');
@@ -135,11 +146,17 @@ const path = require('node:path');
     assert.equal(evidence.sleep.exitStatus, 0);
     assert.ok(evidence.sleep.value >= 100, `guest sleep waited ${evidence.sleep.value}ms`);
     assert.equal(evidence.waitForRouting.code, 'NEED_PAGE');
-    console.log('Browser storage and sandbox smoke checks passed.');
+    evidence.status = 'passed';
+    console.log('Browser storage, sandbox and RPC boundary smoke checks passed.');
+  } catch (error) {
+    evidence.status = 'failed';
+    evidence.failure = error.message;
+    throw error;
   } finally {
     fs.writeFileSync(path.join(output, 'browser-evidence.json'), JSON.stringify(evidence, null, 2));
     console.log(JSON.stringify(evidence, null, 2));
     await context.close();
+    fs.rmSync(profile, { recursive: true, force: true });
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }
