@@ -36,19 +36,19 @@ export const SYS_HELP = Object.freeze({
     'sys.help': 'This catalog (sync).',
     'sys.capabilities': 'Live browser capability probe: userScripts availability/reason, debugger, capture, downloads and transfer limits. Check this before choosing an execution route.',
     'sys.tabs.list': 'Open tabs: id, url, title, active, audible, groupId, injectable.',
-    'sys.tabs.current': 'Focus tab for this turn (tabId/defaultTabId), else the Chrome active tab.',
-    'sys.tabs.frames': '{ tabId? } → frames in that tab (webNavigation).',
+    'sys.tabs.current': 'Explicit tab for this turn (tabId/defaultTabId); no fallback to the Chrome active tab. Use tabs.list to select a target.',
+    'sys.tabs.frames': '{ tabId? } → frames including documentId/documentLifecycle. tabId may only be omitted when this turn supplies defaultTabId.',
     'sys.tabs.open': '{ url, active? } — http(s) or about:blank.',
     'sys.tabs.navigate': '{ url, tabId? }',
     'sys.tabs.reload': '{ tabId? }',
     'sys.tabs.close': '{ tabId? }',
     'sys.tabs.focus': '{ tabId? }',
     'sys.eval':
-      '{ code, world?: "MAIN"|"USER", tabId?, frameId? }. code is an async function body; return a JSON value.',
+      '{ code, world?: "MAIN"|"USER", tabId?, frameId?, documentId?, expectedUrl? }. code is an async function body; return a JSON value.',
     'sys.waitFor':
-      '{ code?|selector?|text?, world?, tabId?, frameId?, timeoutMs?, pollMs?, stableMs? }. Polls inside the page until the predicate is met, then returns its JSON value. code = async function body returning the value to wait for (truthy = done). selector = wait until document.querySelector matches. text = wait until document.body text contains it. No ~20s single-eval cap (timeoutMs up to 120000); pollMs is the interval; stableMs > 0 waits until the value stops changing for that long (use it for a streaming answer to settle). Prefer this over hand-rolled eval poll loops.',
+      '{ code?|selector?|text?, world?, tabId?, frameId?, documentId?, expectedUrl?, timeoutMs?, pollMs?, stableMs? }. Polls inside the page until the predicate is met, then returns its JSON value. code = async function body returning the value to wait for (truthy = done). selector = wait until document.querySelector matches. text = wait until document.body text contains it. No ~20s single-eval cap (timeoutMs up to 120000); pollMs is the interval; stableMs > 0 waits until the value stops changing for that long (use it for a streaming answer to settle). Prefer this over hand-rolled eval poll loops.',
     'sys.fetch':
-      '{ as: "page"|"extension", url, tabId?, init?, saveTo? }. Default for user-asked open/save/read: as:"page" on their tab (MAIN-world fetch — cookies + origin + Referer; same public IP as this Chrome). as:"extension" is credentials:omit (no cookies) — only when they need the extension network or the page cannot fetch (CORS). Omit as and the host currently treats it as extension — always pass as. saveTo writes /scratch or /artifacts and returns a file receipt. Never acquire/cloud those URLs.',
+      '{ as: "page"|"extension", url, tabId?, frameId?, documentId?, expectedUrl?, init?, saveTo? }. Default for user-asked open/save/read: as:"page" on their tab (MAIN-world fetch — cookies + origin + Referer; same public IP as this Chrome). as:"extension" is credentials:omit (no cookies) — only when they need the extension network or the page cannot fetch (CORS). Omit as and the host currently treats it as extension — always pass as. saveTo writes /scratch or /artifacts and returns a file receipt. Never acquire/cloud those URLs.',
     'sys.cdp':
       'CDP pipe. Send: { method, params?, tabId?, targetId? } (auto-attach). Session: { action: "attach"|"detach"|"events"|"targets", tabId?, targetId?, clear? }. Already-fired request URLs: attach + Network.enable, then action:"events". Do not dump media via Network.getResponseBody (cap ~6MB TOO_LARGE); hand URLs to sys.fetch as:"page".',
     'sys.download':
@@ -74,12 +74,13 @@ export const SYS_MODEL_HINT = [
   'await sys.capabilities() → live browser availability and limits.',
   'sys.tabs.list|current|frames({tabId?})',
   'sys.tabs.open({url,active?}) sys.tabs.navigate({url,tabId?}) sys.tabs.reload({tabId?}) sys.tabs.close({tabId?}) sys.tabs.focus({tabId?})',
-  'sys.eval({world:"MAIN"|"USER", code, tabId?, frameId?}) — async function body on http(s) pages only; return JSON.',
-  'sys.waitFor({code|selector|text, world?, tabId?, frameId?, timeoutMs?, pollMs?, stableMs?}) — poll in the page until code returns truthy / selector matches / text appears, then return its JSON value. No ~20s eval cap (timeoutMs up to 120000). stableMs>0 waits for a streaming value to settle. Use this instead of manual sleep+eval poll loops.',
-  'sys.fetch({as:"page"|"extension", url, tabId?, init?, saveTo?}) — default as:"page" on the user tab for any URL they asked to open/save/read that needs their session, or may be cookie/referrer/IP-bound, or may show captcha. This Chrome page+extension fetch share the user public IP; acquire/cloud/provider fetch do not. as:"extension" is no cookies — only for cookie-less extension network or when the page cannot fetch (CORS). Always pass as (omit currently means extension). saveTo:"/scratch/…" or "/artifacts/…" keeps bytes out of context.',
+  'sys.eval({world:"MAIN"|"USER", code, tabId?, frameId?, documentId?, expectedUrl?}) — async function body on http(s) pages only; return JSON.',
+  'sys.waitFor({code|selector|text, world?, tabId?, frameId?, documentId?, expectedUrl?, timeoutMs?, pollMs?, stableMs?}) — poll in the page until code returns truthy / selector matches / text appears, then return its JSON value. No ~20s eval cap (timeoutMs up to 120000). stableMs>0 waits for a streaming value to settle. Use this instead of manual sleep+eval poll loops.',
+  'sys.fetch({as:"page"|"extension", url, tabId?, frameId?, documentId?, expectedUrl?, init?, saveTo?}) — default as:"page" on the user tab for any URL they asked to open/save/read that needs their session, or may be cookie/referrer/IP-bound, or may show captcha. This Chrome page+extension fetch share the user public IP; acquire/cloud/provider fetch do not. as:"extension" is no cookies — only for cookie-less extension network or when the page cannot fetch (CORS). Always pass as (omit currently means extension). saveTo:"/scratch/…" or "/artifacts/…" keeps bytes out of context.',
   'sys.cdp({method, params?, tabId?, targetId?}) auto-attach send. sys.cdp({action:"attach"|"detach"|"events"|"targets", tabId?, targetId?, clear?})',
   'Already-fired request URLs: cdp attach + Network.enable, then action:"events". Do not dump media via Network.getResponseBody (cap ~6MB).',
   'sys.download({url, filename?}) uses chrome.downloads on this profile (host cookies, no tab Referer) or sys.download({base64, filename, mimeType?}). Prefer page fetch when login/Referer/captcha matter.',
+  'Browser targets use explicit tabId/defaultTabId, never focused-tab fallback. eval/waitFor/page fetch pin the current documentId; pass documentId/expectedUrl from a prior observation when acting on that observation. TARGET_CHANGED means observe again. Lost receipts (SYS_OUTCOME_UNKNOWN/RPC_OUTCOME_UNKNOWN/ACTION_OUTCOME_UNKNOWN) are not proof of failure: inspect state before any retry. Execution end revokes future dispatch and releases tab/CDP ownership; it does not roll back already dispatched effects.',
   'sys.screenshot({tabId?, format?, saveTo?}) — visible target only.',
   'Errors carry e.code. SYS_ABORTED/SYS_TIMEOUT can mean an already dispatched action has completed: inspect state before retrying.'
 ].join(' ');

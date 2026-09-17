@@ -19,6 +19,7 @@ import { mergeSessionTranscriptMessages } from './sessionIsolation.js';
  * @property {(opts: object) => object} [serializeBehaviorTrajectory]
  * @property {(sessionId: string) => Promise<object>} [fetchWorkspaceSession]
  * @property {() => string|number|undefined} [getConstitutionVersion]
+ * @property {(json: string, filename: string, doc: object) => void} [saveFile]
  */
 
 /**
@@ -59,6 +60,13 @@ export function createTrajectoryUi(deps) {
         title: extra.title || task.title || ''
       });
     };
+    let warn = row.querySelector('.task-traj-warn');
+    if (!warn) {
+      warn = document.createElement('p');
+      warn.className = 'task-traj-warn';
+      row.appendChild(warn);
+    }
+    warn.textContent = deps.t('trajectoryThoughtWarn');
     deps.scrollTaskStream?.();
   }
 
@@ -111,16 +119,24 @@ export function createTrajectoryUi(deps) {
           title: workspace?.title || extra.title || activeSess.name || '',
           messages
         },
-        messages
+        messages,
+        sessionAudit: workspace?.audit
       });
       const json = deps.trajectoryToDownloadJson(doc);
       const sid = String(activeSess.id || runId || 'session').replace(/[^\w.-]+/g, '_').slice(0, 40);
       const filename = `pagewand-trajectory-${sid}.json`;
+      const thoughtWarn = deps.t('trajectoryThoughtWarn');
+      if (thoughtWarn) deps.showToast(thoughtWarn);
       const s = doc.summary || {};
       const doneMsg =
         currentLang === 'en'
           ? `Trajectory downloaded (${s.turns || 0} turns, ${s.tools || 0} tools)`
           : `轨迹已下载（${s.turns || 0} 轮 · ${s.tools || 0} 次工具）`;
+      if (typeof deps.saveFile === 'function') {
+        deps.saveFile(json, filename, doc);
+        deps.showToast(doneMsg);
+        return;
+      }
       const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
 
       const dataUrl =

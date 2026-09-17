@@ -7,6 +7,12 @@ import { createArtifactId } from './ids.js';
 import { assertArtifactOwned } from './auth.js';
 import { validateArtifactBytes, guessMimeFromName } from './artifactValidate.js';
 import { htmlWritePolicy } from './htmlWritePolicy.js';
+import { persistableCapabilityHint } from './artifactCapability.js';
+
+export const READ_ARTIFACT_HARD_CAP = 8 * 1024 * 1024;
+export const READ_ARTIFACT_PREVIEW_DEFAULT = 64 * 1024;
+export const READ_ARTIFACT_PREVIEW_HARD_CAP = READ_ARTIFACT_HARD_CAP;
+export const READ_ARTIFACT_DEFAULT_MAX = READ_ARTIFACT_PREVIEW_HARD_CAP;
 
 /**
  * @param {import('./store.js').SessionWorkspaceStore} store
@@ -68,7 +74,8 @@ export function createArtifact(store, fs, input) {
     createdAt: Date.now(),
     updatedAt: Date.now(),
     revision: 1,
-    size: bytes.byteLength
+    size: bytes.byteLength,
+    ...capabilityFields(name, mimeType, bytes)
   };
   const displayLabel = String(input.displayLabel || '').trim();
   if (displayLabel) record.displayLabel = displayLabel;
@@ -160,7 +167,8 @@ export function updateArtifactContent(store, fs, sessionId, artifactId, content,
     updatedAt: Date.now(),
     size: bytes.byteLength,
     canUndo: true,
-    revision: revision + 1
+    revision: revision + 1,
+    ...capabilityFields(name, check.mimeType, bytes)
   };
   store.put('artifacts', artifactId, next);
   reindexArtifacts(store, rec.sessionId);
@@ -239,7 +247,23 @@ export function listArtifacts(store, sessionId) {
     .keys('artifacts')
     .map((id) => store.get('artifacts', id))
     .filter((a) => a && a.sessionId === sessionId)
-    .sort((a, b) => a.createdAt - b.createdAt);
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map((rec) => withListCapabilityHint(rec));
+}
+
+function withListCapabilityHint(rec) {
+  if (rec.capability?.proven && rec.contentKind) return rec;
+  const hint = persistableCapabilityHint({
+    name: rec.name,
+    mimeType: rec.mimeType,
+    contentKind: rec.contentKind,
+    capability: rec.capability
+  });
+  return {
+    ...rec,
+    contentKind: rec.contentKind || hint.contentKind,
+    capability: rec.capability || hint
+  };
 }
 
 /**
@@ -418,6 +442,11 @@ export function bytesFromBase64(b64) {
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+function capabilityFields(name, mimeType, bytes) {
+  const hint = persistableCapabilityHint({ name, mimeType, bytes });
+  return { contentKind: hint.contentKind, capability: hint };
 }
 
 export function bytesFromRpcContent({ content, base64 } = {}) {

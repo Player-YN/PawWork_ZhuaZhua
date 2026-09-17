@@ -1,0 +1,113 @@
+/**
+ * Session-scoped append-only audit ring. Not a call journal, not exactly-once.
+ * Host facts only: task / lease / abort / deadline / STALE / action outcome.
+ * Never stores guest sys code or large bodies.
+ */
+
+export const SESSION_AUDIT_SCHEMA = 'pawwork.session-audit/v1';
+export const SESSION_AUDIT_CAP = 200;
+
+const KEEP = new Set([
+  'task-lifecycle',
+  'lease',
+  'abort',
+  'deadline',
+  'stale-ref',
+  'action-outcome',
+  'execution-start',
+  'execution-end'
+]);
+
+export function sessionAuditKey(sessionId) {
+  return `audit:${String(sessionId || '')}`;
+}
+
+export function normalizeAuditEvent(ev = {}) {
+  const type = String(ev.type || '');
+  if (KEEP.has(type)) return { ...ev, type };
+  if (type === 'task-updated' || type === 'task-schedule-changed') {
+    return {
+      ...ev,
+      type: 'task-lifecycle',
+      op: ev.op || type,
+      taskId: ev.taskId || ev.task?.taskId,
+      status: ev.status || ev.task?.status,
+      nextAction: ev.nextAction || ev.task?.nextAction,
+      dueAt: ev.dueAt || ev.task?.dueAt
+    };
+  }
+  if (type === 'tool-result') {
+    const code = String(ev.code || ev.result?.code || '');
+    const name = String(ev.name || ev.tool || '');
+    if (code === 'STALE_REF') return { ...ev, type: 'stale-ref', recovered: ev.recovered === true };
+    if (code === 'TAB_LEASED') return { ...ev, type: 'lease', op: 'conflict', code };
+    if (code === 'SYS_TIMEOUT') return { ...ev, type: 'deadline', code };
+    if (name === 'action') return { ...ev, type: 'action-outcome', ok: ev.ok !== false, code };
+    return null;
+  }
+  if (type === 'error' && String(ev.code || '') === 'SYS_TIMEOUT') {
+    return { ...ev, type: 'deadline' };
+  }
+  return null;
+}
+
+export function slimAuditEvent(ev = {}) {
+  const normalized = normalizeAuditEvent(ev);
+  if (!normalized) return null;
+  const type = String(normalized.type || '');
+  if (!KEEP.has(type)) return null;
+  ev = normalized;
+  const row = { type, ts: Number(ev.ts) || Date.now() };
+  if (ev.op) row.op = String(ev.op).slice(0, 40);
+  if (ev.status) row.status = String(ev.status).slice(0, 40);
+  if (ev.ok != null) row.ok = ev.ok === true;
+  if (ev.code) row.code = String(ev.code).slice(0, 64);
+  if (ev.taskId) row.taskId = String(ev.taskId).slice(0, 160);
+  if (ev.executionId) row.executionId = String(ev.executionId).slice(0, 80);
+  if (ev.sessionId) row.sessionId = String(ev.sessionId).slice(0, 80);
+  if (ev.tabId != null && ev.tabId !== '') row.tabId = ev.tabId;
+  if (ev.title) row.title = String(ev.title).slice(0, 120);
+  if (ev.holderSessionId) row.holderSessionId = String(ev.holderSessionId).slice(0, 80);
+  if (ev.name) row.name = String(ev.name).slice(0, 80);
+  if (ev.recovered === true) row.recovered = true;
+  if (ev.reason) row.reason = String(ev.reason).slice(0, 40);
+  if (ev.kind) row.kind = String(ev.kind).slice(0, 24);
+  if (ev.matched === false) row.matched = false;
+  if (ev.dueAt) row.dueAt = String(ev.dueAt).slice(0, 80);
+  if (ev.nextAction) row.nextAction = String(ev.nextAction).slice(0, 200);
+  return row;
+}
+
+export function appendSessionAudit(store, sessionId, ev) {
+  const sid = String(sessionId || ev?.sessionId || '');
+  if (!store || !sid) return null;
+  const row = slimAuditEvent({ ...ev, sessionId: sid });
+  if (!row) return null;
+  const key = sessionAuditKey(sid);
+  const prev = store.get('meta', key);
+  const events = Array.isArray(prev?.events) ? prev.events.slice() : [];
+  events.push(row);
+  store.put('meta', key, {
+    schema: SESSION_AUDIT_SCHEMA,
+    sessionId: sid,
+    events: events.length > SESSION_AUDIT_CAP ? events.slice(events.length - SESSION_AUDIT_CAP) : events,
+    updatedAt: Date.now()
+  });
+  return row;
+}
+
+export function readSessionAudit(store, sessionId) {
+  const sid = String(sessionId || '');
+  if (!store || !sid) return { schema: SESSION_AUDIT_SCHEMA, sessionId: sid, events: [] };
+  const rec = store.get('meta', sessionAuditKey(sid));
+  const events = Array.isArray(rec?.events) ? rec.events : [];
+  return {
+    schema: SESSION_AUDIT_SCHEMA,
+    sessionId: sid,
+    events,
+    updatedAt: rec?.updatedAt || 0
+  };
+}
+
+export const TRAJECTORY_THOUGHT_WARNING =
+  'Trajectory includes model thought text and may contain sensitive information.';

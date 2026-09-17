@@ -52,7 +52,10 @@
          never occupy layout (a hidden #page pushed #imageWrap off-screen). */
       #page[hidden],
       #imageWrap[hidden],
-      #fileCard[hidden] {
+      #fileCard[hidden],
+      #textWrap[hidden],
+      #mediaWrap[hidden],
+      #inspector[hidden] {
         display: none;
       }
       #imageWrap {
@@ -85,7 +88,8 @@
         text-align: center;
         color: #444;
       }
-      #fileCard:not([hidden]) {
+      #fileCard:not([hidden]),
+      #inspector:not([hidden]) {
         display: block;
       }
       .file-card-name {
@@ -97,6 +101,65 @@
       .file-card-meta {
         font-size: 12px;
         color: #6b6b6b;
+      }
+      #textWrap {
+        display: none;
+        height: calc(100% - 48px);
+        overflow: auto;
+        padding: 16px 20px 32px;
+        box-sizing: border-box;
+        background: #fff;
+      }
+      #textWrap:not([hidden]) {
+        display: block;
+      }
+      #textBody {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color: #1a1a1a;
+      }
+      #textTrunc {
+        margin: 0 0 12px;
+        font-size: 12px;
+        color: #9a3412;
+      }
+      #mediaWrap {
+        display: none;
+        height: calc(100% - 48px);
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        box-sizing: border-box;
+        background: #111;
+      }
+      #mediaWrap:not([hidden]) {
+        display: flex;
+      }
+      #mediaWrap audio,
+      #mediaWrap video {
+        max-width: 100%;
+        max-height: 100%;
+      }
+      #inspector {
+        display: none;
+        padding: 32px 20px;
+        max-width: 520px;
+      }
+      #inspector dl {
+        margin: 16px 0 0;
+        display: grid;
+        grid-template-columns: 88px 1fr;
+        gap: 8px 12px;
+        font-size: 13px;
+      }
+      #inspector dt {
+        color: #6b6b6b;
+      }
+      #inspector dd {
+        margin: 0;
+        word-break: break-all;
       }
       body.is-ready #boot {
         display: none;
@@ -119,6 +182,12 @@
       <img id="image" alt="" />
     </div>
     <div id="fileCard" hidden></div>
+    <div id="textWrap" hidden>
+      <p id="textTrunc" hidden></p>
+      <pre id="textBody"></pre>
+    </div>
+    <div id="mediaWrap" hidden></div>
+    <div id="inspector" hidden></div>
     <script type="module" src="artifactPreview.js"></script>
   </body>
 </html>

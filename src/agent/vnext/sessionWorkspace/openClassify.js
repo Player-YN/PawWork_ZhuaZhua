@@ -15,7 +15,12 @@ export const UTF8_OPEN_KINDS = new Set([
   'csv',
   'tsv',
   'markdown',
-  'text'
+  'text',
+  'json',
+  'yaml',
+  'javascript',
+  'typescript',
+  'css'
 ]);
 export const BINARY_OPEN_KINDS = new Set(['pdf', 'xlsx', 'docx', 'pptx', 'zip', 'png', 'jpeg', 'gif', 'webp', 'binary']);
 
@@ -51,79 +56,8 @@ export function isUtf8OpenKind(kind) {
 
 export const RASTER_OPEN_KINDS = new Set(['png', 'jpeg', 'gif', 'webp']);
 
-const RASTER_MIME = {
-  png: 'image/png',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp'
-};
-
-const RASTER_EXT = {
-  png: '.png',
-  jpeg: '.jpg',
-  gif: '.gif',
-  webp: '.webp'
-};
-
 export function isRasterOpenKind(kind) {
   return RASTER_OPEN_KINDS.has(String(kind || ''));
-}
-
-/**
- * Viewer plan for artifactPreview.html (generic viewer, not a layout editor).
- * view=image: raster bytes render as <img>; no HTML write-back; download = original bytes.
- * view=pdf: HTML reconstruction is display-only; download = original bytes; never save back.
- * view=binary: opaque bytes (zip/pptx/…) get a file card + byte-true download, not a blank page.
- * view=html: existing HTML/text page path (save allowed).
- */
-export function previewViewForItem(item = {}) {
-  const cls = classifyOpenArtifact(item);
-  const kind = cls.kind;
-  const name = String(item.name || item.artifact?.name || '').trim();
-  if (isRasterOpenKind(kind)) {
-    return {
-      view: 'image',
-      kind,
-      canSave: false,
-      mimeType: RASTER_MIME[kind],
-      downloadName: ensureExt(name || `image${RASTER_EXT[kind]}`, RASTER_EXT[kind])
-    };
-  }
-  if (kind === 'pdf') {
-    return {
-      view: 'pdf',
-      kind,
-      canSave: false,
-      mimeType: 'application/pdf',
-      downloadName: ensureExt(name || 'file.pdf', '.pdf')
-    };
-  }
-  if (kind === 'binary' || kind === 'zip' || kind === 'pptx' || kind === 'xlsx' || kind === 'docx') {
-    // xlsx/docx normally route to their canvases before this viewer; keep a
-    // byte-true fallback so opaque bytes never render as a blank HTML page.
-    return {
-      view: 'binary',
-      kind,
-      canSave: false,
-      mimeType:
-        String(item.mimeType || item.mime || item.artifact?.mimeType || '') ||
-        'application/octet-stream',
-      downloadName: name || 'artifact.bin'
-    };
-  }
-  return {
-    view: 'html',
-    kind,
-    canSave: true,
-    mimeType: 'text/html',
-    downloadName: name || 'preview.html'
-  };
-}
-
-function ensureExt(name, ext) {
-  const n = String(name || '');
-  if (/\.[a-z0-9]{2,5}$/i.test(n)) return n;
-  return n + ext;
 }
 
 export function previewEntryForKind(kind) {
@@ -133,26 +67,6 @@ export function previewEntryForKind(kind) {
   if (k === 'json-canvas') return 'artifactPreview.html';
   if (k === 'html-site') return 'site.html';
   return 'artifactPreview.html';
-}
-
-function isDocumentHtml(text) {
-  const s = String(text || '');
-  return /data-paw-kind\s*=\s*["']document["']/i.test(s) || /id=["']paw-document["']/i.test(s);
-}
-
-/**
- * Univer docs/sheet, site, and generic preview. No Design/Slides engine.
- */
-export function previewEntryForItem(item = {}) {
-  const cls = classifyOpenArtifact(item);
-  const text = String(item.text || item.content || '');
-  if (cls.kind === 'html-document' || isDocumentHtml(text)) {
-    return { entry: previewEntryForKind('html-document'), shell: '', kind: 'html-document' };
-  }
-  if (cls.kind === 'html-site') {
-    return { entry: 'site.html', shell: '', kind: 'html-site' };
-  }
-  return { entry: previewEntryForKind(cls.kind), shell: '', kind: cls.kind };
 }
 
 /**
@@ -240,8 +154,10 @@ function canvasForKind(kind) {
   if (DOCS_OPEN_KINDS.has(kind)) return 'docs';
   if (kind === 'json-canvas') return 'none';
   if (kind === 'html-site') return 'web';
-  if (kind === 'html') return 'none';
-  if (kind === 'png' || kind === 'jpeg' || kind === 'gif' || kind === 'webp' || kind === 'svg') {
+  if (kind === 'html' || kind === 'json' || kind === 'yaml' || kind === 'javascript' || kind === 'typescript' || kind === 'css') {
+    return 'none';
+  }
+  if (kind === 'png' || kind === 'jpeg' || kind === 'gif' || kind === 'webp' || kind === 'svg' || kind === 'audio' || kind === 'video') {
     return 'gallery';
   }
   if (kind === 'empty' || kind === 'binary' || kind === 'zip' || kind === 'pptx') return 'none';
@@ -338,10 +254,17 @@ function kindFromNameMime(name, mime) {
   if (m.includes('image/gif') || n.endsWith('.gif')) return 'gif';
   if (m.includes('image/webp') || n.endsWith('.webp')) return 'webp';
   if (m.includes('svg') || n.endsWith('.svg')) return 'svg';
+  if (m.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|flac|aac|opus|oga)$/i.test(n)) return 'audio';
+  if (m.startsWith('video/') || /\.(mp4|webm|mov|mkv|ogv|m4v)$/i.test(n)) return 'video';
   if (m.includes('tab-separated') || m.includes('tsv') || /\.tsv$/i.test(n)) return 'tsv';
   if (m.includes('csv') || /\.csv$/i.test(n)) return 'csv';
   if (m.includes('markdown') || /\.md$/i.test(n)) return 'markdown';
   if (m.includes('html') || /\.html?$/i.test(n)) return 'html';
+  if (m.includes('json') || /\.json$/i.test(n)) return 'json';
+  if (m.includes('yaml') || /\.ya?ml$/i.test(n)) return 'yaml';
+  if (m.includes('javascript') || /\.(js|mjs|cjs)$/i.test(n)) return 'javascript';
+  if (/\.(ts|tsx)$/i.test(n)) return 'typescript';
+  if (m === 'text/css' || /\.css$/i.test(n)) return 'css';
   if (m.startsWith('text/') || /\.(txt|log)$/i.test(n)) return 'text';
   return '';
 }
@@ -395,3 +318,5 @@ function isWebp(b) {
     b[11] === 0x50
   );
 }
+
+export { previewEntryForItem, previewViewForItem } from './artifactCapability.js';

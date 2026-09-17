@@ -1,3 +1,4 @@
+import { workspaceRpc } from '../agent/vnext/host/workspaceClient.js';
 /**
  * Website host: render session HTML as a page (iframe-as-browser).
  * Click pins data-paw-node via html_tab_state. SoT is the HTML artifact.
@@ -11,6 +12,12 @@ import {
   applySiteCommands
 } from '../agent/vnext/sessionWorkspace/siteApply.js';
 import { sanitizeSiteHtml } from '../agent/vnext/sessionWorkspace/siteSanitize.js';
+import {
+  isTrustedSiteChildEvent,
+  SITE_FRAME_CHANNEL,
+  siteFrameUrl
+} from './siteFrameBridge.js';
+import { ARTIFACT_TRUNCATED, fetchCompleteArtifact } from '../agent/vnext/sessionWorkspace/artifactDownload.js';
 import { installOfficeShortcuts, isTypingTarget, stepZoom } from './officeShortcuts.js';
 import { closeOfficeHelp, mountOfficeHelp } from './officeHelp.js';
 import { handleWorkTabPickerMessage, reportPickerState } from './workTabPicker.js';
@@ -29,19 +36,6 @@ function hasChrome() {
   return typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function';
 }
 
-async function workspaceRpc(method, params = {}) {
-  if (!hasChrome()) throw new Error('not in extension');
-  const response = await chrome.runtime.sendMessage({
-    target: 'pawwork-background',
-    action: 'workspace_rpc',
-    method,
-    params
-  });
-  if (!response?.ok) {
-    throw new Error(response?.error?.message || response?.error || 'workspace RPC failed');
-  }
-  return response.result;
-}
 
 function setStatus(msg) {
   const el = document.getElementById('status');
@@ -76,6 +70,12 @@ let pickActive = false;
 let motionHandle = null;
 /** @type {ReturnType<typeof mountOfficeSelBubble>|null} */
 let selBubble = null;
+/** @type {Record<string, {left:number,top:number,width:number,height:number}>} */
+let lastRects = {};
+let frameReady = false;
+let pendingSerialize = new Map();
+let pendingPaint = '';
+let loadComplete = false;
 
 function pageFrame() {
   return document.getElementById('page');
@@ -87,6 +87,40 @@ function pageDoc() {
   } catch {
     return null;
   }
+}
+
+function frameWin() {
+  return pageFrame()?.contentWindow || null;
+}
+
+function postToFrame(msg) {
+  const win = frameWin();
+  if (!win) return false;
+  try {
+    win.postMessage({ channel: SITE_FRAME_CHANNEL, ...msg }, '*');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function requestFrameSerialize(timeout = 500) {
+  return new Promise((resolve) => {
+    const req = `${Date.now()}-${Math.random()}`;
+    const timer = setTimeout(() => {
+      pendingSerialize.delete(req);
+      resolve(null);
+    }, timeout);
+    pendingSerialize.set(req, (html) => {
+      clearTimeout(timer);
+      resolve(html || null);
+    });
+    if (!postToFrame({ op: 'serialize', req })) {
+      clearTimeout(timer);
+      pendingSerialize.delete(req);
+      resolve(null);
+    }
+  });
 }
 
 function liveNodeIds() {
@@ -107,14 +141,7 @@ function prunePins() {
 function siteSelAnchorRect(nodeId) {
   const id = String(nodeId || '').trim();
   if (!id) return null;
-  const doc = pageDoc();
-  let hit = null;
-  try {
-    hit = doc?.querySelector(`[data-paw-node="${CSS.escape(id)}"]`) || null;
-  } catch {
-    hit = null;
-  }
-  const inner = hit?.getBoundingClientRect?.();
+  const inner = lastRects[id];
   const frame = pageFrame()?.getBoundingClientRect?.();
   if (!inner || !frame) return inner || null;
   return {
@@ -165,57 +192,56 @@ function reportState() {
 }
 
 function paintPick() {
-  const doc = pageDoc();
-  if (!doc) return;
-  for (const el of doc.querySelectorAll('.paw-picked')) el.classList.remove('paw-picked');
-  for (const id of selectedIds) {
-    try {
-      const hit = doc.querySelector(`[data-paw-node="${CSS.escape(id)}"]`);
-      if (hit) hit.classList.add('paw-picked');
-    } catch {
-      /* ignore */
-    }
-  }
+  postToFrame({ op: 'set-pick', pickActive, selectedIds: selectedIds.slice() });
+  if (selectedIds.length) postToFrame({ op: 'rects', ids: selectedIds.slice(), req: 'paint' });
 }
 
 function bindPageClicks() {
-  const doc = pageDoc();
-  if (!doc) return;
-  if (!doc.getElementById('paw-site-pick')) {
-    const st = doc.createElement('style');
-    st.id = 'paw-site-pick';
-    st.textContent = pickStyleText();
-    (doc.head || doc.documentElement).appendChild(st);
+  paintPick();
+}
+
+function ensureSiteFrame() {
+  const frame = pageFrame();
+  if (!frame) return;
+  const want = siteFrameUrl(typeof chrome !== 'undefined' ? chrome.runtime?.getURL?.bind(chrome.runtime) : null);
+  if (!frame.getAttribute('src') || !/siteFrame\.html/i.test(frame.getAttribute('src') || '')) {
+    frame.src = want;
   }
-  if (doc.__pawSiteBound) return;
-  doc.__pawSiteBound = true;
-  doc.addEventListener(
-    'click',
-    (e) => {
-      if (!pickActive) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const el = e.target && e.target.closest ? e.target.closest('[data-paw-node]') : null;
-      const clickedId = el ? el.getAttribute('data-paw-node') || '' : '';
-      selectedIds = nextSitePinIds(
-        selectedIds,
-        clickedId,
-        { ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey },
-        liveNodeIds()
-      );
-      paintPick();
-      reportState();
-      if (selectedIds.length) setStatus('已点选 · 在侧栏描述要改的内容');
-    },
-    true
-  );
-  doc.addEventListener(
-    'submit',
-    (e) => {
-      if (pickActive) e.preventDefault();
-    },
-    true
-  );
+}
+
+function onSiteFrameMessage(ev) {
+  if (!isTrustedSiteChildEvent(ev, frameWin())) return;
+  const d = ev.data || {};
+  if (d.type === 'ready' || d.type === 'rendered') {
+    frameReady = true;
+    if (d.type === 'ready' && pendingPaint) postToFrame({ op: 'render', html: pendingPaint });
+    paintPick();
+    reportState();
+    return;
+  }
+  if (d.type === 'click') {
+    if (!pickActive) return;
+    selectedIds = nextSitePinIds(
+      selectedIds,
+      String(d.nodeId || ''),
+      { ctrlKey: !!d.ctrlKey, metaKey: !!d.metaKey, shiftKey: !!d.shiftKey },
+      liveNodeIds()
+    );
+    paintPick();
+    reportState();
+    if (selectedIds.length) setStatus('已点选 · 在侧栏描述要改的内容');
+    return;
+  }
+  if (d.type === 'rects' && d.rects && typeof d.rects === 'object') {
+    lastRects = { ...lastRects, ...d.rects };
+    paintOfficeSelBubble();
+    return;
+  }
+  if (d.type === 'serialized' && d.req && pendingSerialize.has(d.req)) {
+    const done = pendingSerialize.get(d.req);
+    pendingSerialize.delete(d.req);
+    done(String(d.html || ''));
+  }
 }
 
 function pickStyleText() {
@@ -227,9 +253,7 @@ function pickStyleText() {
 function setPickActive(on) {
   pickActive = !!on;
   document.body.dataset.pawPick = pickActive ? '1' : '';
-  const doc = pageDoc();
-  const st = doc?.getElementById('paw-site-pick');
-  if (st) st.textContent = pickStyleText();
+  paintPick();
   setStatus(pickActive ? '伸爪中 · 点击以点选' : '浏览中 · 链接可跳转');
   reportPickerState(pickActive);
 }
@@ -242,18 +266,7 @@ function applySiteZoom(next) {
 }
 
 function serializeLiveHtml() {
-  const doc = pageDoc();
-  if (!doc?.documentElement) return lastHtml;
-  teardownMotion(doc);
-  stripSiteMotionChrome(doc);
-  const style = doc.getElementById('paw-site-pick');
-  style?.remove();
-  for (const el of doc.querySelectorAll('.paw-picked')) el.classList.remove('paw-picked');
-  const html = `<!DOCTYPE html>\n${doc.documentElement.outerHTML}`;
-  bindPageClicks();
-  paintPick();
-  bootMotion(doc);
-  return html;
+  return lastHtml;
 }
 
 function parseTranslate(transform) {
@@ -304,17 +317,14 @@ function renderHtml(sotHtml, previewHtml) {
   if (boot) boot.hidden = true;
   document.body.classList.add('is-ready');
   teardownMotion(pageDoc());
+  pendingPaint = stripScripts(previewHtml != null ? previewHtml : lastHtml);
+  ensureSiteFrame();
   frame.onload = () => {
+    frameReady = false;
     bindPageClicks();
-    paintPick();
-    reportState();
-    if (frameKeysUnbind) frameKeysUnbind();
-    const doc = pageDoc();
-    if (doc && siteKeys) frameKeysUnbind = siteKeys.bindDocument(doc);
     applySiteZoom(siteZoom);
-    bootMotion(doc);
   };
-  frame.srcdoc = stripScripts(previewHtml != null ? previewHtml : lastHtml);
+  if (frameReady) postToFrame({ op: 'render', html: pendingPaint });
 }
 
 function teardownMotion(doc) {
@@ -362,6 +372,10 @@ async function persistHtml(html) {
 }
 
 function downloadHtml() {
+  if (!loadComplete) {
+    setStatus('下载已拒绝：文件未完整载入');
+    return;
+  }
   const blob = new Blob([lastHtml], { type: 'text/html;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -373,13 +387,18 @@ function downloadHtml() {
 
 async function loadFromStore() {
   if (!sessionId || !artifactId) throw new Error('缺少 sessionId 或交付物 id');
-  const rec = await workspaceRpc('readArtifact', { sessionId, artifactId });
+  const rec = await fetchCompleteArtifact(
+    (method, params) => workspaceRpc(method, params),
+    { sessionId, artifactId }
+  );
+  const bytes = rec.bytes;
+  loadComplete = true;
   artifactRevision = Number(rec?.artifact?.revision) || 0;
   fileName = rec?.artifact?.name || rec?.name || 'site.html';
   const titleEl = document.getElementById('title');
   if (titleEl) titleEl.textContent = fileName;
   document.title = `${fileName} · 网页`;
-  const raw = rec?.content != null ? String(rec.content) : '';
+  const raw = rec?.content != null ? String(rec.content) : new TextDecoder().decode(bytes);
   savedHtml = raw;
   canUndo = rec?.artifact?.canUndo === true;
   setUndoChrome();
@@ -397,8 +416,12 @@ async function applyPatchFromStore() {
     return false;
   }
   try {
-    const rec = await workspaceRpc('readArtifact', { sessionId, artifactId });
-    const raw = rec?.content != null ? String(rec.content) : '';
+    const rec = await fetchCompleteArtifact(
+      (method, params) => workspaceRpc(method, params),
+      { sessionId, artifactId }
+    );
+    const bytes = rec.bytes;
+    const raw = rec?.content != null ? String(rec.content) : new TextDecoder().decode(bytes);
     if (!raw) return false;
     canUndo = rec?.artifact?.canUndo === true;
     setUndoChrome();
@@ -434,6 +457,7 @@ async function revertNow() {
 }
 
 function wire() {
+  window.addEventListener('message', onSiteFrameMessage);
   mountOfficeHelp('site');
   selBubble = mountOfficeSelBubble(document.body, { kind: 'canvas', copiedLabel: '已复制' });
   siteKeys = installOfficeShortcuts({
@@ -474,23 +498,13 @@ function wire() {
       },
       nudge: (_e, delta) => {
         if (!selectedIds.length || !delta) return;
-        const doc = pageDoc();
-        if (!doc) return;
-        for (const id of selectedIds) {
-          let hit = null;
-          try {
-            hit = doc.querySelector(`[data-paw-node="${CSS.escape(id)}"]`);
-          } catch {
-            hit = null;
-          }
-          if (!hit) continue;
-          const cur = parseTranslate(hit.style.transform);
-          hit.style.transform = `translate(${cur.x + delta.x}px, ${cur.y + delta.y}px)`;
-        }
+        postToFrame({ op: 'nudge', ids: selectedIds.slice(), dx: delta.x, dy: delta.y });
         window.clearTimeout(nudgeTimer);
         nudgeTimer = window.setTimeout(() => {
-          lastHtml = serializeLiveHtml();
-          void persistNow();
+          void requestFrameSerialize().then((html) => {
+            if (html) lastHtml = html;
+            void persistNow();
+          });
         }, 280);
       }
     }

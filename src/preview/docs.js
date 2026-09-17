@@ -1,3 +1,4 @@
+import { workspaceRpc } from '../agent/vnext/host/workspaceClient.js';
 /**
  * Live Univer Docs canvas for HTML / text artifacts.
  * Durable bytes are docsApply snapshots serialized as marked HTML.
@@ -31,6 +32,10 @@ import { applyOfficeDocumentLang, officeUiLang, persistOfficeUiLang } from './of
 import { installOfficeShortcuts, isTypingTarget, univerDocsZoom } from './officeShortcuts.js';
 import { closeOfficeHelp, mountOfficeHelp } from './officeHelp.js';
 import { handleWorkTabPickerMessage, reportPickerState } from './workTabPicker.js';
+import {
+  ARTIFACT_TRUNCATED,
+  fetchCompleteArtifact
+} from '../agent/vnext/sessionWorkspace/artifactDownload.js';
 
 function qs(name) {
   try {
@@ -61,16 +66,6 @@ let durableSnapshot = { title: '', blocks: [] };
 let durableData = null;
 let pickActive = false;
 
-async function workspaceRpc(method, params = {}) {
-  const response = await chrome.runtime.sendMessage({
-    target: 'pawwork-background',
-    action: 'workspace_rpc',
-    method,
-    params
-  });
-  if (!response?.ok) throw new Error(response?.error || `workspace RPC failed: ${method}`);
-  return response.result;
-}
 
 function boot(msg, isError = false) {
   const el = document.getElementById('boot');
@@ -590,13 +585,16 @@ async function main() {
   }
   wireBar();
   try {
-    const rec = await workspaceRpc('readArtifact', { sessionId, artifactId });
+    const rec = await fetchCompleteArtifact(
+      (method, params) => workspaceRpc(method, params),
+      { sessionId, artifactId }
+    );
     artifactRevision = Number(rec?.artifact?.revision) || 0;
     fileName = String(rec?.artifact?.name || rec?.name || artifactId);
     mimeType = rec?.mimeType || rec?.artifact?.mimeType || DOC_MIME;
     document.title = `${fileName} · 文档`;
 
-    const bytes = b64ToBytes(rec?.base64);
+    const bytes = rec.bytes;
     const text =
       rec?.content != null && String(rec.content).trim() ? String(rec.content) : '';
     const title = fileName.replace(/\.[^.]+$/, '');
@@ -606,6 +604,8 @@ async function main() {
       const q = new URLSearchParams();
       q.set('sessionId', sessionId);
       q.set('artifactId', artifactId);
+      const loc = qs('lang');
+      if (loc === 'en' || loc === 'zh') q.set('lang', loc);
       location.replace(`./${dest}?${q.toString()}`);
       return;
     }

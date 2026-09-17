@@ -233,6 +233,7 @@ export function createTaskStatusUi(deps) {
 
     if (!TERMINAL.has(status)) {
       const actions = node('div', 'durable-task-actions');
+      // Resume is only for paused durable tasks — not the pink user bubble 「继续」.
       if (status === 'paused') actions.append(actionButton(task, 'resume', 'durableTaskResume'));
       else if (PAUSABLE.has(status)) actions.append(actionButton(task, 'pause', 'durableTaskPause'));
       actions.append(actionButton(task, 'cancel', 'durableTaskCancel', 'is-danger'));

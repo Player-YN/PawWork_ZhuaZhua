@@ -459,6 +459,10 @@ body {
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
+/* Jump rail lives in this gutter so ticks / tips do not cover think chevrons. */
+.panel.has-turn-jump.is-thread-open .task-body {
+  padding-right: 28px;
+}
 .panel.is-thread-open .task-body > * {
   flex: 0 0 auto;
 }
@@ -501,6 +505,13 @@ body {
 
 /* ── Narrow side panel ── */
 @container panel (max-width: 340px) {
+  .turn-jump {
+    display: none !important;
+  }
+  .panel.has-turn-jump.is-thread-open .task-body {
+    padding-right: 12px;
+  }
+
   .page-url {
     display: none;
   }
@@ -509,6 +520,12 @@ body {
     flex-direction: column;
     align-items: stretch;
     gap: var(--space-1, 4px);
+  }
+  .composer-aiming {
+    max-width: 100%;
+  }
+  .bot-status {
+    margin-right: 0;
   }
 
   .composer-hint {

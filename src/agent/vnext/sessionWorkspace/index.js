@@ -83,6 +83,13 @@ export {
   isUtf8OpenKind,
   isPawCanvasDoc
 } from './openClassify.js';
+export {
+  capabilityForItem,
+  resolveArtifactCapability,
+  previewViewForItem,
+  inspectorMeta,
+  PRIMARY_FAMILIES
+} from './artifactCapability.js';
 export { sendMessage } from './sendMessage.js';
 export {
   serializeBehaviorTrajectory,
@@ -106,7 +113,13 @@ export {
   shrinkPromptTitle,
   generateTaskTitle
 } from './taskTitle.js';
-export { buildSessionAgentInstructions, buildWorldStateBlock } from './prompt.js';
+export { buildSessionAgentInstructions, buildWorldStateBlock, SYSTEM_PROMPT_VERSION } from './prompt.js';
+export {
+  appendSessionAudit,
+  readSessionAudit,
+  SESSION_AUDIT_SCHEMA,
+  TRAJECTORY_THOUGHT_WARNING
+} from './sessionAudit.js';
 export {
   normalizePageRef,
   resolveFocusPage,

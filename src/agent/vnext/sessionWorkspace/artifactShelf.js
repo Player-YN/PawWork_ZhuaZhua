@@ -1,15 +1,25 @@
 /**
- * Deliverable-rail folders. Host infers a default; the model may override
- * per artifact (`folder`) or replace the layout (`session.shelf`).
+ * Deliverable-rail folders. Family chips come from the capability registry.
+ * Stored folder aliases (sheets/images/sites/design/slides) stay readable.
  */
 
-export const SHELF_FOLDER_IDS = ['images', 'design', 'slides', 'sheets', 'docs', 'sites', 'files'];
+import {
+  capabilityForItem,
+  familyForItem,
+  PRIMARY_FAMILIES,
+  projectFamilyId
+} from './artifactCapability.js';
+
+export const SHELF_FOLDER_IDS = ['docs', 'data', 'web', 'media', 'files', 'images', 'sheets', 'sites', 'design', 'slides', 'legacy'];
+export const PRIMARY_SHELF_CHIPS = [...PRIMARY_FAMILIES];
+export const LEGACY_SHELF_FOLDERS = ['design', 'slides', 'legacy'];
 
 const FOLDER_ALIASES = {
   images: 'images',
   image: 'images',
   图片: 'images',
   photos: 'images',
+  media: 'media',
   design: 'design',
   画板: 'design',
   poster: 'design',
@@ -21,6 +31,7 @@ const FOLDER_ALIASES = {
   sheet: 'sheets',
   表格: 'sheets',
   excel: 'sheets',
+  data: 'data',
   docs: 'docs',
   doc: 'docs',
   文档: 'docs',
@@ -28,21 +39,27 @@ const FOLDER_ALIASES = {
   sites: 'sites',
   site: 'sites',
   网站: 'sites',
-  web: 'sites',
+  web: 'web',
   files: 'files',
   file: 'files',
   其他: 'files',
-  other: 'files'
+  其它: 'files',
+  other: 'files',
+  legacy: 'legacy'
 };
 
 const DEFAULT_LABELS = {
-  images: { zh: '图片', en: 'Images' },
-  design: { zh: '画板', en: 'Design' },
-  slides: { zh: '幻灯', en: 'Slides' },
-  sheets: { zh: '表格', en: 'Sheets' },
   docs: { zh: '文档', en: 'Documents' },
-  sites: { zh: '网站', en: 'Sites' },
-  files: { zh: '其他', en: 'Files' }
+  data: { zh: '表格/数据', en: 'Data' },
+  web: { zh: '网站/代码', en: 'Web' },
+  media: { zh: '媒体', en: 'Media' },
+  files: { zh: '其它', en: 'Files' },
+  images: { zh: '媒体', en: 'Media' },
+  design: { zh: '遗留', en: 'Legacy' },
+  slides: { zh: '遗留', en: 'Legacy' },
+  sheets: { zh: '表格/数据', en: 'Data' },
+  sites: { zh: '网站/代码', en: 'Web' },
+  legacy: { zh: '其它 / Legacy', en: 'Other / Legacy' }
 };
 
 export function normalizeShelfFolderId(raw) {
@@ -55,28 +72,21 @@ export function normalizeShelfFolderId(raw) {
 
 export function inferArtifactShelfFolder(rec = {}) {
   const explicit = normalizeShelfFolderId(rec.folder || rec.shelf);
-  if (explicit) return explicit;
-  const mime = String(rec.mimeType || rec.mime || '').toLowerCase();
-  const name = String(rec.name || rec.primaryPath || '').toLowerCase();
-  if (mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(name)) return 'images';
-  if (mime.includes('spreadsheet') || /\.(xlsx?|csv|tsv)$/i.test(name)) return 'sheets';
-  if (/\.docx?$/i.test(name) || mime.includes('wordprocessing')) return 'docs';
-  if (/\.pptx?$/i.test(name) || mime.includes('presentation')) return 'slides';
-  if (mime.includes('html') || /\.html?$/i.test(name)) {
-    if (/site|web/i.test(name)) return 'sites';
-    return 'files';
+  if (explicit === 'design' || explicit === 'slides' || explicit === 'legacy') return explicit;
+  if (explicit) {
+    const projected = projectFamilyId(explicit);
+    if (PRIMARY_FAMILIES.includes(projected)) return projected;
   }
-  if (/\.json$/i.test(name) || mime.includes('json')) {
-    if (/slide|deck/i.test(name)) return 'slides';
-    return 'design';
-  }
-  return 'files';
+  const family = familyForItem(rec);
+  return family === 'legacy' ? 'legacy' : family;
 }
 
 export function shelfFolderLabel(folderId, lang = 'zh', labels = {}) {
   const id = normalizeShelfFolderId(folderId) || 'files';
   if (labels[id]) return String(labels[id]);
-  const pack = DEFAULT_LABELS[id];
+  const projected = projectFamilyId(id);
+  if (labels[projected]) return String(labels[projected]);
+  const pack = DEFAULT_LABELS[id] || DEFAULT_LABELS[projected];
   if (pack) return lang === 'en' ? pack.en : pack.zh;
   return id;
 }
@@ -95,7 +105,7 @@ export function buildShelfView(arts = [], shelf = null) {
 
   if (layout && layout.length) {
     for (const row of layout) {
-      const id = normalizeShelfFolderId(row?.id || row?.folder || row?.label);
+      const id = inferArtifactShelfFolder({ folder: row?.id || row?.folder || row?.label });
       if (!id) continue;
       const items = [];
       for (const rawId of Array.isArray(row.items) ? row.items : []) {
@@ -171,5 +181,70 @@ export function setShelfMeta(store, sessionId, patch = {}) {
 }
 
 export function folderCollapsedByDefault(folderId) {
-  return normalizeShelfFolderId(folderId) === 'images';
+  const id = projectFamilyId(normalizeShelfFolderId(folderId));
+  return id === 'media' || id === 'legacy';
+}
+
+export function isPrimaryShelfChip(folderId) {
+  const id = projectFamilyId(normalizeShelfFolderId(folderId));
+  return PRIMARY_SHELF_CHIPS.includes(id);
+}
+
+/**
+ * Hide retired Design/Slides chips. Leftover items stay openable under Files/Legacy.
+ * @param {Array<{id:string,label?:string,items:object[]}>} folders
+ */
+export function foldLegacyShelfFolders(folders = []) {
+  const list = Array.isArray(folders) ? folders : [];
+  const legacyItems = [];
+  const merged = new Map();
+  for (const folder of list) {
+    const raw = normalizeShelfFolderId(folder?.id);
+    if (LEGACY_SHELF_FOLDERS.includes(raw)) {
+      for (const item of folder.items || []) {
+        legacyItems.push({ ...item, legacyCanvas: true });
+      }
+      continue;
+    }
+    const id = projectFamilyId(raw) === 'legacy' ? 'files' : projectFamilyId(raw) || raw;
+    const prev = merged.get(id);
+    if (prev) prev.items.push(...(folder.items || []));
+    else merged.set(id, { ...folder, id, items: [...(folder.items || [])] });
+  }
+  const out = [...merged.values()];
+  if (legacyItems.length) {
+    let files = out.find((f) => f.id === 'files');
+    if (!files) {
+      files = { id: 'files', label: '', items: [] };
+      out.push(files);
+    }
+    files.items = [...(files.items || []), ...legacyItems];
+  }
+  return out.filter((f) => (f.items || []).length && isPrimaryShelfChip(f.id));
+}
+
+/** Honest badge axis: editable / previewable / download-only. */
+export function artifactAccessKind(item = {}) {
+  const cap = capabilityForItem(item);
+  if (cap.uncertain) return 'unknown';
+  if (cap.badges.editable) return 'editable';
+  if (cap.badges.previewable) return 'preview';
+  return 'download';
+}
+
+export function artifactAccessLabelKey(kind) {
+  if (kind === 'unknown') return 'artifactAccessUnknown';
+  if (kind === 'editable') return 'artifactAccessEdit';
+  if (kind === 'preview' || kind === 'saveable') return 'artifactAccessPreview';
+  return 'artifactAccessDownload';
+}
+
+export function artifactAccessBadgeKeys(item = {}) {
+  const cap = capabilityForItem(item);
+  if (cap.uncertain) return ['artifactAccessUnknown'];
+  const keys = [];
+  if (cap.badges.editable) keys.push('artifactAccessEdit');
+  if (cap.badges.previewable) keys.push('artifactAccessPreview');
+  if (cap.badges.downloadOnly) keys.push('artifactAccessDownload');
+  return keys.length ? keys : ['artifactAccessUnknown'];
 }

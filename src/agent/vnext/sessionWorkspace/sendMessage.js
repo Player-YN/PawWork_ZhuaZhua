@@ -661,6 +661,14 @@ export async function sendMessage(store, input) {
         executionId: execution.executionId,
         status: aborted ? 'aborted' : 'failed'
       });
+      if (String(err?.code || '') === 'SYS_TIMEOUT') {
+        onEvent({
+          type: 'deadline',
+          sessionId,
+          executionId: execution.executionId,
+          code: 'SYS_TIMEOUT'
+        });
+      }
       const sessFail = store.get('sessions', sessionId);
       const path = mergeBehaviorPath({ path: pathLog });
       const failTiming = splitTurnTiming(path, Math.max(0, endedAt - startedAt));

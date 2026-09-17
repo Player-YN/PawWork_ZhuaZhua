@@ -263,6 +263,9 @@ select:focus-visible {
 
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
+  .bot-status-stop {
+    transition: none;
+  }
   .ambient-layer::before,
   .ambient-layer::after,
   .pick-btn.is-active,
@@ -294,7 +297,15 @@ select:focus-visible {
   .sel-expand-body,
   .drafts-bar .drafts-list,
   .clip-drawer,
-  .task-stream {
+  .task-stream,
+  .think-body-wrap,
+  .think-body {
     transition: none !important;
+  }
+  .think-dot,
+  .think-block.is-live .think-dot,
+  .think-block.is-live .think-summary,
+  .think-block.is-live.is-expanded .think-body-wrap {
+    animation: none !important;
   }
 }

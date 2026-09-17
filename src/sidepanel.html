@@ -234,6 +234,7 @@
 
     <!-- Thread workspace: history + current task are ONE flat section (same scroll) -->
     <section class="thread-workspace" id="threadWorkspace" aria-label="任务与对话">
+      <section class="bot-status" id="botStatus" hidden aria-live="polite" data-i18n-aria="botStatusAria"></section>
       <div class="history-bar is-collapsed" id="historyBar" hidden>
         <div class="history-header" id="historyHeaderToggle" role="button" tabindex="0" title="展开 / 收起历史" aria-expanded="false" aria-controls="historyList">
           <div class="history-header-left">
@@ -322,6 +323,7 @@
             <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
           </select>
         </div>
+        <div class="composer-aiming" id="composerAiming" aria-live="polite">全页可访问</div>
         <div class="session-bind-add" id="sessionBindAdd">
           <button
             type="button"
@@ -330,14 +332,14 @@
             aria-haspopup="listbox"
             aria-expanded="false"
             aria-controls="sessionBindAddMenu"
-            title="当前任务绑定 Group"
-          >Bind Group</button>
+            title="为本任务瞄准 Group（优先上下文，不是权限门）"
+          >瞄准组</button>
           <div class="session-bind-add-menu" id="sessionBindAddMenu" hidden></div>
           <div class="bind-group-hint" id="bindGroupHint" hidden>
             <div class="bind-group-hint-card">
               <span class="bind-group-hint-text">
-                <span data-i18n="bindGroupHint">当前没有绑定任何 Group 到这个任务。</span>
-                <strong data-i18n="bindGroupHintEmphasis">Agent 只能访问已绑定的 Group。</strong>
+                <span data-i18n="bindGroupHint">没有瞄准项。Agent 仍可访问整页。</span>
+                <strong data-i18n="bindGroupHintEmphasis">瞄准只提高优先级，不是权限边界。</strong>
               </span>
               <button type="button" class="bind-group-hint-x" id="bindGroupHintClose" aria-label="关闭">×</button>
             </div>
@@ -542,6 +544,9 @@
       <div class="modal-body">
         <p class="settings-hint">
           导出当前任务的完整 Agent 运行轨迹（开发调试用）。<strong>人工状态由您定义</strong>。
+        </p>
+        <p class="settings-hint" id="trajectoryThoughtWarn">
+          轨迹包含模型思考，可能含敏感信息。导出即表示你主动保存这段思考。
         </p>
         <label class="settings-label" for="trajectoryHumanStatusSelect">人工完成状态 (humanStatus)</label>
         <select id="trajectoryHumanStatusSelect" class="modal-input trajectory-status-select">

@@ -54,6 +54,16 @@ import {
 } from './sidepanel/sessionIsolation.js';
 import { readActiveExecution, isExecutionLive } from './sidepanel/executionSync.js';
 import {
+  applyThinkExpanded,
+  bindThinkToggle,
+  composerShouldShowStop,
+  durationFromThinkSummary,
+  rehydrateThinkBlock,
+  resolveLiveThinkHost,
+  sealThinkKeepBody,
+  shouldCreateThinkFromEvent
+} from './sidepanel/thinkUi.js';
+import {
   nextGroupName,
   groupNameKey,
   isClipboardGroup,
@@ -63,9 +73,17 @@ import {
   createLiveProgressState,
   applyLiveProgress
 } from './agent/vnext/sessionWorkspace/liveProgress.js';
+import {
+  countAimedItems,
+  createExecutionStatus,
+  formatAimingText
+} from './sidepanel/executionStatus.js';
+import { createBotStatusUi } from './sidepanel/botStatusUi.js';
 import { buildZipStore } from './agent/vnext/sessionWorkspace/pptxExport.js';
 import {
+  artifactAccessBadgeKeys,
   buildShelfView,
+  foldLegacyShelfFolders,
   folderCollapsedByDefault,
   shelfFolderLabel
 } from './agent/vnext/sessionWorkspace/artifactShelf.js';
@@ -99,6 +117,10 @@ import {
   normalizeHumanStatus
 } from './agent/trajectory.js';
 import { SYSTEM_PROMPT_VERSION } from './agent/vnext/sessionWorkspace/prompt.js';
+import {
+  ARTIFACT_TRUNCATED,
+  fetchCompleteArtifact
+} from './agent/vnext/sessionWorkspace/artifactDownload.js';
 import {
   cacheModelsForBase,
   loadCachedModelsForBase,
@@ -212,6 +234,7 @@ function emptySessionUi(sid) {
     liveTurnAnswerText: '',
     liveTurnAnswerEl: null,
     liveProgressState: null,
+    executionStatus: createExecutionStatus(),
     liveTurnProgressEl: null,
     abort: null,
     executionId: null,
@@ -281,6 +304,7 @@ function stashLiveToSession(sid) {
   Object.assign(u, snapshotLiveGlobals());
   u.abort = currentAgentAbort;
   u.executionId = currentWorkspaceTaskId;
+  if (typeof botStatusUi?.snapshot === 'function') u.executionStatus = botStatusUi.snapshot();
   try {
     u.composerHtml = composerEl()?.innerHTML || '';
   } catch {
@@ -304,6 +328,9 @@ function stashLiveToSession(sid) {
 function loadLiveFromSession(sid) {
   const u = uiState(sid);
   applyLiveGlobals(u);
+  if (typeof botStatusUi?.setState === 'function') {
+    botStatusUi.setState(u.executionStatus || createExecutionStatus({ sessionId: sid }));
+  }
   pendingAttachments = Array.isArray(u.attachments) ? u.attachments.slice() : [];
   selectedArtifactIds.clear();
   for (const id of u.selectedArtifactIds || []) selectedArtifactIds.add(id);
@@ -499,6 +526,14 @@ const trajectoryUi = createTrajectoryUi({
 });
 const mountTaskTrajectoryButton = trajectoryUi.mountTaskTrajectoryButton;
 const downloadTaskTrajectory = trajectoryUi.downloadTaskTrajectory;
+
+const botStatusUi = createBotStatusUi({
+  t,
+  getLang: () => currentLang,
+  getHost: () => $('botStatus'),
+  getSessionId: () => getWorkspaceSessionId(),
+  onStop: () => stopAgentRun('user_stop')
+});
 
 const taskStatusUi = createTaskStatusUi({
   workspaceRpc,
@@ -889,6 +924,7 @@ function applyI18n() {
   syncReasoningSwitch();
   restartComposerTypewriter();
   taskStatusUi.render();
+  refreshBotChrome();
 }
 
 let composerTypewriterTimer = 0;
@@ -1789,8 +1825,15 @@ function setStatus(mode) {
   if (label) label.textContent = mode === 'running' ? t('statusRunning') : t('statusReady');
 }
 
+function foregroundThinkLive() {
+  return !!document.querySelector(
+    '#taskStream .session-thread:not([hidden]) .think-block.is-live, #taskStream .task-card:not([hidden]) .think-block.is-live'
+  );
+}
+
 function setAgentRunningUi(running) {
-  applySendStopUi(running, {
+  const showStop = composerShouldShowStop(running, foregroundThinkLive());
+  applySendStopUi(showStop, {
     lang: currentLang,
     setStatus,
     onRunningChange: (r) => {
@@ -1848,7 +1891,6 @@ function applyWorkspaceExecutionSnapshot(sessionId, payload, { rpcFailed = false
       setAgentRunningUi(true);
       withSessionLive(sid, () => {
         liveTurnSealed = false;
-        if (liveTask?.body) ensureLiveTurnThink();
       });
     }
     renderSessionRailList();
@@ -1860,10 +1902,7 @@ function applyWorkspaceExecutionSnapshot(sessionId, payload, { rpcFailed = false
     (foreground && liveTurnWrap?.querySelector?.('.think-block.is-live'))
   );
   u.running = false;
-  if (foreground) {
-    currentAgentAbort = null;
-    setAgentRunningUi(false);
-  }
+  if (foreground) currentAgentAbort = null;
   withSessionLive(sid, () => {
     const spinning =
       liveTurnWrap?.querySelector?.('.think-block.is-live') ||
@@ -1879,6 +1918,7 @@ function applyWorkspaceExecutionSnapshot(sessionId, payload, { rpcFailed = false
       }
     }
   });
+  if (foreground) setAgentRunningUi(false);
   renderSessionRailList();
 }
 
@@ -1920,20 +1960,54 @@ function applyComposerSubmitMode(mode) {
   }
 }
 
+function currentAimedCount() {
+  const mentions = typeof composerMentionsFromDom === 'function' ? composerMentionsFromDom() : [];
+  return countAimedItems({
+    groups: workspaceGroupState?.groups || [],
+    boundIds: workspaceGroupState?.boundGroupIds || [],
+    mentions,
+    selectedCount: Array.isArray(selectedElementsSummary) ? selectedElementsSummary.length : 0
+  });
+}
+
+function currentTargetPage() {
+  const page = lastActivePage;
+  if (!page || !(page.title || page.url)) return null;
+  return { title: String(page.title || ''), url: String(page.url || '') };
+}
+
+function botStatusContext(extra = {}) {
+  return {
+    lang: currentLang,
+    aimedCount: currentAimedCount(),
+    targetPage: currentTargetPage(),
+    ...extra
+  };
+}
+
+function refreshBotChrome() {
+  const el = $('composerAiming');
+  if (el) {
+    const n = currentAimedCount();
+    el.textContent = formatAimingText(n, currentLang);
+    el.title = currentLang === 'en'
+      ? 'Full page is reachable. Aimed items are priority context, not a permission gate.'
+      : '整页可访问。瞄准项是优先上下文，不是权限门。';
+  }
+  botStatusUi.apply({ type: 'aiming', count: currentAimedCount() }, botStatusContext());
+}
+
 /**
  * Hard-stop agent + worker + any open confirm gates.
  * AbortSignal alone is not enough while tools await user confirm.
+ * UI stop never depends on a stale/null executionId.
  */
 function stopAgentRun(reason = 'user_stop') {
   const sid = getWorkspaceSessionId();
   uiState(sid).promptQueue = [];
   renderPromptQueueHint();
-  // Product Session abort — host cancels in-flight model/tools/code
-  void workspaceRpc('abortTask', {
-    sessionId: sid,
-    executionId: uiState(sid).executionId || currentWorkspaceTaskId || undefined
-  }).catch((err) => {
-    console.warn('[workspace] abortTask failed', err);
+  void workspaceRpc('abortCurrentExecution', { sessionId: sid }).catch((err) => {
+    console.warn('[workspace] abortCurrentExecution failed', err);
   });
   try {
     if (currentAgentAbort && !currentAgentAbort.signal.aborted) {
@@ -4210,26 +4284,7 @@ function renderHistoryList() {
 function rebindHistoryThinkBlocks(root) {
   if (!root) return;
   root.querySelectorAll('.think-block').forEach((block) => {
-    const toggle = block.querySelector('.think-toggle');
-    if (!toggle || toggle.dataset.thinkBound || toggle.dataset.historyBound) return;
-    toggle.dataset.historyBound = '1';
-    toggle.disabled = false;
-    // Restore from snapshot classes
-    let expanded = block.classList.contains('is-expanded');
-    const sync = () => {
-      block.classList.toggle('is-expanded', expanded);
-      block.classList.toggle('is-collapsed', !expanded);
-      toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-      const chev = block.querySelector('.think-chevron');
-      if (chev) chev.textContent = expanded ? '▾' : '▸';
-    };
-    toggle.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      expanded = !expanded;
-      sync();
-    });
-    sync();
+    rehydrateThinkBlock(block, { ariaLabel: t('thinkToggleAria') });
   });
 }
 
@@ -4476,23 +4531,21 @@ function createThinkBlockEl() {
       <div class="think-body"></div>
     </div>
   `;
+  const toggle = block.querySelector('.think-toggle');
+  if (toggle) toggle.setAttribute('aria-label', t('thinkToggleAria'));
+  applyThinkExpanded(block, false);
   return block;
 }
 
 function wireThinkToggle(block) {
   const toggle = block.querySelector('.think-toggle');
   if (!toggle || toggle.dataset.thinkBound) return;
-  toggle.dataset.thinkBound = '1';
-  toggle.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const expanded = !block.classList.contains('is-expanded');
-    block.classList.toggle('is-expanded', expanded);
-    block.classList.toggle('is-collapsed', !expanded);
-    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-    const chev = block.querySelector('.think-chevron');
-    if (chev) chev.textContent = expanded ? '▾' : '▸';
-  });
+  if (!toggle.getAttribute('aria-label')) toggle.setAttribute('aria-label', t('thinkToggleAria'));
+  bindThinkToggle(
+    toggle,
+    () => block.classList.contains('is-expanded'),
+    (next) => applyThinkExpanded(block, next)
+  );
 }
 
 /** Restored / sealed think bar — same chrome as live, stays in the message stream. */
@@ -4546,10 +4599,7 @@ function makeCollapsibleThinking(existingEl) {
   /** @type {ReturnType<typeof setInterval>|null} */
   let tickTimer = null;
   function syncChrome() {
-    block.classList.toggle('is-expanded', expanded);
-    block.classList.toggle('is-collapsed', !expanded);
-    toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-    block.querySelector('.think-chevron').textContent = expanded ? '▾' : '▸';
+    applyThinkExpanded(block, expanded);
   }
   function refreshLiveSummary() {
     if (!block.classList.contains('is-live')) return;
@@ -4558,10 +4608,11 @@ function makeCollapsibleThinking(existingEl) {
   }
   tickTimer = setInterval(refreshLiveSummary, 500);
   refreshLiveSummary();
-  if (!toggle.dataset.thinkBound) {
-    toggle.dataset.thinkBound = '1';
-    toggle.addEventListener('click', () => {
-      expanded = !expanded;
+  bindThinkToggle(
+    toggle,
+    () => expanded,
+    (next) => {
+      expanded = next;
       syncChrome();
       refreshLiveSummary();
       if (expanded) {
@@ -4571,8 +4622,8 @@ function makeCollapsibleThinking(existingEl) {
           } catch (_) {}
         });
       }
-    });
-  }
+    }
+  );
   const renderer = createSmoothStreamRenderer(body, { charsPerFrame: 480, fadeChunks: true });
   const ctl = {
     el: block,
@@ -4595,7 +4646,7 @@ function makeCollapsibleThinking(existingEl) {
         tickTimer = null;
       }
       renderer.flush();
-      block.classList.remove('is-live');
+      sealThinkKeepBody(block);
       expanded = false;
       syncChrome();
       const duration = formatDurationMS(performance.now() - startedAt);
@@ -5067,6 +5118,7 @@ async function hydrateActiveSessionThread() {
   }
 }
 
+/** User turn chrome. A short 「继续」 here is the user's text, not resume/clarify. */
 function appendUserTurnBubble(task, text, nodes) {
   if (!task) return null;
   const userMsg = document.createElement('div');
@@ -5094,9 +5146,11 @@ function rebuildTurnJumpRail() {
   if (users.length < 2) {
     rail.hidden = true;
     rail.innerHTML = '';
+    $('panel')?.classList.remove('has-turn-jump');
     return;
   }
   rail.hidden = false;
+  $('panel')?.classList.add('has-turn-jump');
   rail.innerHTML = '';
   users.forEach((el, i) => {
     if (!el.id) el.id = `turn-${i + 1}`;
@@ -5368,7 +5422,7 @@ function switchSession(sessionId) {
   setAgentRunningUi(!!uiState(sessionId).running);
   if (uiState(sessionId).running) {
     liveTurnSealed = false;
-    if (liveTask?.body) ensureLiveTurnThink();
+    if (liveTask?.body) rebindHistoryThinkBlocks(liveTask.body);
   }
   restoreClarifyForSession(sessionId);
 }
@@ -5906,9 +5960,6 @@ function beginLiveTurnUi() {
   liveTurnAnswerText = '';
   liveProgressState = createLiveProgressState();
   hideLiveTurnProgress();
-  // Countdown is host chrome for the turn, not a reasoning-delta. OpenRouter /
-  // stream failures otherwise leave an empty card until the RPC rejects.
-  ensureLiveTurnThink();
 }
 
 function hideLiveTurnProgress() {
@@ -6007,19 +6058,20 @@ function ingestLiveProgressEvent(ev) {
 
 function ensureLiveTurnThink() {
   if (!liveTask?.body) return null;
+  // One accordion per user turn. Reuse a live bar (or the last wrap after the
+  // latest user bubble) so reconnect / snapshot cannot stack a second 思考中.
+  if (liveTurnThink?.el?.isConnected) {
+    liveTurnThink.resume?.();
+    return liveTurnThink;
+  }
+  const host = resolveLiveThinkHost(liveTask.body, liveTurnWrap?.isConnected ? liveTurnWrap : null);
+  if (host.wrap?.isConnected) liveTurnWrap = host.wrap;
   if (!liveTurnWrap?.isConnected) {
     liveTurnWrap = document.createElement('div');
     liveTurnWrap.className = 'agent-turn';
     liveTask.append(liveTurnWrap);
   }
-  // One accordion per user turn. Tool-loop step 2 must not spawn a second "思考中".
-  // Switch-back may find a finished controller (stale idle snapshot sealed it);
-  // if we are asking for live think, reopen the same bar instead of 「已思考」.
-  if (liveTurnThink?.el?.isConnected) {
-    liveTurnThink.resume?.();
-    return liveTurnThink;
-  }
-  const existing = liveTurnWrap.querySelector('.think-block');
+  const existing = host.think || liveTurnWrap.querySelector('.think-block');
   if (existing) {
     liveTurnThink = liveTurnThink?.el === existing ? liveTurnThink : makeCollapsibleThinking(existing);
     liveTurnThink.resume?.();
@@ -6591,6 +6643,11 @@ function handleSessionWorkspaceEvent(request) {
   const sid = String(ev.sessionId || request.sessionId || '');
   const foreground = getWorkspaceSessionId();
 
+  if (!sid || sid === foreground) {
+    botStatusUi.apply(ev, botStatusContext({ task: ev.task }));
+    uiState(foreground).executionStatus = botStatusUi.snapshot();
+  }
+
   if (taskStatusUi.handleWorkspaceEvent(ev)) return true;
 
   if (ev?.type === 'session-title') {
@@ -6675,13 +6732,16 @@ function handleSessionWorkspaceEvent(request) {
         liveTurnAnswerText = painted;
         renderLiveTurnAnswer(painted);
       }
-      if (leaseNote) showQuickToast(leaseNote);
+      if (leaseNote) {
+        /* Lease stays in the status strip until resolved; toast is optional. */
+      }
       ingestLiveProgressEvent(ev);
     } else if (ev.type === 'thought' || ev.type === 'thought-open') {
       if (liveTurnSealed || !uiState(sid).running) return;
-      liveTurnThinkFromStream = true;
       const text = streamEventText(ev.text) || streamEventText(ev.chunk);
-      ensureLiveTurnThink();
+      if (!liveTurnThink && !shouldCreateThinkFromEvent({ ...ev, text })) return;
+      liveTurnThinkFromStream = true;
+      if (!liveTurnThink) ensureLiveTurnThink();
       if (text) {
         clearThinkPlaceholder();
         liveTurnThink?.push(text);
@@ -6701,13 +6761,10 @@ function handleSessionWorkspaceEvent(request) {
       ev.type === 'model-end'
     ) {
       const leaseNote = ev.type === 'tool-result' ? humanizeTabLeaseEvent(ev) : '';
-      if (leaseNote) {
-        showQuickToast(leaseNote);
-        if (!liveTurnSealed) {
-          const prefix = currentLang === 'en' ? '**Notice:** ' : '**提示:** ';
-          liveTurnAnswerText = `${prefix}${leaseNote}`;
-          renderLiveTurnAnswer(liveTurnAnswerText);
-        }
+      if (leaseNote && !liveTurnSealed) {
+        const prefix = currentLang === 'en' ? '**Notice:** ' : '**提示:** ';
+        liveTurnAnswerText = `${prefix}${leaseNote}`;
+        renderLiveTurnAnswer(liveTurnAnswerText);
       }
       ingestLiveProgressEvent(ev);
     }
@@ -6759,7 +6816,7 @@ function finishLiveThinkBlocks(root) {
   try {
     liveTurnThink?.finish?.();
   } catch (_) {}
-  const wrap = root || liveTurnWrap || liveTask?.body;
+  const wrap = root || liveTask?.body || liveTurnWrap;
   wrap?.querySelectorAll?.('.think-block.is-live').forEach((el) => {
     try {
       el._pawThink?.finish?.();
@@ -6767,7 +6824,10 @@ function finishLiveThinkBlocks(root) {
     el.classList.remove('is-live');
     const summary = el.querySelector('.think-summary');
     if (summary && /思考中|Thinking/i.test(summary.textContent || '')) {
-      summary.textContent = thinkDoneLabel('', el.dataset.effort || reasoningEffort);
+      summary.textContent = thinkDoneLabel(
+        durationFromThinkSummary(summary.textContent),
+        el.dataset.effort || reasoningEffort
+      );
     }
   });
 }
@@ -6811,7 +6871,7 @@ function finishLiveTurnUi(md, opts = {}) {
     const raw = typeof liveTurnThink.getText === 'function' ? liveTurnThink.getText() : '';
     const onlyPlaceholder = isThinkPlaceholderText(raw);
     thought = onlyPlaceholder ? '' : String(raw || '').trim();
-    if (!thought && !liveTurnThinkFromStream) {
+    if (!thought) {
       try {
         liveTurnThink.clear?.();
       } catch (_) {}
@@ -6819,31 +6879,24 @@ function finishLiveTurnUi(md, opts = {}) {
         liveTurnThink.el?.remove();
       } catch (_) {}
     } else {
-      if (!thought) {
-        thought =
-          currentLang === 'en'
-            ? 'The model thought, but this effort level did not return a visible trace.'
-            : '模型已思考，但这一档没有返回可展开的思考正文。';
-        try {
-          liveTurnThink.clear?.();
-          liveTurnThink.push?.(thought);
-        } catch (_) {}
-      }
+      try {
+        liveTurnThink.finish();
+      } catch (_) {}
+      try {
+        liveTurnThink.destroy?.();
+      } catch (_) {}
     }
-    try {
-      liveTurnThink.finish();
-    } catch (_) {}
-    try {
-      liveTurnThink.destroy?.();
-    } catch (_) {}
     liveTurnThink = null;
   }
-  const thinkRoot = liveTurnWrap || liveTask?.body;
+  const thinkRoot = liveTask?.body || liveTurnWrap;
   thinkRoot?.querySelectorAll('.think-block.is-live').forEach((el) => {
     el.classList.remove('is-live');
     const summary = el.querySelector('.think-summary');
     if (summary && /思考中|Thinking/i.test(summary.textContent || '')) {
-      summary.textContent = thinkDoneLabel('', el.dataset.effort || reasoningEffort);
+      summary.textContent = thinkDoneLabel(
+        durationFromThinkSummary(summary.textContent),
+        el.dataset.effort || reasoningEffort
+      );
     }
   });
   const content = streamEventText(md) || String(liveTurnAnswerText || '').trim();
@@ -8414,13 +8467,17 @@ function artifactFolderUiLabel(folderId, shelf) {
   const custom = shelf?.labels?.[folderId];
   if (custom) return String(custom);
   const keys = {
-    images: 'artifactFolderImages',
-    design: 'artifactFolderDesign',
-    slides: 'artifactFolderSlides',
-    sheets: 'artifactFolderSheets',
     docs: 'artifactFolderDocs',
-    sites: 'artifactFolderSites',
-    files: 'artifactFolderFiles'
+    data: 'artifactFolderData',
+    web: 'artifactFolderWeb',
+    media: 'artifactFolderMedia',
+    files: 'artifactFolderFiles',
+    images: 'artifactFolderMedia',
+    design: 'artifactFolderLegacy',
+    slides: 'artifactFolderLegacy',
+    sheets: 'artifactFolderData',
+    sites: 'artifactFolderWeb',
+    legacy: 'artifactFolderLegacy'
   };
   return keys[folderId] ? t(keys[folderId]) : shelfFolderLabel(folderId, currentLang === 'en' ? 'en' : 'zh', shelf?.labels);
 }
@@ -8451,8 +8508,15 @@ function renderArtifactShelfRow(a) {
   const name = document.createElement('button');
   name.type = 'button';
   name.className = 'artifact-shelf-name';
-  name.textContent = a.displayLabel || a.name || a.artifactId;
+  name.disabled = false;
+  const label = document.createElement('span');
+  label.className = 'artifact-shelf-label';
+  label.textContent = a.displayLabel || a.name || a.artifactId;
+  const accessEl = document.createElement('span');
+  accessEl.className = 'artifact-access';
+  accessEl.textContent = artifactAccessBadgeKeys(a).map((key) => t(key)).join(' · ');
   name.title = a.primaryPath || a.name || t('artifactPreview');
+  name.append(label, accessEl);
   name.addEventListener('click', () => void previewSessionArtifact(a.artifactId));
   const actions = document.createElement('div');
   actions.className = 'artifact-shelf-actions';
@@ -8542,7 +8606,7 @@ async function refreshArtifactShelf() {
     };
     applyWorkspaceStatsToHeaders();
     listEl.innerHTML = '';
-    const folders = buildShelfView(sessionArtifacts, sess?.shelf || null);
+    const folders = foldLegacyShelfFolders(buildShelfView(sessionArtifacts, sess?.shelf || null));
     const shelfMeta = sess?.shelf || null;
     const nav = $('artifactRailNav');
     if (nav) {
@@ -8551,7 +8615,9 @@ async function refreshArtifactShelf() {
         nav.hidden = true;
       } else {
         nav.hidden = false;
-        const chips = [{ id: 'all', label: t('artifactFolderAll'), n: 0 }, ...folders.map((f) => ({
+        const chips = [{ id: 'all', label: t('artifactFolderAll'), n: 0 }, ...folders
+          .filter((f) => f.id !== 'design' && f.id !== 'slides')
+          .map((f) => ({
           id: f.id,
           label: artifactFolderUiLabel(f.id, shelfMeta),
           n: f.items.length
@@ -8609,13 +8675,14 @@ async function openArtifactPreviewIds(ids) {
     return;
   }
   try {
-    const res = await chrome.runtime.sendMessage({
+    const res =     await chrome.runtime.sendMessage({
       action: 'open_artifact_preview',
       sessionId: getWorkspaceSessionId(),
       artifactIds,
       focus: true,
       reason: 'user',
-      title: activeSessionName()
+      title: activeSessionName(),
+      lang: currentLang === 'en' ? 'en' : 'zh'
     });
     if (res && res.ok === false) {
       showQuickToast(res.message || (currentLang === 'en' ? 'Could not open preview' : '无法打开预览'));
@@ -8635,13 +8702,13 @@ async function zipSelectedArtifacts() {
   try {
     const files = [];
     for (const artifactId of ids) {
-      const res = await workspaceRpc('readArtifact', {
-        sessionId: getWorkspaceSessionId(),
-        artifactId
-      });
+      const res = await fetchCompleteArtifact(
+        (method, params) => workspaceRpc(method, params),
+        { sessionId: getWorkspaceSessionId(), artifactId }
+      );
+      const raw = res.bytes;
       const name = String(res?.artifact?.name || `${artifactId}.bin`).replace(/[\\/]/g, '_');
-      const raw = decodeArtifactBase64(res?.base64);
-      files.push({ name, data: raw.byteLength ? raw : new TextEncoder().encode(res?.content || '') });
+      files.push({ name, data: raw });
     }
     const zip = buildZipStore(files);
     const blob = new Blob([zip], { type: 'application/zip' });
@@ -8652,7 +8719,13 @@ async function zipSelectedArtifacts() {
     a.click();
     URL.revokeObjectURL(url);
   } catch (err) {
-    showQuickToast(err instanceof Error ? err.message : String(err));
+    showQuickToast(
+      err?.code === ARTIFACT_TRUNCATED
+        ? t('downloadTruncated')
+        : err instanceof Error
+          ? err.message
+          : String(err)
+    );
   }
 }
 
@@ -8663,27 +8736,16 @@ function escapeHtmlLite(s) {
     .replace(/"/g, '&quot;');
 }
 
-function decodeArtifactBase64(b64) {
-  const s = String(b64 || '');
-  if (!s) return new Uint8Array(0);
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
 async function downloadSessionArtifact(artifactId) {
   try {
-    const res = await workspaceRpc('readArtifact', {
-      sessionId: getWorkspaceSessionId(),
-      artifactId
-    });
+    const res = await fetchCompleteArtifact(
+      (method, params) => workspaceRpc(method, params),
+      { sessionId: getWorkspaceSessionId(), artifactId }
+    );
+    const raw = res.bytes;
     const name = res?.artifact?.name || `${artifactId}.bin`;
     const mime = res?.mimeType || 'application/octet-stream';
-    const raw = decodeArtifactBase64(res?.base64);
-    const blob = raw.byteLength
-      ? new Blob([raw], { type: mime })
-      : new Blob([res?.content || ''], { type: mime });
+    const blob = new Blob([raw], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -8691,7 +8753,13 @@ async function downloadSessionArtifact(artifactId) {
     a.click();
     URL.revokeObjectURL(url);
   } catch (err) {
-    showQuickToast(err instanceof Error ? err.message : String(err));
+    showQuickToast(
+      err?.code === ARTIFACT_TRUNCATED
+        ? t('downloadTruncated')
+        : err instanceof Error
+          ? err.message
+          : String(err)
+    );
   }
 }
 
@@ -9324,33 +9392,10 @@ function placeBindGroupHint() {
 
 function syncBindGroupHint() {
   const hint = $('bindGroupHint');
-  if (!hint) return;
-  const panel = $('panel') || document.querySelector('.panel');
   const composer = document.querySelector('footer.composer') || document.querySelector('.composer');
-  const atHome = !!panel?.classList.contains('is-home-empty');
-  const sid = getWorkspaceSessionId();
-  const n = (workspaceGroupState.boundGroupIds || []).length;
-  if (n > 0) {
-    if (bindHintDismissed.has(sid)) {
-      bindHintDismissed.delete(sid);
-      persistBindHintDismissed();
-    }
-    hint.hidden = true;
-    composer?.classList.remove('has-bind-hint');
-    return;
-  }
-  if (atHome) {
-    hint.hidden = true;
-    composer?.classList.remove('has-bind-hint');
-    return;
-  }
-  hint.hidden = bindHintDismissed.has(sid);
-  if (!hint.hidden) {
-    mountBindGroupHint();
-    composer?.classList.add('has-bind-hint');
-  } else {
-    composer?.classList.remove('has-bind-hint');
-  }
+  if (hint) hint.hidden = true;
+  composer?.classList.remove('has-bind-hint');
+  refreshBotChrome();
 }
 
 function dismissBindGroupHint() {
@@ -11022,6 +11067,8 @@ function openTrajectoryExportModal() {
   if (noteEl) {
     noteEl.value = activeSess.trajectory?.humanStatusNote || '';
   }
+  const warnEl = document.getElementById('trajectoryThoughtWarn');
+  if (warnEl) warnEl.textContent = t('trajectoryThoughtWarn');
   if (!overlay) {
     // Fallback: download without modal
     downloadCurrentConversationTrajectory({ humanStatus: 'unknown' });
@@ -11081,6 +11128,7 @@ async function downloadCurrentConversationTrajectory({
         messages
       },
       messages,
+      sessionAudit: workspace?.audit,
       humanStatus,
       humanStatusNote,
       humanStatusSetAt: persistHumanStatus ? new Date().toISOString() : undefined

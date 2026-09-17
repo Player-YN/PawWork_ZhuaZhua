@@ -7,6 +7,7 @@
 
 import { projectJsonForWire } from './wireTranscript.js';
 import { harvestModelUsage } from './contextCompact.js';
+import { SESSION_AUDIT_SCHEMA, TRAJECTORY_THOUGHT_WARNING } from './sessionAudit.js';
 
 export const BEHAVIOR_TRAJECTORY_SCHEMA = 'pagewand.trajectory/v3';
 
@@ -388,7 +389,12 @@ function slimToolArgs(tool, raw) {
       }
       continue;
     }
-    if (k === 'code' || k === 'content' || k === 'instructions' || k === 'markdown' || k === 'html') {
+    if (k === 'code') {
+      out.code = '[omitted]';
+      out.codeChars = String(v).length;
+      continue;
+    }
+    if (k === 'content' || k === 'instructions' || k === 'markdown' || k === 'html') {
       out[k] = clipStr(v, 400);
       continue;
     }
@@ -754,6 +760,15 @@ function slimEvent(step) {
       ts: isoTime(step.ts) || undefined
     };
   }
+  if (
+    type === 'task-lifecycle' ||
+    type === 'lease' ||
+    type === 'abort' ||
+    type === 'stale-ref' ||
+    type === 'action-outcome'
+  ) {
+    return compactAuditFact(type, step, isoTime(step.ts) || step.ts);
+  }
   return slim(step);
 }
 
@@ -1006,6 +1021,60 @@ export function recordBehaviorEvent(pathLog, ev) {
       endedAt: ts,
       latencyMs
     });
+    const args = call?.args && typeof call.args === 'object' ? call.args : {};
+    if (tool === 'action') {
+      pathLog.push(
+        compactAuditFact(
+          'action-outcome',
+          {
+            op: args.op || result?.op,
+            ok: resultOk(result, ev),
+            code: result?.code || ev.code,
+            name: args.name,
+            tabId: result?.tabId || ev.tabId,
+            title: result?.title || ev.title
+          },
+          ts
+        )
+      );
+      if (String(result?.code || ev.code || '') === 'STALE_REF') {
+        pathLog.push(compactAuditFact('stale-ref', { op: args.op, recovered: false, name: args.name }, ts));
+      }
+      if (String(args.op || '') === 'snapshot' && resultOk(result, ev)) {
+        pathLog.push(compactAuditFact('stale-ref', { op: 'snapshot', recovered: true }, ts));
+      }
+      if (String(result?.code || ev.code || '') === 'TAB_LEASED') {
+        pathLog.push(
+          compactAuditFact(
+            'lease',
+            {
+              op: 'conflict',
+              tabId: result?.tabId || ev.tabId,
+              title: result?.title || ev.title,
+              holderSessionId: result?.holderSessionId || ev.holderSessionId,
+              code: 'TAB_LEASED'
+            },
+            ts
+          )
+        );
+      }
+    }
+    if (tool === 'task') {
+      pathLog.push(
+        compactAuditFact(
+          'task-lifecycle',
+          {
+            op: args.op || result?.op,
+            status: result?.task?.status || result?.status,
+            taskId: result?.task?.taskId || result?.taskId,
+            nextAction: result?.task?.nextAction,
+            dueAt: result?.task?.dueAt,
+            ok: resultOk(result, ev)
+          },
+          ts
+        )
+      );
+    }
     return;
   }
 
@@ -1264,7 +1333,64 @@ export function recordBehaviorEvent(pathLog, ev) {
       status: ev.status ? String(ev.status) : type === 'execution-start' ? 'running' : 'completed',
       ts
     });
+    return;
   }
+
+  if (
+    type === 'task-lifecycle' ||
+    type === 'lease' ||
+    type === 'abort' ||
+    type === 'deadline' ||
+    type === 'stale-ref' ||
+    type === 'action-outcome'
+  ) {
+    pathLog.push(compactAuditFact(type, ev, ts));
+  }
+}
+
+function compactAuditFact(type, ev, ts) {
+  const row = { type, ts };
+  if (ev.op) row.op = String(ev.op).slice(0, 40);
+  if (ev.status) row.status = String(ev.status).slice(0, 40);
+  if (ev.ok != null) row.ok = ev.ok === true;
+  if (ev.code) row.code = String(ev.code).slice(0, 64);
+  if (ev.taskId) row.taskId = String(ev.taskId).slice(0, 160);
+  if (ev.executionId) row.executionId = String(ev.executionId).slice(0, 80);
+  if (ev.sessionId) row.sessionId = String(ev.sessionId).slice(0, 80);
+  if (ev.tabId != null && ev.tabId !== '') row.tabId = ev.tabId;
+  if (ev.title) row.title = String(ev.title).slice(0, 120);
+  if (ev.holderSessionId) row.holderSessionId = String(ev.holderSessionId).slice(0, 80);
+  if (ev.name) row.name = String(ev.name).slice(0, 80);
+  if (ev.recovered === true) row.recovered = true;
+  if (ev.reason) row.reason = String(ev.reason).slice(0, 40);
+  if (ev.kind) row.kind = String(ev.kind).slice(0, 24);
+  if (ev.matched === false) row.matched = false;
+  if (ev.dueAt) row.dueAt = String(ev.dueAt).slice(0, 80);
+  if (ev.nextAction) row.nextAction = String(ev.nextAction).slice(0, 200);
+  return row;
+}
+
+export function collectAuditFacts(pathLog = []) {
+  const kinds = new Set();
+  for (const ev of Array.isArray(pathLog) ? pathLog : []) {
+    const type = String(ev?.type || '');
+    if (
+      type === 'task-lifecycle' ||
+      type === 'lease' ||
+      type === 'abort' ||
+      type === 'deadline' ||
+      type === 'stale-ref' ||
+      type === 'action-outcome'
+    ) {
+      kinds.add(type);
+    }
+    if (type === 'execution-end' && String(ev.status || '') === 'aborted') kinds.add('abort');
+    if (type === 'tool-result' && String(ev.tool || ev.name || '') === 'action') kinds.add('action-outcome');
+    if (type === 'tool-result' && String(ev.result?.code || ev.code || '') === 'STALE_REF') kinds.add('stale-ref');
+    if (type === 'tool-result' && String(ev.result?.code || ev.code || '') === 'TAB_LEASED') kinds.add('lease');
+    if (type === 'tool-result' && String(ev.tool || '') === 'task') kinds.add('task-lifecycle');
+  }
+  return [...kinds];
 }
 
 function clipBubble(text, max = MAX_BUBBLE_CHARS) {
@@ -1502,10 +1628,17 @@ export function serializeBehaviorTrajectory(opts = {}) {
         ? opts.humanStatus
         : 'completed';
 
+  const sessionAudit = opts.sessionAudit && typeof opts.sessionAudit === 'object'
+    ? opts.sessionAudit
+    : { schema: SESSION_AUDIT_SCHEMA, sessionId: String(session.sessionId || session.id || opts.sessionId || ''), events: [] };
+
   return {
     schema: BEHAVIOR_TRAJECTORY_SCHEMA,
     kind: 'audit',
     exportedAt: new Date().toISOString(),
+    warnings: [TRAJECTORY_THOUGHT_WARNING],
+    thoughtWarning: TRAJECTORY_THOUGHT_WARNING,
+    sessionAudit,
     conversation: {
       sessionId: String(session.sessionId || session.id || opts.sessionId || ''),
       title: String(session.title || session.name || opts.title || ''),

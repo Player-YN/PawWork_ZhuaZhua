@@ -16,6 +16,8 @@ import {
   bytesFromRpcContent,
   createArtifact as createArtifactRecord,
   deleteArtifact as deleteArtifactRecord,
+  READ_ARTIFACT_PREVIEW_DEFAULT,
+  READ_ARTIFACT_PREVIEW_HARD_CAP,
   updateArtifactContent,
   revertArtifactContent
 } from '../sessionWorkspace/artifacts.js';
@@ -78,6 +80,9 @@ import {
   settleTaskAfterTurn,
   updateTaskControl
 } from '../sessionWorkspace/tasks.js';
+import { appendSessionAudit, readSessionAudit } from '../sessionWorkspace/sessionAudit.js';
+import { persistableCapabilityHint } from '../sessionWorkspace/artifactCapability.js';
+import { ARTIFACT_CHUNK_SIZE, DOWNLOAD_INLINE_MAX } from '../sessionWorkspace/artifactDownload.js';
 
 export class SessionWorkspaceService {
   /**
@@ -292,6 +297,16 @@ export class SessionWorkspaceService {
       ) {
         return;
       }
+      if (sid && this.runtime?.store) {
+        try {
+          const row = appendSessionAudit(this.runtime.store, sid, event);
+          if (row && row.type !== 'execution-start') {
+            void this._persist?.();
+          }
+        } catch {
+          /* audit must not fail the turn */
+        }
+      }
       if (typeof chrome === 'undefined' || typeof chrome.runtime?.sendMessage !== 'function') {
         return;
       }
@@ -364,7 +379,8 @@ export class SessionWorkspaceService {
       updatedAt: s?.updatedAt || 0,
       createdAt: s?.createdAt || 0,
       shelf: s?.shelf && typeof s.shelf === 'object' ? s.shelf : null,
-      activeExecution: this._snapshotActiveExecution(sessionId)
+      activeExecution: this._snapshotActiveExecution(sessionId),
+      audit: readSessionAudit(this.runtime.store, sessionId)
     };
   }
 
@@ -394,6 +410,14 @@ export class SessionWorkspaceService {
     }
     if (op === 'resume') this._launchTask(task);
     return { task };
+  }
+
+  async getBrowserRuntimeState() {
+    await this._ready();
+    return { activeExecutions: [...this._activeBySession.values()].map(slot => ({
+      sessionId: slot.sessionId, executionId: slot.executionId || null,
+      aborted: slot.controller.signal.aborted
+    })) };
   }
 
   async getTaskSchedule() {
@@ -437,52 +461,45 @@ export class SessionWorkspaceService {
   }
 
   async _peekTabLease(tabId) {
-    if (typeof this._peekTabLeaseFn === 'function') {
-      return this._peekTabLeaseFn(tabId);
-    }
-    try {
-      if (typeof chrome?.runtime?.sendMessage === 'function') {
-        const res = await chrome.runtime.sendMessage({
-          target: 'pawwork-background',
-          action: 'workspace_tab_lease_peek',
-          tabId
-        });
-        return res?.lease || null;
-      }
-    } catch {
-      /* tests / SW gone — treat as free */
-    }
-    return null;
+    if (typeof this._peekTabLeaseFn === 'function') return this._peekTabLeaseFn(tabId);
+    if (typeof globalThis.chrome?.runtime?.sendMessage !== 'function') return null;
+    const res = await chrome.runtime.sendMessage({
+      target: 'pawwork-background', action: 'workspace_tab_lease_peek', tabId
+    });
+    if (!res?.ok) throw Object.assign(new Error(res?.error || 'Cannot verify browser ownership.'), {
+      code: res?.code || 'LEASE_STORE_UNAVAILABLE'
+    });
+    return res.lease || null;
   }
 
-  _releaseTabLeases(sessionId, executionId) {
-    if (typeof this._releaseTabLeasesFn === 'function') {
-      try {
-        this._releaseTabLeasesFn(sessionId, executionId);
-      } catch {
-        /* host hook must not fail settle */
-      }
-      return;
-    }
+  async _releaseTabLeases(sessionId, executionId) {
+    if (!sessionId || !executionId) return;
     try {
-      if (typeof chrome?.runtime?.sendMessage === 'function') {
-        const p = chrome.runtime.sendMessage({
-          target: 'pawwork-background',
-          action: 'workspace_tab_lease_release',
-          sessionId,
-          executionId
+      if (typeof this._releaseTabLeasesFn === 'function') {
+        await this._releaseTabLeasesFn(sessionId, executionId);
+      } else if (typeof globalThis.chrome?.runtime?.sendMessage === 'function') {
+        const res = await chrome.runtime.sendMessage({
+          target: 'pawwork-background', action: 'workspace_tab_lease_release', sessionId, executionId
         });
-        if (p && typeof p.catch === 'function') p.catch(() => {});
+        if (!res?.ok) throw new Error(res?.error || 'Browser resource release was not acknowledged.');
       }
-    } catch {
-      /* SW may already be gone */
+      this._broadcastUiEvent({
+        type: 'lease',
+        op: 'release',
+        sessionId,
+        executionId
+      });
+    } catch (error) {
+      // Retained locks are repaired against active executions on the next SW startup.
+      console.warn('[browser] execution cleanup incomplete', error);
     }
   }
 
   _launchTask(task) {
     if (!task?.taskId || this._taskLaunching.has(task.taskId)) return false;
     this._taskLaunching.add(task.taskId);
-    void this._runTask(task).finally(() => this._taskLaunching.delete(task.taskId));
+    void this._runTask(task).catch(error => console.warn('[tasks] launch failed', error))
+      .finally(() => this._taskLaunching.delete(task.taskId));
     return true;
   }
 
@@ -979,6 +996,13 @@ export class SessionWorkspaceService {
     }
     let durableTask = null;
     let releasedTask = null;
+    const controller = new AbortController();
+    let settleSlot = () => {};
+    const finished = new Promise(resolve => { settleSlot = resolve; });
+    this._activeBySession.set(sessionId, {
+      controller, executionId: null, sessionId, taskId: null, finished
+    });
+    try {
     // Ordinary chat must not create or attach an ambient task. Only an
     // explicit alarm/resume continuation (taskRun+taskId) binds this turn.
     if (role === 'user' && taskRun && taskId) {
@@ -1041,20 +1065,8 @@ export class SessionWorkspaceService {
       this.runtime.bindGroups(sessionId, [...bound]);
     }
 
-    const controller = new AbortController();
-    let settleSlot = () => {};
-    const finished = new Promise((resolve) => {
-      settleSlot = resolve;
-    });
-    this._activeBySession.set(sessionId, {
-      controller,
-      executionId: null,
-      sessionId,
-      taskId: durableTask?.taskId || null,
-      finished
-    });
-
-    try {
+    const currentSlot = this._activeBySession.get(sessionId);
+    if (currentSlot) currentSlot.taskId = durableTask?.taskId || null;
       const injectedCallModel = callModel || this.callModel || null;
       let resolvedModel = model || null;
       // Product path: always re-read API settings (user may configure after offscreen boot)
@@ -1160,6 +1172,17 @@ export class SessionWorkspaceService {
               targetPage: activeTab
             });
             if (out.yield) taskYielded = true;
+            this._broadcastUiEvent({
+              type: 'task-lifecycle',
+              sessionId,
+              executionId: slot?.executionId,
+              taskId: out?.task?.taskId || durableTask?.taskId,
+              op: String(input?.op || ''),
+              status: out?.task?.status,
+              nextAction: out?.task?.nextAction,
+              dueAt: out?.task?.dueAt,
+              ok: out?.ok !== false
+            });
             return out;
           }),
         taskShouldYield: () => {
@@ -1183,6 +1206,14 @@ export class SessionWorkspaceService {
               durableTask = await this._commitTaskMutation(() =>
                 claimTask(this.runtime.store, durableTask.taskId, executionId)
               );
+              this._broadcastUiEvent({
+                type: 'task-lifecycle',
+                op: 'claim',
+                sessionId,
+                executionId,
+                taskId: durableTask?.taskId,
+                status: durableTask?.status
+              });
             } catch (error) {
               releasedTask = await this._releaseClaimFailure(durableTask, error);
               durableTask = null;
@@ -1256,7 +1287,7 @@ export class SessionWorkspaceService {
       throw error;
     } finally {
       try {
-        this._releaseTabLeases(sessionId, this._activeBySession.get(sessionId)?.executionId);
+        await this._releaseTabLeases(sessionId, this._activeBySession.get(sessionId)?.executionId);
       } catch {
         /* */
       }
@@ -1274,30 +1305,71 @@ export class SessionWorkspaceService {
 
   /**
    * Real abort — cancels in-flight model/tool/code for session or execution.
+   * When executionId is provided, only that exact slot is cancelled so a late
+   * abort cannot kill a newer execution in the same session.
    */
   async abortExecution({ sessionId, executionId } = {}) {
-    let aborted = false;
-    if (executionId && this._activeByExecution.has(executionId)) {
-      this._activeByExecution.get(executionId).abort(createUserStopError());
-      aborted = true;
+    const slots = [...this._activeBySession.values()].filter(slot =>
+      (!sessionId || slot.sessionId === sessionId) && (!executionId || slot.executionId === executionId));
+    for (const slot of slots) {
+      this._broadcastUiEvent({
+        type: 'abort',
+        sessionId: slot.sessionId,
+        executionId: slot.executionId || null,
+        reason: 'user_stop',
+        kind: 'exact',
+        matched: true
+      });
+      slot.controller.abort(createUserStopError());
+      abortSessionClarifies(slot.sessionId);
     }
-    if (sessionId && this._activeBySession.has(sessionId)) {
-      this._activeBySession.get(sessionId).controller.abort(createUserStopError());
-      aborted = true;
+    if (executionId && slots.length === 0) {
+      this._broadcastUiEvent({
+        type: 'abort',
+        sessionId: sessionId || '',
+        executionId,
+        reason: 'user_stop',
+        kind: 'exact',
+        matched: false
+      });
     }
-    // Also abort all if neither specified
-    if (!sessionId && !executionId) {
-      for (const slot of this._activeBySession.values()) {
-        slot.controller.abort(createUserStopError());
-        this._releaseTabLeases(slot.sessionId, slot.executionId);
-        aborted = true;
-      }
-      abortSessionClarifies();
-    } else {
-      abortSessionClarifies(sessionId);
-      this._releaseTabLeases(sessionId, executionId);
+    if (!sessionId && !executionId) abortSessionClarifies();
+    await Promise.all(slots.map(slot => this._releaseTabLeases(slot.sessionId, slot.executionId)));
+    return { ok: true, aborted: slots.length > 0, deprecated: false };
+  }
+
+  /**
+   * UI Stop: resolve the live slot for this session, then exact-abort it.
+   * Does not depend on a caller-supplied executionId (stale / null safe).
+   */
+  async abortCurrentExecution({ sessionId } = {}) {
+    const sid = String(sessionId || '');
+    if (!sid) return { ok: false, aborted: false, code: 'NO_SESSION' };
+    const slot = this._activeBySession.get(sid);
+    if (!slot) {
+      this._broadcastUiEvent({
+        type: 'abort',
+        sessionId: sid,
+        executionId: null,
+        reason: 'user_stop',
+        kind: 'current',
+        aborted: false
+      });
+      return { ok: true, aborted: false, sessionId: sid, executionId: null };
     }
-    return { ok: true, aborted, deprecated: false };
+    const executionId = slot.executionId || null;
+    this._broadcastUiEvent({
+      type: 'abort',
+      sessionId: sid,
+      executionId,
+      reason: 'user_stop',
+      kind: 'current',
+      matched: true
+    });
+    slot.controller.abort(createUserStopError());
+    abortSessionClarifies(sid);
+    await this._releaseTabLeases(sid, slot.executionId);
+    return { ok: true, aborted: true, sessionId: sid, executionId };
   }
 
   /** Sidepanel: user answered the clarify card. Resumes the paused tool loop. */
@@ -1306,11 +1378,15 @@ export class SessionWorkspaceService {
   }
 
   /** Product Stop hook (Sidepanel). */
-  async abortTask({ sessionId, executionId, taskId } = {}) {
-    return this.abortExecution({
-      sessionId: sessionId || undefined,
-      executionId: executionId || taskId || undefined
-    });
+  async abortTask({ sessionId, executionId } = {}) {
+    if (executionId) {
+      return this.abortExecution({
+        sessionId: sessionId || undefined,
+        executionId
+      });
+    }
+    if (sessionId) return this.abortCurrentExecution({ sessionId });
+    return this.abortExecution({});
   }
 
   async listSkills() {
@@ -1376,46 +1452,121 @@ export class SessionWorkspaceService {
     return this.runtime.listArtifacts(sessionId);
   }
 
-  /**
-   * Read durable artifact content for preview / download (binary-safe).
-   */
-  async readArtifact({ sessionId = 'default', artifactId } = {}) {
+  async _loadArtifactBytes(sessionId, artifactId) {
     this.ensureSession(sessionId);
     const gate = assertArtifactOwned(this.runtime.store, sessionId, artifactId);
     if (!gate.ok) {
       throw new Error(gate.error || `artifact not found: ${artifactId}`);
     }
-    const rec = gate.record;
-    // Lazy hydrate OPFS bytes for this session before guest read (H-11)
+    let rec = gate.record;
     if (typeof this.runtime.store.hydrateSessionBlobs === 'function') {
       await this.runtime.store.hydrateSessionBlobs(sessionId);
     }
     const fs = createSessionGuestFs(this.runtime.store, { sessionId, executionId: null });
-    let content = '';
-    /** @type {Uint8Array|null} */
     let bytes = null;
+    const hostPath = fs._hostPath(rec.primaryPath);
+    const nodeKey = fs._nodeKey(hostPath);
+    if (typeof this.runtime.store.getBlobAsync === 'function') {
+      const blob = await this.runtime.store.getBlobAsync(nodeKey);
+      if (blob?.bytes) bytes = blob.bytes;
+    }
+    if (!bytes) bytes = fs.readFileBytes(rec.primaryPath);
+    rec = persistCapabilityFromBytes(this.runtime.store, rec, bytes);
+    return { rec, bytes: bytes || new Uint8Array(0) };
+  }
+
+  /** Bounded preview / classify. Never a download path. */
+  async readArtifactPreview({ sessionId = 'default', artifactId, maxBytes } = {}) {
     try {
-      const hostPath = fs._hostPath(rec.primaryPath);
-      const nodeKey = fs._nodeKey(hostPath);
-      if (typeof this.runtime.store.getBlobAsync === 'function') {
-        const blob = await this.runtime.store.getBlobAsync(nodeKey);
-        if (blob?.bytes) bytes = blob.bytes;
-      }
-      if (!bytes) bytes = fs.readFileBytes(rec.primaryPath);
+      const { rec, bytes } = await this._loadArtifactBytes(sessionId, artifactId);
+      const asked = maxBytes != null ? Number(maxBytes) : READ_ARTIFACT_PREVIEW_DEFAULT;
+      const limit = Math.max(
+        0,
+        Math.min(READ_ARTIFACT_PREVIEW_HARD_CAP, Number.isFinite(asked) ? asked : READ_ARTIFACT_PREVIEW_DEFAULT)
+      );
+      const total = bytes.byteLength;
+      const truncated = total > limit;
+      const slice = truncated ? bytes.subarray(0, limit) : bytes;
       const textLike = /^text\/|json|xml|javascript|markdown|csv/i.test(rec.mimeType || '');
-      content = textLike ? new TextDecoder().decode(bytes) : '';
+      return {
+        artifact: rec,
+        content: textLike ? new TextDecoder().decode(slice) : '',
+        byteLength: total,
+        prefixBytes: slice.byteLength,
+        truncated,
+        preview: true,
+        complete: !truncated,
+        mimeType: rec.mimeType || 'application/octet-stream',
+        base64: bytesToBase64(slice)
+      };
     } catch (e) {
       throw new Error(
         `artifact content unreadable: ${e instanceof Error ? e.message : String(e)}`
       );
     }
+  }
+
+  /** Original bytes. Never returns a silent prefix. */
+  async downloadArtifact({ sessionId = 'default', artifactId } = {}) {
+    try {
+      const { rec, bytes } = await this._loadArtifactBytes(sessionId, artifactId);
+      const textLike = /^text\/|json|xml|javascript|markdown|csv/i.test(rec.mimeType || '');
+      if (bytes.byteLength > DOWNLOAD_INLINE_MAX) {
+        return {
+          artifact: rec,
+          content: '',
+          byteLength: bytes.byteLength,
+          prefixBytes: 0,
+          truncated: false,
+          preview: false,
+          complete: true,
+          useChunks: true,
+          chunkSize: ARTIFACT_CHUNK_SIZE,
+          mimeType: rec.mimeType || 'application/octet-stream'
+        };
+      }
+      return {
+        artifact: rec,
+        content: textLike ? new TextDecoder().decode(bytes) : '',
+        byteLength: bytes.byteLength,
+        prefixBytes: bytes.byteLength,
+        truncated: false,
+        preview: false,
+        complete: true,
+        mimeType: rec.mimeType || 'application/octet-stream',
+        base64: bytesToBase64(bytes)
+      };
+    } catch (e) {
+      throw new Error(
+        `artifact content unreadable: ${e instanceof Error ? e.message : String(e)}`
+      );
+    }
+  }
+
+  async readArtifactChunk({ sessionId = 'default', artifactId, offset = 0, length } = {}) {
+    const { rec, bytes } = await this._loadArtifactBytes(sessionId, artifactId);
+    const start = Math.max(0, Number(offset) || 0);
+    const want = length != null ? Number(length) : ARTIFACT_CHUNK_SIZE;
+    const take = Math.max(0, Number.isFinite(want) ? want : ARTIFACT_CHUNK_SIZE);
+    const slice = bytes.subarray(start, start + take);
     return {
-      artifact: rec,
-      content,
-      byteLength: bytes?.byteLength || 0,
-      mimeType: rec.mimeType || 'application/octet-stream',
-      base64: bytes ? bytesToBase64(bytes) : ''
+      artifactId: rec.artifactId,
+      offset: start,
+      length: slice.byteLength,
+      byteLength: bytes.byteLength,
+      truncated: false,
+      complete: false,
+      preview: false,
+      base64: bytesToBase64(slice)
     };
+  }
+
+  /** `maxBytes` / preview=true → bounded preview. Otherwise complete original bytes. */
+  async readArtifact({ sessionId = 'default', artifactId, maxBytes, preview } = {}) {
+    if (preview === true || maxBytes != null) {
+      return this.readArtifactPreview({ sessionId, artifactId, maxBytes });
+    }
+    return this.downloadArtifact({ sessionId, artifactId });
   }
 
   async createArtifact({ sessionId = 'default', name, content, mimeType, path, base64 } = {}) {
@@ -1787,6 +1938,22 @@ function decodeDataUrl(dataUrl) {
     return { bytes, mimeType };
   }
   return { bytes: new TextEncoder().encode(decodeURIComponent(payload)), mimeType };
+}
+
+function persistCapabilityFromBytes(store, rec, bytes) {
+  if (!store || !rec?.artifactId) return rec;
+  const hint = persistableCapabilityHint({
+    name: rec.name,
+    mimeType: rec.mimeType,
+    bytes,
+    contentKind: rec.contentKind,
+    capability: rec.capability
+  });
+  if (!hint.proven) return rec;
+  if (rec.capability?.proven === true && rec.contentKind === hint.contentKind) return rec;
+  const next = { ...rec, contentKind: hint.contentKind, capability: hint };
+  store.put('artifacts', rec.artifactId, next);
+  return next;
 }
 
 function bytesToBase64(bytes) {

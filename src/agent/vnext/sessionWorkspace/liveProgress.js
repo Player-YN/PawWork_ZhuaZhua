@@ -86,7 +86,7 @@ function applyHostLamp(next, ev, isZh) {
         return next;
       }
       if (view === 'group' || view === 'groups') {
-        next.label = isZh ? '正在查看已绑定的内容' : 'Looking at bound items';
+        next.label = isZh ? '正在查看已瞄准的内容' : 'Looking at aimed items';
         next.visible = true;
         return next;
       }
@@ -117,6 +117,40 @@ function applyHostLamp(next, ev, isZh) {
       next.visible = true;
       return next;
     }
+    if (name === 'action') {
+      const op = String(args.op || '');
+      const object = String(args.name || '').replace(/\s+/g, ' ').trim().slice(0, 32);
+      if (op === 'click') next.label = isZh ? `正在点击${object ? ` ${object}` : ''}` : `Clicking${object ? ` ${object}` : ''}`;
+      else if (op === 'fill' || op === 'fill_form') next.label = isZh ? `正在填写${object ? ` ${object}` : ''}` : `Filling${object ? ` ${object}` : ''}`;
+      else if (op === 'snapshot') next.label = isZh ? '正在读取当前标签' : 'Reading the current tab';
+      else if (op === 'wait') next.label = isZh ? '正在等待页面' : 'Waiting on the page';
+      else next.label = isZh ? '正在操作页面' : 'Acting on the page';
+      next.visible = true;
+      return next;
+    }
+    if (name === 'web') {
+      next.label = String(args.act || '') === 'read' ? (isZh ? '正在读取网站' : 'Reading the site') : isZh ? '正在写网站' : 'Writing the site';
+      next.visible = true;
+      return next;
+    }
+    if (name === 'sheet') {
+      next.label = String(args.act || '') === 'read' ? (isZh ? '正在读取表格' : 'Reading the sheet') : isZh ? '正在写表格' : 'Writing the sheet';
+      next.visible = true;
+      return next;
+    }
+    if (name === 'doc') {
+      next.label = String(args.act || '') === 'read' ? (isZh ? '正在读取文档' : 'Reading the document') : isZh ? '正在写文档' : 'Writing the document';
+      next.visible = true;
+      return next;
+    }
+    if (name === 'task') {
+      const op = String(args.op || '');
+      if (op === 'wait') next.label = isZh ? '正在登记等待' : 'Scheduling a wait';
+      else if (op === 'complete') next.label = isZh ? '正在完成任务' : 'Completing the task';
+      else next.label = isZh ? '正在更新任务' : 'Updating the task';
+      next.visible = true;
+      return next;
+    }
     return next;
   }
 
@@ -129,8 +163,8 @@ function applyHostLamp(next, ev, isZh) {
         next.itemTotal = total;
         if (!(next.phase === 'commentary' && next.buffer.trim())) {
           next.label = isZh
-            ? `已绑定 ${total} 项，正在查看`
-            : `${total} bound items, reading…`;
+            ? `已瞄准 ${total} 项，正在查看`
+            : `${total} aimed items, reading…`;
           next.visible = true;
         }
       }
@@ -242,22 +276,20 @@ export function applyLiveProgress(state, ev, lang = 'zh') {
     // Mid-turn prose is the progress row only. Promoting it to a bubble
     // before model-end makes the same text appear twice when tools follow.
     next.phase = next.pendingTools > 0 || next.phase === 'commentary' ? 'commentary' : 'unknown';
-    return useCommentaryLabel(next);
+    return next;
   }
 
   if (type === 'tool-call') {
     next.pendingTools += 1;
     next.phase = 'commentary';
     applyHostLamp(next, ev, isZh);
-    if (next.buffer.trim()) useCommentaryLabel(next);
     return next;
   }
 
   if (type === 'tool-result' || type === 'tool-execution-end') {
     next.pendingTools = Math.max(0, next.pendingTools - 1);
     applyHostLamp(next, ev, isZh);
-    if (next.phase === 'commentary' && next.buffer.trim()) useCommentaryLabel(next);
-    else if (next.pendingTools === 0 && String(ev.name || ev.tool || '') === 'acquire') {
+    if (next.pendingTools === 0 && String(ev.name || ev.tool || '') === 'acquire') {
       next.visible = false;
     }
     return next;
@@ -266,7 +298,6 @@ export function applyLiveProgress(state, ev, lang = 'zh') {
   if (type === 'model-end') {
     if (finishIsToolCalls(ev.finishReason)) {
       next.phase = 'commentary';
-      if (next.buffer.trim()) useCommentaryLabel(next);
       return next;
     }
     if (next.pendingTools === 0) {

@@ -1,3 +1,4 @@
+import { workspaceRpc } from '../agent/vnext/host/workspaceClient.js';
 /**
  * Live Univer workbook for csv / tsv / xlsx artifacts.
  * Selection is ambient hint only; the open workbook is fully writable.
@@ -15,6 +16,10 @@ import {
   encodeUtf8Csv
 } from './sheetCodec.js';
 import { classifyOpenArtifact, isUtf8OpenKind, previewEntryForKind } from '../agent/vnext/sessionWorkspace/openClassify.js';
+import {
+  ARTIFACT_TRUNCATED,
+  fetchCompleteArtifact
+} from '../agent/vnext/sessionWorkspace/artifactDownload.js';
 import { pushPromptCheckpoint, undoPrompt, redoPrompt } from './sheetPromptUndo.js';
 import {
   applyCommandsToWorkbookData,
@@ -103,16 +108,6 @@ let pickActive = false;
 /** @type {ReturnType<typeof mountOfficeSelBubble>|null} */
 let selBubble = null;
 
-async function workspaceRpc(method, params = {}) {
-  const response = await chrome.runtime.sendMessage({
-    target: 'pawwork-background',
-    action: 'workspace_rpc',
-    method,
-    params
-  });
-  if (!response?.ok) throw new Error(response?.error || `workspace RPC failed: ${method}`);
-  return response.result;
-}
 
 function boot(msg, isError = false) {
   const el = document.getElementById('boot');
@@ -1802,13 +1797,16 @@ async function main() {
   }
   wireBar();
   try {
-    const rec = await workspaceRpc('readArtifact', { sessionId, artifactId });
+    const rec = await fetchCompleteArtifact(
+      (method, params) => workspaceRpc(method, params),
+      { sessionId, artifactId }
+    );
     artifactRevision = Number(rec?.artifact?.revision) || 0;
     const item = {
       artifactId,
       name: rec?.artifact?.name || rec?.name || artifactId,
       mimeType: rec?.mimeType || rec?.artifact?.mimeType || '',
-      bytes: b64ToBytes(rec?.base64),
+      bytes: rec.bytes,
       text: rec?.content != null ? String(rec.content) : ''
     };
     const cls = classifyOpenArtifact(item);
@@ -1817,6 +1815,8 @@ async function main() {
       const q = new URLSearchParams();
       q.set('sessionId', sessionId);
       q.set('artifactId', artifactId);
+      const loc = qs('lang');
+      if (loc === 'en' || loc === 'zh') q.set('lang', loc);
       location.replace(`./${dest}?${q.toString()}`);
       return;
     }

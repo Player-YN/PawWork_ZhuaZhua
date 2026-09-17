@@ -4,6 +4,7 @@
  */
 
 import { isWebItemLeased } from './execution.js';
+import { sessionAuditKey } from './sessionAudit.js';
 
 /**
  * WebItems not in any group and not leased → reclaim.
@@ -141,6 +142,7 @@ export function deleteSessionCascade(store, sessionId) {
   store.delete('sessionBindings', sid);
   store.delete('sessions', sid);
   store.delete('meta', `artifactIndex:${sid}`);
+  store.delete('meta', sessionAuditKey(sid));
   // Groups NOT deleted
   return { deletedSessionId: sid, messagesGone: true, artifactsGone: true };
 }
