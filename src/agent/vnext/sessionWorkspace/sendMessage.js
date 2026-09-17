@@ -14,6 +14,7 @@ import { isPawCanvasDoc } from './openClassify.js';
 import { buildSessionAgentInstructions, buildWorldStateBlock, compactOpenTabOverview } from './prompt.js';
 import { formatTaskInstructions } from './taskInstructions.js';
 import { userRequestedPlan } from './planContract.js';
+import { runLearnTurn, userRequestedLearn } from './learnFromTrajectory.js';
 import { createSessionTools } from './tools.js';
 import { inventoryFromSession } from './canvasInventory.js';
 import { makeOfficePrepareStep, scheduleActiveToolNames } from './toolSchedule.js';
@@ -236,10 +237,11 @@ export async function sendMessage(store, input) {
   ]
     .filter(Boolean)
     .join('\n\n');
+  const learnRequested = userRequestedLearn({ content, mentions: input.mentions });
   let tabOverview = input.tabOverview != null
     ? compactOpenTabOverview(input.tabOverview)
     : null;
-  if (!tabOverview && typeof input.hostSys === 'function') {
+  if (!learnRequested && !tabOverview && typeof input.hostSys === 'function') {
     try {
       const listed = await input.hostSys('tabs.list', {});
       const rows = listed && typeof listed === 'object' && listed.result != null ? listed.result : listed;
@@ -260,6 +262,7 @@ export async function sendMessage(store, input) {
     focusPage: pages.focusPage,
     shelf: compactShelfSnapshot(listArtifacts(store, sessionId), sessionNow.shelf),
     userRequestedPlan: userRequestedPlan({ content, mentions: input.mentions }),
+    userRequestedLearn: learnRequested,
     tabOverview,
     taskContinuation,
     taskContext
@@ -287,6 +290,81 @@ export async function sendMessage(store, input) {
       }
     }
   };
+
+  if (learnRequested) {
+    let learnOut;
+    try {
+      learnOut = await runLearnTurn({
+        store,
+        sessionId,
+        execution,
+        signal: execution.abortSignal,
+        callModel: input.callModel,
+        model: input.model,
+        onEvent,
+        waitForClarify: input.waitForClarify
+      });
+    } catch (error) {
+      if (isAbortLike(error, execution.abortSignal)) throw error;
+      learnOut = {
+        ok: false,
+        wrote: false,
+        code: error?.code || 'LEARN_FAILED',
+        finalText: formatRpcError(error)
+      };
+    }
+    const finalText = String(learnOut?.finalText || '');
+    const assistant = {
+      messageId: createMessageId(),
+      role: 'assistant',
+      content: finalText,
+      status: 'completed',
+      toolCalls: [],
+      path: pathLog.slice(),
+      createdAt: Date.now()
+    };
+    const sessLearn = store.get('sessions', sessionId);
+    store.put('sessions', sessionId, {
+      ...sessLearn,
+      messages: [...(sessLearn.messages || []), assistant],
+      updatedAt: Date.now()
+    });
+    settleExecution(store, execution, 'settled');
+    try {
+      onEvent({
+        type: 'assistant-final',
+        sessionId,
+        executionId: execution.executionId,
+        content: finalText
+      });
+      onEvent({
+        type: 'execution-end',
+        sessionId,
+        executionId: execution.executionId,
+        status: 'completed'
+      });
+    } catch {
+      /* UI listener must not fail the turn */
+    }
+    return {
+      message,
+      assistant,
+      executionId: execution.executionId,
+      finalText,
+      thought: '',
+      toolCalls: [],
+      steps: [],
+      createdTask: false,
+      learn: {
+        wrote: learnOut?.wrote === true,
+        code: learnOut?.code || '',
+        merged: learnOut?.merged === true
+      },
+      taskYielded: false,
+      taskStepLimitReached: false,
+      taskStepCount: 0
+    };
+  }
 
   recordBehaviorEvent(pathLog, {
     type: 'turn-context',

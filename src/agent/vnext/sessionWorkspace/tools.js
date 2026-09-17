@@ -101,6 +101,13 @@ import {
 import { pageBytes, pageTextByCodePoint } from './textPage.js';
 import { createGuestSys, SYS_HELP, SYS_MODEL_HINT } from './browserSys.js';
 import { createTaskTool, guardTaskToolExecutions } from './taskTool.js';
+import {
+  learnedReuseBlocked,
+  yieldLearnPlanConfirm,
+  learnConfirmPlan,
+  markLearnedReuseConfirmed,
+  parseCapabilityRoutes
+} from './learnFromTrajectory.js';
 
 /**
  * @param {object} env
@@ -584,6 +591,36 @@ export function createSessionTools(env) {
         const playbookRaw =
           durable?.instructions || loadSkillInstructions(skillId, { sessionId }) || skill.instructions || '';
         const playbook = typeof playbookRaw === 'function' ? playbookRaw() : playbookRaw;
+        if (learnedReuseBlocked(durable || skill)) {
+          const target = durable || skill;
+          const classified = await yieldLearnPlanConfirm({
+            sessionId,
+            plan: learnConfirmPlan(
+              {
+                taskClass: target.taskClass || target.id,
+                name: target.name,
+                description: target.description,
+                routes: parseCapabilityRoutes(target.instructions || playbook),
+                discovery: 'If the preferred route fails, re-enter discovery.'
+              },
+              { reuse: true }
+            ),
+            onEvent,
+            signal,
+            waitForClarify: typeof env.waitForClarify === 'function' ? env.waitForClarify : waitForClarifyAnswer
+          });
+          if (classified.kind !== 'approved') {
+            return {
+              ok: false,
+              view: 'skill',
+              skillId,
+              code: 'LEARN_REUSE_DENIED',
+              error: 'First reuse of a learned method requires plan-card confirm.',
+              playbook: ''
+            };
+          }
+          await markLearnedReuseConfirmed(target.id || skillId);
+        }
         if (resourcePath) {
           const resolved = resolveSkillGuestResource(requestedId, resourcePath);
           if (resolved.kind === 'playbook') {
@@ -2027,7 +2064,10 @@ export async function hydrateSkillScriptsIntoGuest(fs) {
     }
   }
   const durable = await getDurableSkillStore().list();
-  for (const rec of durable) writeSkillPackToGuest(fs, rec);
+  for (const rec of durable) {
+    if (learnedReuseBlocked(rec)) continue;
+    writeSkillPackToGuest(fs, rec);
+  }
 }
 
 function bytesToBase64(bytes) {

@@ -165,6 +165,12 @@ export function buildWorldStateBlock(ctx = {}) {
       'The user invoked /plan. Present the plan itself via clarify (pass plan) this turn before mutating. Do not ask whether to enter plan mode.'
     );
   }
+  if (ctx.userRequestedLearn === true) {
+    core.push(
+      'userRequestedLearn=true',
+      'The user invoked /learn. The host extracts the latest successful turn; do not take a tab lease or mutate pages for this command.'
+    );
+  }
   if (ctx.taskContinuation === true) {
     const task = ctx.taskContext && typeof ctx.taskContext === 'object' ? ctx.taskContext : null;
     core.push(
@@ -271,7 +277,7 @@ export function buildWorldStateBlock(ctx = {}) {
       key: 'focusedMentions',
       lines: [
         `focusedMentions=${JSON.stringify(focused)}`,
-        'This turn @ / tokens map to focusedMentions ids. kind=artifact is a workspace file. kind=page is a document URL (focusPage). kind=skill is a playbook (inspect view=skill). kind=command is a host slash (e.g. /plan). Mentioning is focus, not Bind and not an inspect order.'
+        'This turn @ / tokens map to focusedMentions ids. kind=artifact is a workspace file. kind=page is a document URL (focusPage). kind=skill is a playbook (inspect view=skill). kind=command is a host slash (e.g. /plan, /learn). Mentioning is focus, not Bind and not an inspect order.'
       ]
     });
   }

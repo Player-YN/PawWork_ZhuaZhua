@@ -269,6 +269,14 @@ export {
   pinFrozenPlan,
   unpinFrozenPlan
 } from './planContract.js';
+export {
+  userRequestedLearn,
+  extractLearnableTurn,
+  sanitizeLearnTrajectory,
+  runLearnTurn,
+  learnedReuseBlocked,
+  persistLearnedSkill
+} from './learnFromTrajectory.js';
 export { ensureItemPixels, itemBlobKey } from './itemPixels.js';
 export {
   classifyLabelKind,

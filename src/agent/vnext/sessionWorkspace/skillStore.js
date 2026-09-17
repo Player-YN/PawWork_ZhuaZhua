@@ -66,8 +66,10 @@ export function normalizeDurableSkill(input = {}) {
     if (pack > MAX_PACK_CHARS) throw new Error('skill pack too large');
     resources[p] = text;
   }
-  const origin = ['overlay', 'github', 'authored'].includes(input.origin) ? input.origin : 'authored';
-  return {
+  const origin = ['overlay', 'github', 'authored', 'learned'].includes(input.origin)
+    ? input.origin
+    : 'authored';
+  const rec = {
     id,
     name: String(input.name || id).trim().slice(0, 80) || id,
     description: description.slice(0, 500),
@@ -77,6 +79,12 @@ export function normalizeDurableSkill(input = {}) {
     sourceUrl: input.sourceUrl ? String(input.sourceUrl).slice(0, 2000) : '',
     updatedAt: Number(input.updatedAt) || Date.now()
   };
+  if (origin === 'learned' || input.learned === true) {
+    rec.learned = true;
+    rec.taskClass = String(input.taskClass || '').trim().slice(0, 80);
+    rec.reuseConfirmed = input.reuseConfirmed === true;
+  }
+  return rec;
 }
 
 export function skillRecordFromMarkdown(id, md, extra = {}) {

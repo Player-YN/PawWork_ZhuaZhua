@@ -112,7 +112,7 @@ BYOK：`llm.js` → `pagewand_providers`。`run`：`vnext/adapters`（QuickJS / 
 
 `vnext/skills/<id>/`：`SKILL.md` + 打包进扩展的 `skillSource.js` + `index.js`。注册表：`skills/registry.js`。
 
-已注册：`page-restyle`、`site-tool-reuse`。正文用 `inspect view=skill`。
+已注册：`page-restyle`、`site-tool-reuse`。正文用 `inspect view=skill`。`/learn` 从上一轮成功轨迹起草方法论，确认后写入 `pagewand_durable_skills`；第一次复用必须再过计划卡。
 
 用户自定义 skill（侧栏固化）走 `agent/skills.js`，与打包 playbook 分开存。
 
