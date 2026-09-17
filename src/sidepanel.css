@@ -518,6 +518,51 @@ body[data-theme='light'] .topbar {
   gap: 6px;
 }
 
+.access-policy-chip {
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.access-policy-chip[data-mode='full'] {
+  border-color: color-mix(in srgb, var(--rose) 40%, transparent);
+  color: var(--rose);
+}
+.approval-live-body {
+  padding: 8px 12px 12px;
+}
+.approval-risk {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-bottom: 6px;
+}
+.approval-risk.is-delete {
+  background: color-mix(in srgb, var(--rose) 16%, transparent);
+  color: var(--rose);
+}
+.approval-risk.is-ambiguous {
+  background: color-mix(in srgb, #d97706 18%, transparent);
+  color: #b45309;
+}
+.approval-risk.is-payment {
+  background: color-mix(in srgb, var(--rose) 12%, transparent);
+  color: var(--rose);
+}
+.approval-summary,
+.approval-detail,
+.approval-ttl {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+
 /* Ready / Running status — theme tokens (not hard-coded indigo) */
 .status-pill {
   display: inline-flex;

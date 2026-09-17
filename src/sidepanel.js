@@ -79,6 +79,9 @@ import {
   formatAimingText
 } from './sidepanel/executionStatus.js';
 import { createBotStatusUi } from './sidepanel/botStatusUi.js';
+import { createAccessPolicyUi } from './sidepanel/accessPolicyUi.js';
+import { createApprovalUi } from './sidepanel/approvalUi.js';
+import { approvalBelongsToSession } from './sidepanel/sessionIsolation.js';
 import { buildZipStore } from './agent/vnext/sessionWorkspace/pptxExport.js';
 import {
   artifactAccessBadgeKeys,
@@ -534,6 +537,28 @@ const botStatusUi = createBotStatusUi({
   getSessionId: () => getWorkspaceSessionId(),
   onStop: () => stopAgentRun('user_stop')
 });
+const accessPolicyUi = createAccessPolicyUi({
+  t,
+  getChip: () => $('accessPolicyChip'),
+  getDialog: () => $('accessFullDialog'),
+  getSettingsHint: () => $('accessSettingsHint'),
+  getSettingsMode: () => $('accessSettingsMode'),
+  getSettingsToggle: () => $('accessFullToggle'),
+  setAccessPolicy: async (params) => {
+    const policy = await workspaceRpc('setAccessPolicy', params);
+    accessPolicyUi.setPolicy(policy);
+    return policy;
+  }
+});
+const approvalUi = createApprovalUi({
+  t,
+  getSessionId: () => getWorkspaceSessionId(),
+  getLiveTask: (sid) => uiState(sid)?.liveTask || liveTask,
+  getComposer: () => document.querySelector('footer.composer'),
+  getPanel: () => $('panel'),
+  answerApproval: (params) => workspaceRpc('answerApproval', params)
+});
+accessPolicyUi.bind();
 
 const taskStatusUi = createTaskStatusUi({
   workspaceRpc,
@@ -6689,6 +6714,26 @@ function handleSessionWorkspaceEvent(request) {
   }
 
   const applyLive = () => {
+    if (ev?.type === 'access-policy-changed') {
+      accessPolicyUi.setPolicy(ev);
+      return;
+    }
+    if (ev?.type === 'policy-blocked') {
+      if (approvalBelongsToSession(sid, getWorkspaceSessionId())) approvalUi.showBlocked(ev);
+      return;
+    }
+    if (ev?.type === 'approval-required') {
+      if (ev.risk === 'payment' || ev.decisionRequired === false) {
+        if (approvalBelongsToSession(sid, getWorkspaceSessionId())) approvalUi.showBlocked(ev);
+        return;
+      }
+      if (approvalBelongsToSession(sid, getWorkspaceSessionId())) approvalUi.show(ev);
+      return;
+    }
+    if (ev?.type === 'approval-done' || ev?.type === 'execution-end' || ev?.type === 'assistant-final') {
+      if (approvalBelongsToSession(sid, getWorkspaceSessionId())) approvalUi.hide(sid);
+      if (ev?.type === 'approval-done') return;
+    }
     if (ev?.type === 'clarify') {
       showClarifyLive({ ...ev, sessionId: sid });
       return;
@@ -8787,6 +8832,10 @@ async function refreshWorkspaceGroupState() {
     if (getWorkspaceSessionId() !== sid) return;
     workspaceGroupState = state;
     applyWorkspaceExecutionSnapshot(sid, workspaceGroupState);
+    if (state.accessPolicy) accessPolicyUi.setPolicy(state.accessPolicy);
+    if (state.pendingApproval && approvalBelongsToSession(state.pendingApproval.sessionId || sid, sid)) {
+      approvalUi.show({ ...state.pendingApproval, sessionId: state.pendingApproval.sessionId || sid });
+    }
     renderWorkspaceGroupControls();
     const active = workspaceGroupState.groups?.find((g) => g.groupId === workspaceGroupState.activeGroupId);
     // Always mirror active group membership into selection chrome (empty group = empty chips, not "no group")

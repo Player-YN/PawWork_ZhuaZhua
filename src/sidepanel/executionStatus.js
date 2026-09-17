@@ -229,6 +229,7 @@ export function createExecutionStatus(seed = {}) {
     pendingTools: 0,
     activeTools: [],
     clarifyOpen: false,
+    approvalOpen: false,
     aborted: false
   };
 }
@@ -369,6 +370,7 @@ export function applyExecutionStatus(state, ev, ctx = {}) {
     next.phase = 'running';
     next.aborted = false;
     next.clarifyOpen = false;
+    next.approvalOpen = false;
     next.pendingTools = 0;
     next.activeTools = [];
     next.current = null;
@@ -566,12 +568,88 @@ export function applyExecutionStatus(state, ev, ctx = {}) {
     return next;
   }
 
+  if (type === 'policy-blocked') {
+    next.approvalOpen = false;
+    next.policyBlocked = ev.kind || 'payment-handoff';
+    if (next.phase === 'idle') next.phase = 'running';
+    next.current = {
+      text: text(ev.summary, 160) || (zh(lang) ? '请你接管付款' : 'Please take over payment'),
+      source: 'host'
+    };
+    next.summary = pushSummary(next.summary, {
+      id: `blocked-${text(ev.operationId, 40) || next.summary.length}`,
+      kind: 'error',
+      label: text(ev.summary, 80) || (zh(lang) ? '请你接管付款' : 'Please take over payment'),
+      object: text(ev.detail, NAME_CAP),
+      status: 'error',
+      code: ev.code || 'PAYMENT_DENIED'
+    });
+    next.next = resolveNext(next, lang);
+    return next;
+  }
+
+  if (type === 'approval-required') {
+    next.approvalOpen = ev.decisionRequired !== false;
+    next.phase = 'awaiting_approval';
+    next.current = {
+      text: text(ev.summary, 160) || (zh(lang) ? '等待你确认' : 'Waiting for your confirmation'),
+      source: 'host'
+    };
+    next.summary = pushSummary(next.summary, {
+      id: `approval-${text(ev.approvalId || ev.operationId, 40) || next.summary.length}`,
+      kind: ev.risk === 'delete' ? 'error' : 'wait',
+      label: text(ev.summary, 80) || (zh(lang) ? '等待确认' : 'Awaiting approval'),
+      object: text(ev.detail, NAME_CAP),
+      status: 'waiting',
+      code: 'APPROVAL_REQUIRED'
+    });
+    next.next = resolveNext(next, lang);
+    return next;
+  }
+
+  if (type === 'approval-done') {
+    next.approvalOpen = ev.stillPending === true;
+    if (next.phase === 'awaiting_approval' && ev.stillPending !== true) {
+      next.phase = next.aborted ? 'stopped' : 'running';
+    }
+    next.next = resolveNext(next, lang);
+    return next;
+  }
+
+  if (type === 'journal' || type === 'policy') {
+    const state = text(ev.state, 40);
+    if (state === 'unknown') {
+      next.phase = 'unknown';
+      next.current = { text: zh(lang) ? '结果未知，未重试' : 'Outcome unknown; not retried', source: 'host' };
+    } else if (state === 'needs_human') {
+      next.phase = 'needs_human';
+      next.current = { text: zh(lang) ? '需要你查看后再继续' : 'Needs you to inspect before continuing', source: 'host' };
+    } else if (state === 'verifying') {
+      next.phase = 'verifying';
+      next.current = { text: zh(lang) ? '正在核对是否已生效' : 'Checking whether it took effect', source: 'host' };
+    }
+    if (ev.code || state === 'unknown' || state === 'needs_human') {
+      next.summary = pushSummary(next.summary, {
+        id: `journal-${text(ev.operationId, 40) || next.summary.length}`,
+        kind: 'error',
+        label: text(ev.code || state, 80),
+        object: text(ev.risk, NAME_CAP),
+        status: state === 'unknown' ? 'unknown' : state === 'needs_human' ? 'needs_human' : 'error',
+        code: text(ev.code, 64)
+      });
+    }
+    next.next = resolveNext(next, lang);
+    return next;
+  }
+
   if (type === 'assistant-final' || type === 'execution-end') {
     const status = text(ev.status).toLowerCase();
     next.pendingTools = 0;
     next.activeTools = [];
     next.current = null;
     next.clarifyOpen = false;
+    next.approvalOpen = false;
+    next.policyBlocked = null;
     if (next.aborted || status === 'aborted' || ev.code === 'user_stop') next.phase = 'stopped';
     else if (status === 'failed' || type === 'error') next.phase = 'failed';
     else if (next.task?.status === 'waiting') next.phase = 'waiting_timer';
@@ -593,6 +671,6 @@ export function visibleSummaryRows(summary, limit = 8) {
 }
 
 export function phaseLabelKey(phase) {
-  const known = new Set(['idle', 'running', 'waiting_user', 'waiting_timer', 'paused', 'completed', 'failed', 'stopped']);
+  const known = new Set(['idle', 'running', 'waiting_user', 'waiting_timer', 'paused', 'completed', 'failed', 'stopped', 'awaiting_approval', 'verifying', 'unknown', 'needs_human']);
   return known.has(String(phase || '')) ? `botPhase_${phase}` : 'botPhase_idle';
 }

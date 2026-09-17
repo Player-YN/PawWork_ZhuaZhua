@@ -45,6 +45,9 @@ function statusWord(status, t) {
   if (status === 'success') return t('botRowSuccess');
   if (status === 'error' || status === 'failed') return t('botRowError');
   if (status === 'recovered') return t('botRowRecovered');
+  if (status === 'waiting') return t('botRowWaiting');
+  if (status === 'unknown') return t('botRowUnknown');
+  if (status === 'needs_human') return t('botRowNeedsHuman');
   return status;
 }
 

@@ -96,6 +96,7 @@
         <span id="pageFavicon" hidden></span>
       </div>
       <div class="topbar-right">
+        <button type="button" class="access-policy-chip" id="accessPolicyChip" data-mode="guarded" title="守卫模式">Guarded</button>
         <button type="button" class="icon-btn" id="moreBtn" title="更多" aria-label="更多" aria-expanded="false" aria-haspopup="dialog" aria-controls="moreSheet">⋯</button>
         <!-- Hidden legacy hooks (settings/lang/theme/status still driven by JS via more sheet) -->
         <button type="button" id="gearBtn" hidden aria-hidden="true" aria-haspopup="dialog" aria-controls="agentSettingsModal"></button>
@@ -579,6 +580,15 @@
         <button type="button" id="settingsModalCloseBtn" class="modal-close-btn" aria-label="关闭">&times;</button>
       </div>
       <div class="modal-body settings-modal-body">
+        <section class="settings-api-card" id="settingsAccessCard" aria-labelledby="settingsAccessTitle">
+          <h4 class="settings-api-card-title" id="settingsAccessTitle" data-i18n="accessSettingsTitle">访问策略</h4>
+          <p class="settings-hint" id="accessSettingsHint">守卫模式：已知的读、导航、填写、发送会自动进行。已知付款会拒绝。已知删除会先问你。</p>
+          <p class="settings-hint" id="accessSettingsMode">Guarded</p>
+          <label class="settings-check-row">
+            <input type="checkbox" id="accessFullToggle" />
+            <span data-i18n="accessChipFull">Full Access</span>
+          </label>
+        </section>
         <!-- 1. Inference / chat model -->
         <section class="settings-api-card" id="settingsInferenceCard" aria-labelledby="settingsInferenceTitle">
           <h4 class="settings-api-card-title" id="settingsInferenceTitle">1. 推理模型 API</h4>
@@ -781,6 +791,26 @@
 
   <!-- Hidden legacy aliases used by some helpers -->
   <button type="button" id="downloadTrajectoryFooterBtn" hidden style="display:none"></button>
+
+  <dialog id="accessFullDialog" class="pw-dialog" aria-labelledby="accessFullDialogTitle">
+    <div class="modal-card settings-modal-card">
+      <div class="modal-header">
+        <h3 id="accessFullDialogTitle" data-i18n="accessFullDialogTitle">开启 Full Access</h3>
+        <button type="button" class="modal-close-btn" data-access-cancel aria-label="关闭">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="settings-hint" data-i18n="accessFullDialogBody">开启后，助手将按最高自治运行：不确定的操作会直接做，也可以运行页面脚本。已知支付仍拒绝，已知删除仍需你点一次。无法保证不会发生未识别的付款或删除。可随时切回 Guarded；已经发出的操作不能撤销。</p>
+        <label class="settings-check-row">
+          <input type="checkbox" id="accessRememberProfile" />
+          <span data-i18n="accessRememberProfile">记住本 Chrome 配置</span>
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-access-cancel data-i18n="accessCancel">取消</button>
+        <button type="button" class="btn btn-primary" data-access-confirm data-i18n="accessFullConfirm">开启 Full Access</button>
+      </div>
+    </div>
+  </dialog>
 
   <div id="mentionPalette" class="mention-palette" hidden role="listbox" data-i18n-aria="mentionPaletteAria" aria-label="引用选区"></div>
 

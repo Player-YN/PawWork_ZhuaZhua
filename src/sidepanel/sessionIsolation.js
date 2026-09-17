@@ -17,6 +17,11 @@ export function clarifyBelongsToSession(clarifySessionId, sessionId) {
   return owned === sid;
 }
 
+/** Host approval cards are also session-scoped. Empty ids never match. */
+export function approvalBelongsToSession(approvalSessionId, sessionId) {
+  return clarifyBelongsToSession(approvalSessionId, sessionId);
+}
+
 /** Thread with another sessionId (or none) must not paint on the foreground task. */
 export function sessionThreadShouldHide(elSessionId, activeSessionId) {
   const sid = String(elSessionId || '').trim();
