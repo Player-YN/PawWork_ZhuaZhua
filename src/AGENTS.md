@@ -8,7 +8,7 @@ Service worker 会被 Chrome 杀掉。会话仓库、AI SDK、`run` 沙箱客户
 
 | 面 | 路径 | 现状 |
 |----|------|------|
-| Service worker | `background.js` | `manifest.background.type=module`。标签 / 下载 / 预览页 / office RPC / offscreen 转发 / **`workspace_page_action` 跨 frame 扇出** / **`workspace_sys`** |
+| Service worker | `background.js` | `manifest.background.type=module`。标签 / 下载 / 预览页 / office RPC / offscreen 转发 / **`workspace_page_action` 跨 frame 扇出** / **`workspace_sys`** / **tab 租约（SW 内存）** / **`chrome.alarms` 唤醒 due task** |
 | Offscreen | `offscreen/runtime.html` + `runtime.js` | `SessionWorkspaceService.create()`；收 `workspace_rpc_execute`。内嵌 sandbox iframe，**不**把 workspace boot 闸在 handshake 上 |
 | Content script | `content_script.js` | `matches: <all_urls>`，`run_at: document_idle`，**`all_frames: true`**。伸爪选区 + 每 frame 的 action。经典脚本（IIFE），`executeScript` 可再注入 |
 | Sidepanel | `sidepanel.html` + `sidepanel.js` | 对话 UI。`workspaceRpc` → background。编排器仍是 `sidepanel.js` |
@@ -31,11 +31,12 @@ CSP：`extension_pages` 允许 `'wasm-unsafe-eval'`（QuickJS / Univer）；sand
     sheet_host             → 打开/复用 sheet.html，再 pawwork_sheet_rpc
     canvas_host            → docs.html 同类 RPC（无 Design/Slides）
     workspace_fetch / workspace_sys / workspace_capture_* / workspace_find_tab / …
+    workspace_tab_lease_peek|release / workspace_task_resolve_page
     storage_local_get|set  → chrome.storage.local 代理
     workspace_get_llm_settings / workspace_get_active_page
 
 offscreen → SW
-  session_workspace_event  → 侧栏刷新（execution-start、流式、artifact_preview、…）
+  session_workspace_event  → 侧栏刷新（execution-start/end、流式、artifact_preview、task-updated、task-schedule-changed、…）
 
 content_script → SW
   伸爪选区、pagewand_region_selected、截图、toast
@@ -55,7 +56,7 @@ sidepanel  workspaceRpc(method, params)     # vnext/host/workspaceClient.js
   → SessionWorkspaceService[method]
 ```
 
-`method` 必须是 service 上的公开 async 方法（不以 `_` 开头）。常见：`sendMessage`、`getWorkspaceState`、`abortExecution`、`answerClarify`、group/clipboard/artifact CRUD、`listSkills`。完整列表看 `sessionWorkspaceService.js` 的 `async` 方法。
+`method` 必须是 service 上的公开 async 方法（不以 `_` 开头）。常见：`sendMessage`、`getWorkspaceState`、`abortExecution`、`answerClarify`、`listTasks` / `getTask` / `updateTask`、group/clipboard/artifact CRUD、`listSkills`。完整列表看 `sessionWorkspaceService.js` 的 `async` 方法。`getTaskSchedule` / `runDueTasks` 给 SW scheduler，不是侧栏主路径。
 
 ## `action` 运输
 
@@ -76,6 +77,8 @@ Background：
 - 缺脚本的 frame：`chrome.scripting.executeScript` 注入 `src/content_script.js`（回退 `content_script.js`）。
 - 各 frame 本地 `aN` 编成不透明 `f{frameId}.aN`。
 - `rev` 存在 SW 内存 `pageActionRevByTab`（`t1`, `t2`, …）。SW 重启后需重新 `snapshot`。
+- 对 tab 的副作用（`action` snapshot/mutate、`sys.eval`、`sys.waitFor`、`sys.fetch(as:page)`、`sys.tabs.navigate/reload/focus`、`sys.cdp`）先在 SW `tabLeases` 上 `tryAcquire`；他 session 占用 → `TAB_LEASED`。`action` 必须带本轮显式 `tabId`（来自 `activeTab`，不再 fallback 到 Chrome 焦点标签）→ 缺则 `NEED_EXPLICIT_TAB`，且不登记租约。`sys.tabs.open` 成功后 `grantTabLease`。`sys.tabs.list` / `current` / extension-fetch / screenshot / download / `tabs.close` **不**占这把锁。
+- 释放：offscreen `execution-end`、`sendMessage` finally、`abortExecution` → `workspace_tab_lease_release` / `releaseTabLeasesByExecution`；`tabs.onRemoved` 释放该 `tabId`。这把锁不是 journal，SW 一死整表丢。预览页 `workLock` 是同 session 画布 UI 锁，不是这把 live-page 租约。
 - 合并 snapshot 后 `controls` 再截到 80 条。
 - `fill_form` 按 `frameId` 拆开发送。
 - `wait` + `text`（无 `ref`）对所有 frame 并行等，任一命中即停。
@@ -100,7 +103,7 @@ Content script：
 
 | 存哪 | 键 / 库 | 用途 |
 |------|---------|------|
-| IndexedDB + OPFS | `pawwork-session-workspace-v1` | 会话 / group / artifact / fsNodes（offscreen） |
+| IndexedDB + OPFS | `pawwork-session-workspace-v1` | 会话 / group / artifact / fsNodes / `meta`（含可选 `task:*`）（offscreen） |
 | `chrome.storage.local` | `pagewand_providers`、`pagewand_active_provider_id` | BYOK |
 | 同上 | `pagewand_web_acquire` | acquire 搜索/抓取设置 |
 | 同上 | `pagewand_theme_mode`（兼 `pagewand_theme`） | 侧栏主题 |

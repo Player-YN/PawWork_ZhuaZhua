@@ -54,7 +54,7 @@ import {
 import { getSkill, listPackagedSkillCatalog } from '../skills/registry.js';
 import { answerClarify, abortSessionClarifies } from '../sessionWorkspace/clarifyGate.js';
 import { callBrowserSys } from '../host/sysClient.js';
-import { createUserStopError } from '../host/userStop.js';
+import { createUserStopError, isAbortLike } from '../host/userStop.js';
 import {
   allocateLabelN,
   ensureItemLabel,
@@ -65,6 +65,19 @@ import {
 import { blankArtifactPayload } from '../sessionWorkspace/blankCreate.js';
 import { normalizeSessionTitle } from '../sessionWorkspace/taskTitle.js';
 import { addPageItems, formatPageAddSummary, isPageItem } from '../sessionWorkspace/pageItems.js';
+import {
+  claimTask,
+  cloneTaskValue,
+  deleteTasksForSession,
+  dueTasks,
+  getTask as readTask,
+  hostTaskMutation,
+  listTasks as readTasks,
+  nextTaskWakeAt,
+  recoverInterruptedTasks,
+  settleTaskAfterTurn,
+  updateTaskControl
+} from '../sessionWorkspace/tasks.js';
 
 export class SessionWorkspaceService {
   /**
@@ -82,6 +95,13 @@ export class SessionWorkspaceService {
     this._activeBySession = new Map();
     /** @type {Map<string, AbortController>} */
     this._activeByExecution = new Map();
+    this._taskMutationQueue = Promise.resolve();
+    this._taskLaunching = new Set();
+    this._resolveTaskPage = typeof opts.resolveTaskPage === 'function' ? opts.resolveTaskPage : null;
+    this._peekTabLeaseFn = typeof opts.peekTabLease === 'function' ? opts.peekTabLease : null;
+    this._releaseTabLeasesFn = typeof opts.releaseTabLeases === 'function' ? opts.releaseTabLeases : null;
+    const recovered = recoverInterruptedTasks(store);
+    this._startupPersist = recovered.length ? this._persist() : Promise.resolve();
   }
 
   /**
@@ -109,7 +129,9 @@ export class SessionWorkspaceService {
       }
     }
     await hydrateDurableSkillsFromChrome();
-    return new SessionWorkspaceService({ ...opts, store, model, callModel: opts.callModel || null });
+    const service = new SessionWorkspaceService({ ...opts, store, model, callModel: opts.callModel || null });
+    await service._startupPersist;
+    return service;
   }
 
   /**
@@ -148,6 +170,82 @@ export class SessionWorkspaceService {
     const store = this.runtime.store;
     if (store && typeof store.flush === 'function') {
       await store.flush();
+    }
+  }
+
+  async _ready() {
+    await this._startupPersist;
+  }
+
+  _withTaskLock(fn) {
+    const run = this._taskMutationQueue.catch(() => {}).then(fn);
+    this._taskMutationQueue = run.catch(() => {});
+    return run;
+  }
+
+  _taskMetaSnapshot() {
+    const rows = [];
+    for (const key of this.runtime.store.keys('meta')) {
+      if (!String(key).startsWith('task:')) continue;
+      rows.push([key, cloneTaskValue(this.runtime.store.get('meta', key))]);
+    }
+    return rows;
+  }
+
+  async _commitTaskMutation(mutator, { broadcast = true } = {}) {
+    return this._withTaskLock(async () => {
+      await this._ready();
+      const before = this._taskMetaSnapshot();
+      let result;
+      try {
+        result = await mutator();
+        await this._persist();
+      } catch (error) {
+        for (const key of this.runtime.store.keys('meta')) {
+          if (String(key).startsWith('task:')) this.runtime.store.delete('meta', key);
+        }
+        for (const [key, value] of before) this.runtime.store.put('meta', key, value);
+        throw error;
+      }
+      const task = result?.task || (result?.taskId ? result : null);
+      if (broadcast && task) this._broadcastTaskChanged(task);
+      return result;
+    });
+  }
+
+  _broadcastTaskChanged(task) {
+    this._broadcastUiEvent({ type: 'task-updated', sessionId: task.sessionId, task });
+    this._broadcastUiEvent({
+      type: 'task-schedule-changed',
+      sessionId: task.sessionId,
+      taskId: task.taskId,
+      nextWakeAt: nextTaskWakeAt(this.runtime.store)
+    });
+  }
+
+  async _releaseClaimFailure(task, error) {
+    const code = error?.code;
+    this._broadcastUiEvent({
+      type: 'error',
+      sessionId: task?.sessionId,
+      name: 'Error',
+      message: error?.message || 'Task is not available for this turn.',
+      code: code || 'TASK_CLAIM_FAILED'
+    });
+    if (!task?.taskId) return null;
+    // BUSY/TERMINAL: this turn must not run the task. Do not mark failed,
+    // and do not steal a live owner or rewrite a finished record.
+    if (code === 'TASK_BUSY' || code === 'TASK_TERMINAL') {
+      const current = readTask(this.runtime.store, task.taskId);
+      if (current) this._broadcastTaskChanged(current);
+      return current;
+    }
+    try {
+      return await this._commitTaskMutation(() =>
+        updateTaskControl(this.runtime.store, task.taskId, 'pause')
+      );
+    } catch {
+      return readTask(this.runtime.store, task.taskId);
     }
   }
 
@@ -275,6 +373,167 @@ export class SessionWorkspaceService {
     return { sessionId: sessionId || '', activeExecution: this._snapshotActiveExecution(sessionId) };
   }
 
+  async listTasks({ sessionId } = {}) {
+    await this._ready();
+    return { tasks: readTasks(this.runtime.store, { sessionId }) };
+  }
+
+  async getTask({ taskId } = {}) {
+    await this._ready();
+    const task = readTask(this.runtime.store, taskId);
+    if (!task) throw Object.assign(new Error(`Unknown task ${taskId || ''}.`), { code: 'TASK_NOT_FOUND' });
+    return { task };
+  }
+
+  async updateTask({ taskId, op } = {}) {
+    const before = readTask(this.runtime.store, taskId);
+    if (!before) throw Object.assign(new Error(`Unknown task ${taskId || ''}.`), { code: 'TASK_NOT_FOUND' });
+    const task = await this._commitTaskMutation(() => updateTaskControl(this.runtime.store, taskId, op));
+    if ((op === 'pause' || op === 'cancel') && before.ownership?.executionId) {
+      await this.abortExecution({ sessionId: before.sessionId, executionId: before.ownership.executionId });
+    }
+    if (op === 'resume') this._launchTask(task);
+    return { task };
+  }
+
+  async getTaskSchedule() {
+    await this._ready();
+    const next = nextTaskWakeAt(this.runtime.store);
+    return { nextWakeAt: next ? Date.parse(next) : null };
+  }
+
+  async runDueTasks({ now = Date.now() } = {}) {
+    await this._ready();
+    const launched = [];
+    const skipped = [];
+    for (const task of dueTasks(this.runtime.store, now)) {
+      if (this._activeBySession.has(task.sessionId) || this._taskLaunching.has(task.taskId)) {
+        skipped.push({ taskId: task.taskId, reason: 'busy' });
+        continue;
+      }
+      const tabId = Number(task.targetPage?.tabId ?? task.targetPage?.id);
+      if (Number.isFinite(tabId) && tabId > 0) {
+        const lease = await this._peekTabLease(tabId);
+        if (this._foreignTabLease(lease, task.sessionId)) {
+          skipped.push({
+            taskId: task.taskId,
+            reason: 'tab_leased',
+            tabId,
+            holderSessionId: lease.sessionId
+          });
+          continue;
+        }
+      }
+      this._launchTask(task);
+      launched.push(task.taskId);
+    }
+    return { ok: true, launched, skipped };
+  }
+
+  _foreignTabLease(lease, sessionId) {
+    const holder = String(lease?.sessionId || '');
+    const sid = String(sessionId || '');
+    return !!(lease && holder && holder !== sid);
+  }
+
+  async _peekTabLease(tabId) {
+    if (typeof this._peekTabLeaseFn === 'function') {
+      return this._peekTabLeaseFn(tabId);
+    }
+    try {
+      if (typeof chrome?.runtime?.sendMessage === 'function') {
+        const res = await chrome.runtime.sendMessage({
+          target: 'pawwork-background',
+          action: 'workspace_tab_lease_peek',
+          tabId
+        });
+        return res?.lease || null;
+      }
+    } catch {
+      /* tests / SW gone — treat as free */
+    }
+    return null;
+  }
+
+  _releaseTabLeases(sessionId, executionId) {
+    if (typeof this._releaseTabLeasesFn === 'function') {
+      try {
+        this._releaseTabLeasesFn(sessionId, executionId);
+      } catch {
+        /* host hook must not fail settle */
+      }
+      return;
+    }
+    try {
+      if (typeof chrome?.runtime?.sendMessage === 'function') {
+        const p = chrome.runtime.sendMessage({
+          target: 'pawwork-background',
+          action: 'workspace_tab_lease_release',
+          sessionId,
+          executionId
+        });
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      }
+    } catch {
+      /* SW may already be gone */
+    }
+  }
+
+  _launchTask(task) {
+    if (!task?.taskId || this._taskLaunching.has(task.taskId)) return false;
+    this._taskLaunching.add(task.taskId);
+    void this._runTask(task).finally(() => this._taskLaunching.delete(task.taskId));
+    return true;
+  }
+
+  async _runTask(task) {
+    let target = { ok: true, tab: null };
+    if (task.targetPage) {
+      try {
+        target = this._resolveTaskPage
+          ? await this._resolveTaskPage(task.targetPage)
+          : await chrome.runtime.sendMessage({
+              target: 'pawwork-background',
+              action: 'workspace_task_resolve_page',
+              page: task.targetPage
+            });
+      } catch (error) {
+        target = { ok: false, code: 'TASK_TARGET_MISSING', error: error?.message || String(error) };
+      }
+    }
+    if (!target?.ok) {
+      await this._commitTaskMutation(() =>
+        settleTaskAfterTurn(this.runtime.store, {
+          taskId: task.taskId,
+          executionId: '',
+          error: true,
+          aborted: true,
+          summary: target.error || 'The saved task page is unavailable.',
+          nextAction: 'Open exactly one tab at the saved URL, then resume the task.'
+        })
+      );
+      return;
+    }
+    if (this._activeBySession.has(task.sessionId)) return;
+    const resolvedId = Number(target.tab?.tabId ?? target.tab?.id);
+    if (Number.isFinite(resolvedId) && resolvedId > 0) {
+      const lease = await this._peekTabLease(resolvedId);
+      if (this._foreignTabLease(lease, task.sessionId)) return;
+    }
+    try {
+      await this.sendMessage({
+        sessionId: task.sessionId,
+        taskId: task.taskId,
+        taskRun: true,
+        scheduledRun: task.scheduled === true,
+        taskContinuation: true,
+        activeTab: target.tab
+      });
+    } catch (error) {
+      if (error?.code !== 'SESSION_BUSY') console.warn('[tasks] run failed', error);
+    }
+  }
+
   async renameSession({ sessionId = 'default', title, lockTitle = true } = {}) {
     const sid = String(sessionId || '').trim();
     if (!sid) throw new Error('renameSession: sessionId required');
@@ -310,6 +569,7 @@ export class SessionWorkspaceService {
       if (keep.has(String(id))) continue;
       await this.abortExecution({ sessionId: id });
       await this._awaitSessionIdle(id);
+      deleteTasksForSession(this.runtime.store, id);
       this.runtime.deleteSession(id);
       deleted.push(id);
     }
@@ -706,11 +966,31 @@ export class SessionWorkspaceService {
     activeTab = null,
     fetchImpl = undefined,
     onEvent = null,
-    reasoning = null
+    reasoning = null,
+    taskId = null,
+    taskRun = false,
+    scheduledRun = false,
+    taskContinuation = false
   } = {}) {
+    await this._ready();
     this.ensureSession(sessionId);
     if (this._activeBySession.has(sessionId)) {
       throw Object.assign(new Error('This session already has an active execution.'), { code: 'SESSION_BUSY' });
+    }
+    let durableTask = null;
+    let releasedTask = null;
+    // Ordinary chat must not create or attach an ambient task. Only an
+    // explicit alarm/resume continuation (taskRun+taskId) binds this turn.
+    if (role === 'user' && taskRun && taskId) {
+      const prepared = await this._commitTaskMutation(() => {
+        const existing = readTask(this.runtime.store, taskId);
+        if (!existing) throw Object.assign(new Error(`Unknown task ${taskId}.`), { code: 'TASK_NOT_FOUND' });
+        if (existing.sessionId !== sessionId) {
+          throw Object.assign(new Error('Task does not belong to this session.'), { code: 'TASK_SESSION_MISMATCH' });
+        }
+        return { task: existing, created: false };
+      });
+      durableTask = prepared.task;
     }
     if (role === 'user' && Array.isArray(attachments) && attachments.length) {
       // Attachments: create/bind group so inspect can authorize + multimodal works
@@ -770,6 +1050,7 @@ export class SessionWorkspaceService {
       controller,
       executionId: null,
       sessionId,
+      taskId: durableTask?.taskId || null,
       finished
     });
 
@@ -799,6 +1080,8 @@ export class SessionWorkspaceService {
         contextWindow = resolveContextWindow(resolvedModel?.modelId);
       }
 
+      let taskYielded = false;
+      const previousDueAt = durableTask?.dueAt || null;
       const result = await this.runtime.sendMessage({
         sessionId,
         content,
@@ -836,10 +1119,11 @@ export class SessionWorkspaceService {
           chrome.runtime.sendMessage({
             target: 'pawwork-background',
             action: 'workspace_page_action',
+            ...payload,
             sessionId,
+            executionId: payload?.executionId || this._activeBySession.get(sessionId)?.executionId,
             tabId: payload?.tabId ?? activeTab?.tabId ?? activeTab?.id,
-            url: payload?.url || activeTab?.url,
-            ...payload
+            url: payload?.url || activeTab?.url
           }),
         hostFindTab: (url) =>
           chrome.runtime.sendMessage({
@@ -860,12 +1144,51 @@ export class SessionWorkspaceService {
               defaultTabId: params?.defaultTabId ?? params?.tabId ?? activeTab?.tabId ?? activeTab?.id
             }
           }),
+        taskContext: durableTask,
+        taskRun: !!(taskRun && durableTask),
+        taskContinuation: taskContinuation === true,
+        getTaskContext: () =>
+          durableTask?.taskId ? readTask(this.runtime.store, durableTask.taskId) : null,
+        hostTask: (input) =>
+          this._commitTaskMutation(() => {
+            const slot = this._activeBySession.get(sessionId);
+            const out = hostTaskMutation(this.runtime.store, {
+              taskId: durableTask?.taskId,
+              sessionId,
+              executionId: slot?.executionId,
+              input,
+              targetPage: activeTab
+            });
+            if (out.yield) taskYielded = true;
+            return out;
+          }),
+        taskShouldYield: () => {
+          if (taskYielded || !durableTask?.taskId) return taskYielded;
+          const current = readTask(this.runtime.store, durableTask.taskId);
+          if (!current) return true;
+          const slotExecutionId = this._activeBySession.get(sessionId)?.executionId || null;
+          return (
+            ['waiting', 'paused', 'completed', 'failed', 'cancelled'].includes(current.status) ||
+            (current.status === 'running' && current.ownership?.executionId !== slotExecutionId)
+          );
+        },
         signal: controller.signal,
         fetchImpl,
-        onExecutionBegin: ({ executionId }) => {
+        onExecutionBegin: async ({ executionId }) => {
           this._activeByExecution.set(executionId, controller);
           const slot = this._activeBySession.get(sessionId);
           if (slot) slot.executionId = executionId;
+          if (durableTask?.taskId) {
+            try {
+              durableTask = await this._commitTaskMutation(() =>
+                claimTask(this.runtime.store, durableTask.taskId, executionId)
+              );
+            } catch (error) {
+              releasedTask = await this._releaseClaimFailure(durableTask, error);
+              durableTask = null;
+              return { skipAgent: true, error };
+            }
+          }
           this._broadcastUiEvent({
             type: 'execution-start',
             sessionId,
@@ -883,9 +1206,60 @@ export class SessionWorkspaceService {
           }
         }
       });
+      if (result?.skipAgent) {
+        await this._persist();
+        return {
+          ...result,
+          task: releasedTask,
+          taskClaimError: result.taskClaimError || result.error || null,
+          taskYielded: false
+        };
+      }
+      if (durableTask?.taskId) {
+        durableTask = await this._commitTaskMutation(() => {
+          const current = readTask(this.runtime.store, durableTask.taskId);
+          if (!current) return null;
+          return settleTaskAfterTurn(this.runtime.store, {
+            taskId: durableTask.taskId,
+            executionId: result.executionId,
+            scheduledRun,
+            previousDueAt,
+            summary: result.finalText
+          });
+        });
+      }
       await this._persist();
-      return result;
+      return { ...result, task: durableTask, taskYielded: result.taskYielded || taskYielded };
+    } catch (error) {
+      if (durableTask?.taskId) {
+        try {
+          const executionId = this._activeBySession.get(sessionId)?.executionId || '';
+          const aborted = controller.signal.aborted || isAbortLike(error);
+          durableTask = await this._commitTaskMutation(() =>
+            settleTaskAfterTurn(this.runtime.store, {
+              taskId: durableTask.taskId,
+              executionId,
+              error: true,
+              aborted,
+              summary: aborted
+                ? 'Previous execution ended before its outcome was recorded.'
+                : error?.message || 'Execution failed.',
+              nextAction: aborted
+                ? 'Outcome unknown; inspect the current state before resuming.'
+                : undefined
+            })
+          );
+        } catch {
+          /* preserve the original execution error */
+        }
+      }
+      throw error;
     } finally {
+      try {
+        this._releaseTabLeases(sessionId, this._activeBySession.get(sessionId)?.executionId);
+      } catch {
+        /* */
+      }
       try {
         settleSlot();
       } catch {
@@ -915,11 +1289,13 @@ export class SessionWorkspaceService {
     if (!sessionId && !executionId) {
       for (const slot of this._activeBySession.values()) {
         slot.controller.abort(createUserStopError());
+        this._releaseTabLeases(slot.sessionId, slot.executionId);
         aborted = true;
       }
       abortSessionClarifies();
     } else {
       abortSessionClarifies(sessionId);
+      this._releaseTabLeases(sessionId, executionId);
     }
     return { ok: true, aborted, deprecated: false };
   }
@@ -1158,6 +1534,7 @@ export class SessionWorkspaceService {
     // Same kill path as Stop — then wait so sendMessage cannot recreate the row
     await this.abortExecution({ sessionId });
     await this._awaitSessionIdle(sessionId);
+    deleteTasksForSession(this.runtime.store, sessionId);
     const result = this.runtime.deleteSession(sessionId);
     await this._persist();
     return result;

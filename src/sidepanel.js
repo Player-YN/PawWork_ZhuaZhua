@@ -159,9 +159,11 @@ import {
   setupTaskStreamScrollAffordances
 } from './sidepanel/scroll.js';
 import { I18N, createT } from './sidepanel/i18n.js';
+import { formatTabLeaseMessage, tabLeasePayload } from './sidepanel/tabLeaseUi.js';
 import { createTrajectoryUi } from './sidepanel/trajectoryUi.js';
 import { wirePopoverMenu } from './sidepanel/popoverMenu.js';
 import { setupPanelDensity } from './sidepanel/density.js';
+import { createTaskStatusUi } from './sidepanel/taskStatus.js';
 // Single-agent only — no worker spawn/cancel/message tools.
 
 /** Product path is vNext-only. Legacy tool-loop has no UI entry. */
@@ -498,6 +500,25 @@ const trajectoryUi = createTrajectoryUi({
 const mountTaskTrajectoryButton = trajectoryUi.mountTaskTrajectoryButton;
 const downloadTaskTrajectory = trajectoryUi.downloadTaskTrajectory;
 
+const taskStatusUi = createTaskStatusUi({
+  workspaceRpc,
+  t,
+  getLang: () => currentLang,
+  getSessionId: () => activeSessionId,
+  getTaskStream: () => $('taskStream'),
+  getThreadBody: (sessionId) => {
+    const sid = String(sessionId || '');
+    const threads = document.querySelectorAll(
+      '#taskStream .session-thread:not(.is-history-view):not([hidden])'
+    );
+    for (const thread of threads) {
+      if (String(thread.dataset.sessionId || '') === sid) return thread.querySelector('.task-body');
+    }
+    return null;
+  },
+  showToast: (message, opts) => showSidepanelToast(message, opts)
+});
+
 function bootSidePanel() {
   initSidePanel();
 }
@@ -547,6 +568,7 @@ function initSidePanel() {
   renderClipboardUI();
   renderSessionDropdown();
   renderHistoryList();
+  void taskStatusUi.refresh();
   void refreshUnfinishedDraftsList();
   checkBackendHealth();
   // Home empty: center composer (MaxAI-style) when no live task
@@ -866,6 +888,7 @@ function applyI18n() {
   setStatus(isAgentRunning ? 'running' : 'ready');
   syncReasoningSwitch();
   restartComposerTypewriter();
+  taskStatusUi.render();
 }
 
 let composerTypewriterTimer = 0;
@@ -4405,6 +4428,7 @@ function createTaskCard(title, opts = {}) {
   };
   liveTask = handle;
   uiState(sid).liveTask = handle;
+  taskStatusUi.mount();
   renderHistoryList();
   return handle;
 }
@@ -5038,6 +5062,7 @@ async function hydrateActiveSessionThread() {
   } finally {
     if (getWorkspaceSessionId() === sid) {
       applyWorkspaceExecutionSnapshot(sid, full, { rpcFailed });
+      taskStatusUi.mount();
     }
   }
 }
@@ -5217,6 +5242,7 @@ function createNewSession() {
   renderSessionDropdown();
   showWelcome();
   renderHistoryList();
+  void taskStatusUi.refresh();
   void refreshArtifactShelf();
   void refreshWorkspaceGroupState();
   applyContextUsage({});
@@ -5297,6 +5323,7 @@ async function deleteSessionById(sessionId, sessionName) {
   savePersistentSessions();
   renderSessionDropdown();
   renderHistoryList();
+  void taskStatusUi.refresh();
   void refreshWorkspaceGroupState();
   void refreshArtifactShelf();
 }
@@ -5309,6 +5336,7 @@ function switchSession(sessionId) {
   if (liveTask?.el) liveTask.el.hidden = true;
   activeSessionId = sessionId;
   loadLiveFromSession(sessionId);
+  void taskStatusUi.refresh();
   void hydrateActiveSessionThread().then(() => {
     if (getWorkspaceSessionId() !== sessionId) return;
     hideForeignSessionThreads(sessionId);
@@ -5935,6 +5963,19 @@ function retractUnsealedLiveAnswer() {
   liveTurnAnswerEl = null;
 }
 
+function holderSessionName(holderSessionId) {
+  const sid = String(holderSessionId || '').trim();
+  if (!sid) return '';
+  const sess = sessions.find((s) => String(s.id) === sid);
+  return String(sess?.name || sess?.title || sid);
+}
+
+function humanizeTabLeaseEvent(ev) {
+  const payload = tabLeasePayload(ev);
+  if (!payload) return '';
+  return formatTabLeaseMessage(t, payload, holderSessionName(payload.holderSessionId));
+}
+
 function ingestLiveProgressEvent(ev) {
   const type = String(ev?.type || '');
   if (
@@ -6550,6 +6591,8 @@ function handleSessionWorkspaceEvent(request) {
   const sid = String(ev.sessionId || request.sessionId || '');
   const foreground = getWorkspaceSessionId();
 
+  if (taskStatusUi.handleWorkspaceEvent(ev)) return true;
+
   if (ev?.type === 'session-title') {
     applySessionTitle(ev.title || ev.sessionTitle, sid || foreground);
     return true;
@@ -6624,13 +6667,15 @@ function handleSessionWorkspaceEvent(request) {
       return;
     }
     if (ev.type === 'error') {
-      const msg = streamEventText(ev.message) || String(ev.message || '').trim();
+      const leaseNote = humanizeTabLeaseEvent(ev);
+      const msg = leaseNote || streamEventText(ev.message) || String(ev.message || '').trim();
       if (msg && !liveTurnSealed) {
         const prefix = currentLang === 'en' ? '**Error:** ' : '**错误:** ';
         const painted = msg.startsWith('**') ? msg : `${prefix}${msg}`;
         liveTurnAnswerText = painted;
         renderLiveTurnAnswer(painted);
       }
+      if (leaseNote) showQuickToast(leaseNote);
       ingestLiveProgressEvent(ev);
     } else if (ev.type === 'thought' || ev.type === 'thought-open') {
       if (liveTurnSealed || !uiState(sid).running) return;
@@ -6655,6 +6700,15 @@ function handleSessionWorkspaceEvent(request) {
       ev.type === 'model-start' ||
       ev.type === 'model-end'
     ) {
+      const leaseNote = ev.type === 'tool-result' ? humanizeTabLeaseEvent(ev) : '';
+      if (leaseNote) {
+        showQuickToast(leaseNote);
+        if (!liveTurnSealed) {
+          const prefix = currentLang === 'en' ? '**Notice:** ' : '**提示:** ';
+          liveTurnAnswerText = `${prefix}${leaseNote}`;
+          renderLiveTurnAnswer(liveTurnAnswerText);
+        }
+      }
       ingestLiveProgressEvent(ev);
     }
   };

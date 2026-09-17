@@ -36,13 +36,44 @@ export function serializeAgentError(error) {
   return out;
 }
 
-/**
- * AI SDK defaults stopWhen to 1 step (streamText) or 20 (ToolLoopAgent).
- * Product: no round cap — loop ends when the model stops calling tools or
- * abortSignal fires.
- */
-function neverStopOnStepCount() {
+function successfulTerminalTaskCall(steps) {
+  for (const step of steps || []) {
+    const results = Array.isArray(step?.toolResults) ? step.toolResults : [];
+    for (const call of step?.toolCalls || []) {
+      if (call?.toolName !== 'task') continue;
+      const input = call.input ?? call.args ?? {};
+      if (input?.op !== 'wait' && input?.op !== 'complete') continue;
+      const result = findStepToolResult(results, call);
+      const output = result?.output ?? result?.result;
+      if (output?.ok === true && output?.yield !== false) return true;
+    }
+  }
   return false;
+}
+
+/**
+ * Task turns stop on wait / complete / host yield only. Hop count is not a
+ * stop condition — ordinary chat and running tasks stay unlimited.
+ */
+export function createTaskStopState(args = {}) {
+  const state = {
+    taskYielded: false,
+    taskStepLimitReached: false
+  };
+  state.stopWhen = ({ steps }) => {
+    let hostYield = false;
+    try {
+      hostYield = typeof args.taskShouldYield === 'function' && args.taskShouldYield() === true;
+    } catch {
+      hostYield = false;
+    }
+    if (hostYield || successfulTerminalTaskCall(steps)) {
+      state.taskYielded = true;
+      return true;
+    }
+    return false;
+  };
+  return state;
 }
 
 /**
@@ -121,6 +152,9 @@ function schemasOnly(tools) {
  *   messages: Array<{role:string,content:any}>,
  *   tools: Record<string, {name?:string,description:string,parameters?:object,execute:Function,toModelOutput?:Function}>,
  *   prepareStep?: Function,
+ *   taskContext?: object|null,
+ *   taskRun?: boolean,
+ *   taskShouldYield?: Function,
  *   signal?: AbortSignal,
  *   onEvent?: (ev: { type: string, [k: string]: any }) => void
  * }} args
@@ -137,6 +171,7 @@ export async function runSessionToolLoopAgent(args) {
   const sdkTools = wrapSessionToolsForSdk(args.tools || {});
   const onEvent = typeof args.onEvent === 'function' ? args.onEvent : null;
   const recorder = createWireRecorder();
+  const taskStop = createTaskStopState(args);
 
   const emitSerializedError = (error) => {
     if (isAbortLike(error, args.signal)) return;
@@ -154,7 +189,9 @@ export async function runSessionToolLoopAgent(args) {
     model,
     instructions: args.system || '',
     tools: sdkTools,
-    stopWhen: neverStopOnStepCount,
+    // Chat and durable-task turns are both hop-unlimited. Task turns yield
+    // on wait / complete / host yield; abort/deadline stop via abortSignal.
+    stopWhen: taskStop.stopWhen,
     repairToolCall: (opts) => repairSessionToolCall(model, { ...opts, abortSignal: args.signal }),
     onError: ({ error }) => {
       emitSerializedError(error);
@@ -209,7 +246,10 @@ export async function runSessionToolLoopAgent(args) {
       toolCalls,
       wire,
       reasoning,
-      usage: usageRaw || null
+      usage: usageRaw || null,
+      taskYielded: taskStop.taskYielded,
+      taskStepLimitReached: taskStop.taskStepLimitReached,
+      taskStepCount: Array.isArray(steps) ? steps.length : 0
     };
   } catch (err) {
     if (isAbortLike(err, args.signal)) throw toAbortError(err);

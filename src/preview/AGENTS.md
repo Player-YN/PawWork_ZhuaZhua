@@ -15,7 +15,7 @@
 | `print.html` | 系统打印 | PDF 交付：`delivery: browser_print` → Save as PDF |
 | `preview.html` | 旧草稿预览 | 遗留 `open_draft_preview` |
 
-共享：`workLock.js`（会话工作锁）、`officeHelp*` / `officeShortcuts` / `officeSelBubble`、`durableImage.js`、`host-bar.css`。表编解码：`sheetCodec.js` / `sheetModel.js`（agent office 工具也会 import）。
+共享：`workLock.js`（**同一 session** 在预览画布上的执行中 UI 锁，`execution-start/end` →「编排中」；**不是** SW 里跨 session 的 live-page tab 租约 / `TAB_LEASED`）、`officeHelp*` / `officeShortcuts` / `officeSelBubble`、`durableImage.js`、`host-bar.css`。表编解码：`sheetCodec.js` / `sheetModel.js`（agent office 工具也会 import）。
 
 ## Vendor
 

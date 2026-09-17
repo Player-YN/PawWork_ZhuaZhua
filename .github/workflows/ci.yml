@@ -20,7 +20,7 @@ jobs:
           python-version: '3.12'
 
       - name: Runtime regression
-        run: node --test tests/runtime-regression.test.mjs
+        run: node --test tests/*.test.mjs
 
       # The release load root is generated from src/, never committed. These
       # assertions are what keeps the shipped tree from drifting away from the

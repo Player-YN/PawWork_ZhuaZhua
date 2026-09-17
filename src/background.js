@@ -5,6 +5,13 @@ import { sheetTabMatches, htmlTabMatches } from './sidepanel/sessionIsolation.js
 import { previewEntryForItem } from './agent/vnext/sessionWorkspace/openClassify.js';
 import { handleWorkspaceSys } from './agent/vnext/host/browserSysHost.js';
 import {
+  peekTabLease,
+  preparePageActionTarget,
+  releaseTabLease,
+  releaseTabLeasesByExecution
+} from './agent/vnext/host/tabLease.js';
+import { createTaskScheduler, resolveTaskPage } from './agent/vnext/host/taskScheduler.js';
+import {
   isPawWorkPageUrl,
   isPawLockableWorkPageUrl,
   sessionIdFromPawWorkUrl,
@@ -72,7 +79,10 @@ const RPC_RETRY_EMPTY_METHODS = new Set([
   'getWorkspaceState',
   'getSession',
   'listArtifacts',
-  'listSkills'
+  'listSkills',
+  'listTasks',
+  'getTask',
+  'getTaskSchedule'
 ]);
 
 async function forwardWorkspaceRpc(request) {
@@ -1070,11 +1080,18 @@ function openMarkedHtmlPreviewTab(ev) {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request?.action === 'session_workspace_event' && isPawWorkOffscreenSender(sender) &&
+      ['task-schedule-changed', 'task-updated', 'execution-end'].includes(request.event?.type)) {
+    void taskScheduler.reconcile();
+  }
   if (request?.action === 'session_workspace_event') {
     const ev = request.event || {};
     const sid = String(ev.sessionId || '').trim();
     if (sid && ev.type === 'execution-start') setSessionWorkLock(sid, true);
-    if (sid && ev.type === 'execution-end') setSessionWorkLock(sid, false);
+    if (sid && ev.type === 'execution-end') {
+      setSessionWorkLock(sid, false);
+      releaseTabLeasesByExecution(sid, ev.executionId);
+    }
   }
   if (request?.action === 'session_workspace_event' && request.event?.type === 'artifact_preview') {
     openMarkedHtmlPreviewTab(request.event);
@@ -1300,6 +1317,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         error: error?.message || String(error),
         code: typeof error?.code === 'string' ? error.code : 'SYS_FAILED'
       }));
+    return true;
+  }
+
+  if (request?.target === 'pawwork-background' && request?.action === 'workspace_tab_lease_peek') {
+    if (!isPawWorkOffscreenSender(sender)) {
+      sendResponse({ ok: false, code: 'SYS_DENIED', error: 'tab lease peek requires the offscreen runtime' });
+      return false;
+    }
+    sendResponse({ ok: true, lease: peekTabLease(request.tabId) });
+    return false;
+  }
+
+  if (request?.target === 'pawwork-background' && request?.action === 'workspace_tab_lease_release') {
+    if (!isPawWorkOffscreenSender(sender)) {
+      sendResponse({ ok: false, code: 'SYS_DENIED', error: 'tab lease release requires the offscreen runtime' });
+      return false;
+    }
+    sendResponse({
+      ok: true,
+      released: releaseTabLeasesByExecution(request.sessionId, request.executionId)
+    });
+    return false;
+  }
+
+  if (request?.target === 'pawwork-background' && request?.action === 'workspace_task_resolve_page') {
+    if (!isPawWorkOffscreenSender(sender)) {
+      sendResponse({ ok: false, code: 'SYS_DENIED', error: 'Task target resolution requires the offscreen runtime.' });
+      return false;
+    }
+    resolveTaskPage(chrome.tabs, request.page)
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, code: 'TASK_TARGET_MISSING', error: error?.message || String(error) }));
     return true;
   }
 
@@ -1676,7 +1725,10 @@ function watchMentionableOpenTabs() {
   const tabsApi = chrome.tabs;
   if (!tabsApi) return;
   tabsApi.onCreated?.addListener(() => scheduleOpenTabsBroadcast());
-  tabsApi.onRemoved?.addListener(() => scheduleOpenTabsBroadcast());
+  tabsApi.onRemoved?.addListener((tabId) => {
+    releaseTabLease(tabId);
+    scheduleOpenTabsBroadcast();
+  });
   tabsApi.onReplaced?.addListener(() => scheduleOpenTabsBroadcast());
   tabsApi.onAttached?.addListener(() => scheduleOpenTabsBroadcast());
   tabsApi.onDetached?.addListener(() => scheduleOpenTabsBroadcast());
@@ -1716,22 +1768,49 @@ function isRestrictedPageActionUrl(url) {
 }
 
 async function resolvePageActionTab(request) {
-  let tabId = Number(request?.tabId);
+  const tabId = Number(request?.tabId ?? request?.defaultTabId);
   let url = String(request?.url || '');
-  let tab = null;
+  let title = '';
   if (!Number.isFinite(tabId) || tabId <= 0) {
-    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    tabId = Number(tab?.id);
-    url = url || tab?.url || tab?.pendingUrl || '';
-  } else if (!url) {
+    return { tabId: NaN, url: '', title: '' };
+  }
+  if (!url) {
     try {
-      tab = await chrome.tabs.get(tabId);
+      const tab = await chrome.tabs.get(tabId);
       url = tab?.url || tab?.pendingUrl || '';
+      title = String(tab?.title || '');
     } catch {
       /* tab may still accept sendMessage */
     }
+  } else {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      title = String(tab?.title || '');
+    } catch {
+      /* title is optional on the receipt */
+    }
   }
-  return { tabId, url };
+  return { tabId, url, title };
+}
+
+async function decorateTabLeaseDenied(denied) {
+  if (!denied || denied.code !== 'TAB_LEASED') return denied;
+  let title = denied.title || '';
+  if (!title && denied.tabId) {
+    try {
+      title = String((await chrome.tabs.get(denied.tabId))?.title || '');
+    } catch {
+      /* holder tab may already be gone */
+    }
+  }
+  return title ? { ...denied, title } : denied;
+}
+
+function withPageActionTab(result, tabId, title) {
+  if (!result || typeof result !== 'object') return result;
+  const id = Number(tabId);
+  if (!Number.isFinite(id) || id <= 0 || result.tabId != null) return result;
+  return title ? { ...result, tabId: id, title } : { ...result, tabId: id };
 }
 
 const pageActionRevByTab = new Map();
@@ -1969,10 +2048,26 @@ async function waitTextAnyFrame(tabId, request) {
 }
 
 async function handleWorkspacePageAction(request) {
+  const result = await executeWorkspacePageAction(request);
+  const tabId = Number(request?.tabId ?? request?.defaultTabId ?? result?.tabId);
+  let title = result?.title;
+  if ((!title || result?.tabId == null) && Number.isFinite(tabId) && tabId > 0) {
+    try {
+      title = title || String((await chrome.tabs.get(tabId))?.title || '');
+    } catch {
+      /* receipt title is optional */
+    }
+  }
+  return withPageActionTab(result, tabId, title);
+}
+
+async function executeWorkspacePageAction(request) {
+  const gated = preparePageActionTarget(request);
+  if (!gated.ok) return decorateTabLeaseDenied(gated);
   const resolved = await resolvePageActionTab(request);
   const tabId = resolved.tabId;
   if (!Number.isFinite(tabId) || tabId <= 0) {
-    return { ok: false, error: 'no active tab', code: 'NEED_PAGE' };
+    return { ok: false, error: 'page action requires an explicit tabId', code: 'NEED_EXPLICIT_TAB' };
   }
   if (isRestrictedPageActionUrl(resolved.url)) {
     return {
@@ -2190,3 +2285,16 @@ function bytesToBase64ForMessage(bytes) {
   return btoa(binary);
 }
 
+// Register wakeup listeners synchronously. The store, not alarms, is authoritative.
+const taskScheduler = createTaskScheduler({
+  alarms: chrome.alarms,
+  rpc: async (method, params) => {
+    const response = await forwardWorkspaceRpc({ method, params });
+    if (!response?.ok) throw Object.assign(new Error(response?.error || 'Task RPC failed'), { code: response?.code });
+    return response.result;
+  }
+});
+chrome.alarms?.onAlarm.addListener(alarm => { void taskScheduler.onAlarm(alarm); });
+chrome.runtime.onStartup?.addListener(() => { void taskScheduler.reconcile({ runDue: true }); });
+chrome.runtime.onInstalled.addListener(() => { void taskScheduler.reconcile({ runDue: true }); });
+void taskScheduler.reconcile({ runDue: true });

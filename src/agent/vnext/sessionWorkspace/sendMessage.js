@@ -12,6 +12,7 @@ import { getArtifactIndexCompact, listArtifacts } from './artifacts.js';
 import { compactShelfSnapshot } from './artifactShelf.js';
 import { isPawCanvasDoc } from './openClassify.js';
 import { buildSessionAgentInstructions, buildWorldStateBlock } from './prompt.js';
+import { formatTaskInstructions } from './taskInstructions.js';
 import { userRequestedPlan } from './planContract.js';
 import { createSessionTools } from './tools.js';
 import { inventoryFromSession } from './canvasInventory.js';
@@ -66,6 +67,12 @@ import { resolveFocusPage, rememberVisitedPage } from './pageContext.js';
  *   model?: any,
  *   signal?: AbortSignal,
  *   fetchImpl?: typeof fetch,
+ *   taskContext?: object|null,
+ *   taskRun?: boolean,
+ *   taskContinuation?: boolean,
+ *   getTaskContext?: () => object|null|Promise<object|null>,
+ *   hostTask?: (input: object) => Promise<{ok:boolean,task?:object,yield?:boolean}>,
+ *   taskShouldYield?: () => boolean,
  *   onEvent?: (ev: object) => void
  * }} input
  */
@@ -76,9 +83,11 @@ export async function sendMessage(store, input) {
 
   const content = String(input.content ?? '');
   const role = input.role || 'user';
+  const taskContinuation = input.taskContinuation === true;
   const session = store.get('sessions', sessionId);
+  const persistUserMessage = role === 'user' && !taskContinuation;
   const isFirstUser =
-    role === 'user' && !(session.messages || []).some((m) => m?.role === 'user');
+    persistUserMessage && !(session.messages || []).some((m) => m?.role === 'user');
   const shouldName =
     isFirstUser &&
     !session.titleLocked &&
@@ -86,15 +95,19 @@ export async function sendMessage(store, input) {
   const message = {
     messageId: createMessageId(),
     role,
-    content,
+    content: persistUserMessage ? content : '',
     createdAt: Date.now()
   };
-  const messages = [...(session.messages || []), message];
-  store.put('sessions', sessionId, {
-    ...session,
-    messages,
-    updatedAt: Date.now()
-  });
+  const messages = persistUserMessage
+    ? [...(session.messages || []), message]
+    : [...(session.messages || [])];
+  if (persistUserMessage) {
+    store.put('sessions', sessionId, {
+      ...session,
+      messages,
+      updatedAt: Date.now()
+    });
+  }
 
   // Non-user messages: only append
   if (role !== 'user') {
@@ -104,20 +117,55 @@ export async function sendMessage(store, input) {
       finalText: null,
       toolCalls: [],
       steps: [],
-      createdTask: false
+      createdTask: false,
+      taskYielded: false,
+      taskStepLimitReached: false,
+      taskStepCount: 0
     };
   }
 
   const execution = beginExecution(store, sessionId, { abortSignal: input.signal });
+  let beginOut = null;
   if (typeof input.onExecutionBegin === 'function') {
     try {
-      input.onExecutionBegin({
+      beginOut = await input.onExecutionBegin({
         executionId: execution.executionId,
         sessionId
       });
-    } catch {
-      /* host abort registry must not fail the turn */
+    } catch (error) {
+      settleExecution(store, execution, 'failed');
+      throw error;
     }
+  }
+  if (beginOut?.skipAgent === true) {
+    settleExecution(store, execution, 'settled');
+    try {
+      if (typeof input.onEvent === 'function') {
+        input.onEvent({
+          type: 'execution-end',
+          sessionId,
+          executionId: execution.executionId,
+          status: 'settled',
+          code: beginOut.error?.code || beginOut.code || '',
+          error: beginOut.error || null
+        });
+      }
+    } catch {
+      /* UI listener must not fail the turn */
+    }
+    return {
+      message: persistUserMessage ? message : null,
+      executionId: execution.executionId,
+      finalText: null,
+      toolCalls: [],
+      steps: [],
+      createdTask: false,
+      taskYielded: false,
+      taskStepLimitReached: false,
+      taskStepCount: 0,
+      skipAgent: true,
+      taskClaimError: beginOut.error || null
+    };
   }
   // Cold start: OPFS bytes may not be in memory yet (readArtifact hydrates; agent must too)
   if (typeof store.hydrateSessionBlobs === 'function') {
@@ -171,9 +219,23 @@ export async function sendMessage(store, input) {
   });
   const canvasInv = inventoryFromSession(store, sessionId, fs);
   const boundItems = listBoundItemIndex(store, sessionId);
-  const system = buildSessionAgentInstructions({
-    skillInstructions: skillText
-  });
+  let taskContext = input.taskContext || null;
+  if (typeof input.getTaskContext === 'function') {
+    try {
+      taskContext = (await input.getTaskContext()) || null;
+    } catch {
+      /* task host failures surface through the task tool; chat can still render */
+    }
+  }
+  const taskInstructionText = formatTaskInstructions(taskContext);
+  const system = [
+    buildSessionAgentInstructions({
+      skillInstructions: skillText
+    }),
+    taskInstructionText
+  ]
+    .filter(Boolean)
+    .join('\n\n');
   const worldBlock = buildWorldStateBlock({
     boundGroups,
     boundItems,
@@ -185,7 +247,9 @@ export async function sendMessage(store, input) {
     activeTab: pages.activeTab,
     focusPage: pages.focusPage,
     shelf: compactShelfSnapshot(listArtifacts(store, sessionId), sessionNow.shelf),
-    userRequestedPlan: userRequestedPlan({ content, mentions: input.mentions })
+    userRequestedPlan: userRequestedPlan({ content, mentions: input.mentions }),
+    taskContinuation,
+    taskContext
   });
 
   let thoughtBuf = '';
@@ -250,7 +314,11 @@ export async function sendMessage(store, input) {
     hostSys: typeof input.hostSys === 'function' ? input.hostSys : null,
     activeTab: input.activeTab || pages.activeTab,
     focusPage: pages.focusPage,
-    promptId: message.messageId || execution.executionId
+    promptId: message.messageId || execution.executionId,
+    taskContext,
+    getTaskContext: input.getTaskContext,
+    hostTask: input.hostTask,
+    taskShouldYield: input.taskShouldYield
   });
 
   const contextWindow =
@@ -372,6 +440,9 @@ export async function sendMessage(store, input) {
     let resultWire = null;
     let resultReasoning = '';
     let resultUsage = { promptTokens: 0, completionTokens: 0 };
+    let taskYielded = false;
+    let taskStepLimitReached = false;
+    let taskStepCount = 0;
 
     const model = await resolveSessionModel(input);
     const modelMeta = {
@@ -410,8 +481,13 @@ export async function sendMessage(store, input) {
           fs,
           tools,
           execution,
-          instructions: system
+          instructions: system,
+          taskContext,
+          getTaskContext: input.getTaskContext
         }),
+        taskContext,
+        taskRun: input.taskRun === true,
+        taskShouldYield: input.taskShouldYield,
         signal: execution.abortSignal,
         onEvent
       });
@@ -422,6 +498,9 @@ export async function sendMessage(store, input) {
       resultWire = result.wire || null;
       resultReasoning = result.reasoning || '';
       resultUsage = harvestModelUsage(result.usage);
+      taskYielded = result.taskYielded === true;
+      taskStepLimitReached = result.taskStepLimitReached === true;
+      taskStepCount = Number(result.taskStepCount) || 0;
     } else if (input.allowOfflineDirect === true) {
       // Explicit test/offline only — never silent fallback after user configured API
       finalText = defaultDirectAnswer(content, boundGroups, artifactIndex);
@@ -559,7 +638,10 @@ export async function sendMessage(store, input) {
       artifactCount: getArtifactIndexCompact(store, sessionId).artifactCount,
       systemPromptPreview: system.slice(0, 200),
       sessionMessages: (store.get('sessions', sessionId)?.messages || []).length,
-      agentMode: mode
+      agentMode: mode,
+      taskYielded,
+      taskStepLimitReached,
+      taskStepCount
     };
   } catch (err) {
     if (titlePromise) void titlePromise.catch(() => {});
@@ -661,5 +743,3 @@ function defaultDirectAnswer(content, boundGroups, artifactIndex) {
     artifactIndex?.artifactCount > 0 ? ` Session has ${artifactIndex.artifactCount} artifact(s).` : '';
   return `Acknowledged.${ambient}${arts} ${q.length > 200 ? q.slice(0, 200) + '…' : q}`;
 }
-
-

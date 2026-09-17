@@ -51,6 +51,8 @@ src/sidepanel/
   trajectoryUi.js    # mountTaskTrajectoryButton + downloadTaskTrajectory
   sessionIsolation.js # session-scoped broadcast / plan-card / preview-tab match
   executionSync.js   # parse offscreen activeExecution (live run vs leftover store rows)
+  taskStatus.js      # durable task cards; listTasks scoped to active session
+  tabLeaseUi.js      # TAB_LEASED / NEED_EXPLICIT_TAB human copy (no new-profile flow)
   README.md
 ```
 
@@ -71,6 +73,8 @@ Source of truth: **`css/layout.css`**.
 | Same-level blocks in scroll | context, selection, drafts, **`.thread-workspace`** (history + task-stream) — all `overflow: visible`, no nested max-height traps |
 | `#taskStream` | document flow only (not a scrollport) |
 | History | lives **inside** `.thread-workspace` with the live task |
+| Durable task cards | `taskStatus.js`：仅 `ready` / `running` / `waiting` / `paused` 显著；终态（completed/failed/cancelled）折进 `<details>`。无 live task 时不画空「进行中」区 |
+| Tab lease copy | `TAB_LEASED` / `NEED_EXPLICIT_TAB` 走 `tabLeaseUi.js` + `i18n.tabLeased` / `needExplicitTab`；文案是停对方或换标签，不引导新 Chrome profile |
 
 `scroll.js` scrolls `#panelScroll` and applies edge fades to it.
 
@@ -88,9 +92,11 @@ Trajectory controls live in **`trajectoryUi.js`** (`createTrajectoryUi({ t, getL
 4. React scaffold is archived under `archive/ui-react-scaffold/`.
 5. i18n: edit strings in `i18n.js`; orchestrator keeps `currentLang` + `applyI18n()`.
 
+Durable task cards（`taskStatus.js`）≠ 对话流里的 live `.task-card`（仍在 `sidepanel.js` 的 `createTaskCard`）。
+
 ## Next extractions candidates
 
-- `taskCard.js` (createTaskCard, makeCollapsibleThinking)
+- `taskCard.js` (createTaskCard, makeCollapsibleThinking) — conversation turn card, not durable task
 - `selection.js` (renderSelectionUI, picker state)
 - `task/events.js` (agent stream → DOM)
 - `drafts/card.js`

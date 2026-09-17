@@ -5,6 +5,7 @@
 
 import { isInjectableTabUrl } from '../sessionWorkspace/pageContext.js';
 import { SYS_EVAL_JSON_MAX, SYS_EVAL_SOURCE_MAX, SYS_FETCH_BYTES_MAX, SYS_HELP } from '../sessionWorkspace/browserSys.js';
+import { grantTabLease, tryAcquireTabLease } from './tabLease.js';
 
 const SYS_TIMEOUT_MS = 20000;
 const SYS_WAIT_TIMEOUT_MS = 120000;
@@ -89,17 +90,17 @@ async function dispatchWorkspaceSys(request = {}) {
     if (op === 'tabs.list') return { ok: true, result: await sysTabsList() };
     if (op === 'tabs.current') return { ok: true, result: await sysTabsCurrent(params) };
     if (op === 'tabs.frames') return { ok: true, result: await sysTabsFrames(params) };
-    if (op === 'eval') return await sysEval(params);
-    if (op === 'waitFor') return await sysWaitFor(params);
-    if (op === 'fetch') return await sysFetch(params);
-    if (op === 'cdp') return await sysCdp(params);
+    if (op === 'eval') return await sysEval(params, request);
+    if (op === 'waitFor') return await sysWaitFor(params, request);
+    if (op === 'fetch') return await sysFetch(params, request);
+    if (op === 'cdp') return await sysCdp(params, request);
     if (op === 'download') return await sysDownload(params);
     if (op === 'screenshot') return await sysScreenshot(params);
-    if (op === 'tabs.open') return await sysTabsOpen(params);
-    if (op === 'tabs.navigate') return await sysTabsNavigate(params);
-    if (op === 'tabs.reload') return await sysTabsReload(params);
+    if (op === 'tabs.open') return await sysTabsOpen(params, request);
+    if (op === 'tabs.navigate') return await sysTabsNavigate(params, request);
+    if (op === 'tabs.reload') return await sysTabsReload(params, request);
     if (op === 'tabs.close') return await sysTabsClose(params);
-    if (op === 'tabs.focus') return await sysTabsFocus(params);
+    if (op === 'tabs.focus') return await sysTabsFocus(params, request);
     return { ok: false, code: 'BAD_INPUT', error: `unknown sys op: ${op}` };
   } catch (error) {
     return {
@@ -134,7 +135,7 @@ async function sysTabsFrames(params) {
   }));
 }
 
-async function sysTabsOpen(params) {
+async function sysTabsOpen(params, request = {}) {
   const url = String(params.url || 'about:blank').trim();
   if (!isNavigableUrl(url)) {
     return { ok: false, code: 'BAD_INPUT', error: 'sys.tabs.open only allows http(s) or about:blank' };
@@ -143,21 +144,26 @@ async function sysTabsOpen(params) {
     url,
     active: params.active !== false
   });
+  if (tab?.id) grantTabLease(tab.id, request.sessionId, request.executionId, 'tabs.open');
   return { ok: true, result: publicTab(tab) };
 }
 
-async function sysTabsNavigate(params) {
+async function sysTabsNavigate(params, request = {}) {
   const url = String(params.url || '').trim();
   if (!isNavigableUrl(url)) {
     return { ok: false, code: 'BAD_INPUT', error: 'sys.tabs.navigate only allows http(s) or about:blank' };
   }
   const tab = await resolveTab(params);
+  const denied = await acquireSysTab(request, tab.id, 'tabs.navigate');
+  if (denied) return denied;
   const updated = await chrome.tabs.update(tab.id, { url });
   return { ok: true, result: publicTab(updated || tab) };
 }
 
-async function sysTabsReload(params) {
+async function sysTabsReload(params, request = {}) {
   const tab = await resolveTab(params);
+  const denied = await acquireSysTab(request, tab.id, 'tabs.reload');
+  if (denied) return denied;
   await chrome.tabs.reload(tab.id, { bypassCache: params.bypassCache === true });
   return { ok: true, result: publicTab(await chrome.tabs.get(tab.id)) };
 }
@@ -168,8 +174,10 @@ async function sysTabsClose(params) {
   return { ok: true, result: { closed: tab.id } };
 }
 
-async function sysTabsFocus(params) {
+async function sysTabsFocus(params, request = {}) {
   const tab = await resolveTab(params);
+  const denied = await acquireSysTab(request, tab.id, 'tabs.focus');
+  if (denied) return denied;
   if (tab.windowId != null) await chrome.windows.update(tab.windowId, { focused: true });
   const updated = await chrome.tabs.update(tab.id, { active: true });
   return { ok: true, result: publicTab(updated || tab) };
@@ -224,7 +232,7 @@ async function sysScreenshot(params) {
   };
 }
 
-async function sysCdp(params) {
+async function sysCdp(params, request = {}) {
   if (!chrome.debugger?.attach) {
     return { ok: false, code: 'SYS_DENIED', error: 'chrome.debugger unavailable (need debugger permission)' };
   }
@@ -245,6 +253,10 @@ async function sysCdp(params) {
   }
 
   const debuggee = await resolveDebuggee(params);
+  if (debuggee.tabId) {
+    const denied = await acquireSysTab(request, debuggee.tabId, `cdp:${action || 'send'}`);
+    if (denied) return denied;
+  }
   if (action === 'attach') {
     await ensureCdpAttached(debuggee);
     return { ok: true, result: { attached: true, ...publicDebuggee(debuggee) } };
@@ -470,7 +482,7 @@ function splitDataUrl(dataUrl) {
   return { contentType: m[1] || 'application/octet-stream', base64: m[3] || '' };
 }
 
-async function sysEval(params) {
+async function sysEval(params, request = {}) {
   const source = String(params.code ?? params.source ?? '');
   if (!source.trim()) return { ok: false, code: 'BAD_INPUT', error: 'sys.eval requires code' };
   if (source.length > SYS_EVAL_SOURCE_MAX) {
@@ -480,6 +492,8 @@ async function sysEval(params) {
   if (!isSysInjectableUrl(tab.url)) {
     return { ok: false, code: 'NEED_PAGE', error: `tab is not injectable: ${tab.url || '(no url)'}` };
   }
+  const leased = await acquireSysTab(request, tab.id, 'eval');
+  if (leased) return leased;
   const world = normalizeWorld(params.world);
   const denied = await userScriptsDenied();
   if (denied) return denied;
@@ -515,7 +529,7 @@ async function sysEval(params) {
  * return its JSON value. The wait loop runs in the page with its own setTimeout,
  * so it is not bound by the ~20s single-eval cap — timeoutMs can reach 120s.
  */
-async function sysWaitFor(params) {
+async function sysWaitFor(params, request = {}) {
   const mode = params.code != null && String(params.code).trim() ? 'code'
     : params.selector != null && String(params.selector).trim() ? 'selector'
     : params.text != null && String(params.text) !== '' ? 'text'
@@ -528,6 +542,8 @@ async function sysWaitFor(params) {
   if (!isSysInjectableUrl(tab.url)) {
     return { ok: false, code: 'NEED_PAGE', error: `tab is not injectable: ${tab.url || '(no url)'}` };
   }
+  const leased = await acquireSysTab(request, tab.id, 'waitFor');
+  if (leased) return leased;
   const world = normalizeWorld(params.world);
   const denied = await userScriptsDenied();
   if (denied) return denied;
@@ -639,18 +655,20 @@ function clampStableMs(ms) {
 }
 
 /** Omit as → extension (credentials:omit). Model should pass as:"page" for user session URLs. */
-async function sysFetch(params) {
+async function sysFetch(params, request = {}) {
   const as = String(params.as || 'extension').toLowerCase();
-  if (as === 'page') return sysFetchAsPage(params);
+  if (as === 'page') return sysFetchAsPage(params, request);
   if (as === 'extension') return sysFetchAsExtension(params);
   return { ok: false, code: 'BAD_INPUT', error: 'sys.fetch as must be page or extension' };
 }
 
-async function sysFetchAsPage(params) {
+async function sysFetchAsPage(params, request = {}) {
   const tab = await resolveTab(params);
   if (!isSysInjectableUrl(tab.url)) {
     return { ok: false, code: 'NEED_PAGE', error: `tab is not injectable: ${tab.url || '(no url)'}` };
   }
+  const leased = await acquireSysTab(request, tab.id, 'fetch:page');
+  if (leased) return leased;
   let url;
   try {
     url = new URL(String(params.url || ''), tab.url || undefined);
@@ -728,6 +746,18 @@ async function sysFetchAsExtension(params) {
       bytes: bytes.byteLength
     }
   };
+}
+
+async function acquireSysTab(request, tabId, kind) {
+  const acquired = tryAcquireTabLease(tabId, request?.sessionId, request?.executionId, kind);
+  if (acquired.ok) return null;
+  let title = '';
+  try {
+    title = String((await chrome.tabs.get(tabId))?.title || '');
+  } catch {
+    /* title is optional on TAB_LEASED */
+  }
+  return title ? { ...acquired, title } : acquired;
 }
 
 async function resolveTab(params, opts = {}) {

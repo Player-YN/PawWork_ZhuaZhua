@@ -2584,6 +2584,264 @@ body[data-theme='light'] .topbar {
   flex: 0 0 auto;
 }
 
+/* Durable scheduled / long-running tasks share the conversation scrollport. */
+.durable-task-region {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  margin-bottom: 2px;
+}
+
+.durable-task-region[hidden] {
+  display: none !important;
+}
+
+.durable-task-region-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+  color: var(--text-faint);
+}
+
+.durable-task-region-title {
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.durable-task-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.durable-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.durable-task-card {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-soft) 90%, var(--accent-soft));
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.durable-task-card.is-updating {
+  opacity: 0.68;
+}
+
+.durable-task-card[data-state='failed'] {
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--border));
+}
+
+.durable-task-card[data-state='completed'],
+.durable-task-card[data-state='cancelled'] {
+  border-color: var(--border);
+}
+
+.durable-task-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.durable-task-goal {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 680;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.durable-task-state {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 9.5px;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.durable-task-state[data-state='waiting'],
+.durable-task-state[data-state='paused'] {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.durable-task-state[data-state='completed'] {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.durable-task-state[data-state='failed'] {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+.durable-task-state[data-state='cancelled'] {
+  background: var(--bg-elevated);
+  color: var(--text-faint);
+}
+
+.durable-task-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.durable-task-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.durable-task-step-mark {
+  flex: 0 0 11px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.durable-task-step[data-state='running'] .durable-task-step-mark {
+  color: var(--accent);
+}
+
+.durable-task-step[data-state='completed'] .durable-task-step-mark,
+.durable-task-step[data-state='done'] .durable-task-step-mark {
+  color: var(--green);
+}
+
+.durable-task-step[data-state='failed'] .durable-task-step-mark {
+  color: var(--danger);
+}
+
+.durable-task-step-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.durable-task-line {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 7px;
+  margin-top: 6px;
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.durable-task-line-label {
+  color: var(--text-faint);
+}
+
+.durable-task-line-value {
+  min-width: 0;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.durable-task-line.is-error .durable-task-line-value {
+  color: var(--danger);
+}
+
+.durable-task-evidence {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+.durable-task-evidence summary {
+  cursor: pointer;
+  color: var(--text-faint);
+}
+
+.durable-task-evidence-list {
+  margin: 5px 0 0 17px;
+  overflow-wrap: anywhere;
+}
+
+.durable-task-finished {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+.durable-task-finished summary {
+  cursor: pointer;
+  color: var(--text-faint);
+}
+
+.durable-task-list.is-finished {
+  margin-top: 6px;
+}
+
+.durable-task-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.durable-task-action {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.durable-task-action:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--text);
+}
+
+.durable-task-action.is-danger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+  color: var(--danger);
+}
+
+.durable-task-action:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
 /* One agent reply = think bar + final bubble (same stream as user messages) */
 .agent-turn {
   display: flex;

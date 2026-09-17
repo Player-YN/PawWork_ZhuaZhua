@@ -5,6 +5,7 @@
 
 import { SESSION_TOOL_NAMES } from './canvasInventory.js';
 import { formatFrozenPlanInstructions } from './planContract.js';
+import { formatTaskInstructions } from './taskInstructions.js';
 
 /**
  * @param {{ sheet?: string[], doc?: string[], web?: string[] }} [inventory]
@@ -35,15 +36,25 @@ export function scheduleSessionTools(tools, inventory, runtime = {}) {
 /**
  * prepareStep keeps the same always-on list each hop (no mid-turn hide/reveal).
  * After the user approves a plan, re-inject the pinned contract every step.
- * @param {{ store?: object, sessionId?: string, fs?: object, tools?: Record<string, any>, execution?: object, instructions?: string }} env
+ * @param {{ store?: object, sessionId?: string, fs?: object, tools?: Record<string, any>, execution?: object, instructions?: string, taskContext?: object|null, getTaskContext?: Function }} env
  */
 export function makeOfficePrepareStep(env = {}) {
   return async function prepareStep() {
     const out = { activeTools: [...SESSION_TOOL_NAMES] };
+    let task = env.taskContext || null;
+    if (typeof env.getTaskContext === 'function') {
+      try {
+        task = (await env.getTaskContext()) || task;
+      } catch {
+        /* retain the last host snapshot */
+      }
+    }
+    const taskText = formatTaskInstructions(task);
     const pinned = formatFrozenPlanInstructions(env.execution?.frozenPlan);
-    if (pinned) {
+    const additions = [taskText, pinned].filter(Boolean);
+    if (additions.length) {
       const base = String(env.instructions || '').trim();
-      out.instructions = base ? `${base}\n\n${pinned}` : pinned;
+      out.instructions = [base, ...additions].filter(Boolean).join('\n\n');
     }
     return out;
   };
