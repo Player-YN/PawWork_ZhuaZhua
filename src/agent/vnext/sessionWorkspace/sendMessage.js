@@ -11,7 +11,7 @@ import { listBoundItemIndex } from './itemLabel.js';
 import { getArtifactIndexCompact, listArtifacts } from './artifacts.js';
 import { compactShelfSnapshot } from './artifactShelf.js';
 import { isPawCanvasDoc } from './openClassify.js';
-import { buildSessionAgentInstructions, buildWorldStateBlock } from './prompt.js';
+import { buildSessionAgentInstructions, buildWorldStateBlock, compactOpenTabOverview } from './prompt.js';
 import { formatTaskInstructions } from './taskInstructions.js';
 import { userRequestedPlan } from './planContract.js';
 import { createSessionTools } from './tools.js';
@@ -236,6 +236,18 @@ export async function sendMessage(store, input) {
   ]
     .filter(Boolean)
     .join('\n\n');
+  let tabOverview = input.tabOverview != null
+    ? compactOpenTabOverview(input.tabOverview)
+    : null;
+  if (!tabOverview && typeof input.hostSys === 'function') {
+    try {
+      const listed = await input.hostSys('tabs.list', {});
+      const rows = listed && typeof listed === 'object' && listed.result != null ? listed.result : listed;
+      tabOverview = compactOpenTabOverview(rows);
+    } catch {
+      tabOverview = null;
+    }
+  }
   const worldBlock = buildWorldStateBlock({
     boundGroups,
     boundItems,
@@ -248,6 +260,7 @@ export async function sendMessage(store, input) {
     focusPage: pages.focusPage,
     shelf: compactShelfSnapshot(listArtifacts(store, sessionId), sessionNow.shelf),
     userRequestedPlan: userRequestedPlan({ content, mentions: input.mentions }),
+    tabOverview,
     taskContinuation,
     taskContext
   });

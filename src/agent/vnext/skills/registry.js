@@ -14,6 +14,7 @@
  */
 
 import { skill as pageRestyle } from './page-restyle/index.js';
+import { skill as siteToolReuse } from './site-tool-reuse/index.js';
 
 /** Permanent id aliases so inspect / skillStore overlays keyed by old ids still resolve. */
 export const SKILL_ID_ALIASES = Object.freeze({});
@@ -219,6 +220,6 @@ export function clearSkills() {
 }
 
 // ── Register built-in folder packages ───────────────────────────────────────
-for (const pack of [pageRestyle]) {
+for (const pack of [pageRestyle, siteToolReuse]) {
   registerSkill({ ...pack, root: pack.id });
 }

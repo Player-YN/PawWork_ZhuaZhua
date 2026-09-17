@@ -119,8 +119,10 @@ test('task-card trajectory user entry serializes sessionAudit and shows thought 
 });
 
 test('SYSTEM_PROMPT_VERSION bumps when prefix tells truthful status', () => {
-  assert.equal(SYSTEM_PROMPT_VERSION, 'v12-truthful-status');
+  assert.equal(SYSTEM_PROMPT_VERSION, 'v13-site-tool-reuse');
   const text = buildSessionAgentInstructions();
   assert.match(text, /宿主 current \/ next/);
   assert.match(text, /不读思考/);
+  assert.match(text, /先募集现成工具/);
+  assert.doesNotMatch(text, /If the preferred route fails/);
 });
