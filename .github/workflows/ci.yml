@@ -28,6 +28,9 @@ jobs:
       - name: Pack release load root
         run: python scripts/pack_extension.py
 
+      - name: Verify packed dependency graph and source parity
+        run: python scripts/verify_extension.py extension --source .
+
       - name: Assert pack shape
         run: |
           test -f extension/manifest.json

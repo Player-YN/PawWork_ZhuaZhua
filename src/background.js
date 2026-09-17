@@ -1,15 +1,14 @@
+import { handleWorkspacePageAction, invalidatePageActionTarget } from './agent/vnext/host/pageActionHost.js';
+import { assertWorkspaceRpc, workspaceSenderRole } from './agent/vnext/host/workspaceRpcContract.js';
+import { createWorkspaceRpcTransport } from './agent/vnext/host/workspaceRpcTransport.js';
 // Static import only — dynamic import() is disallowed on ServiceWorkerGlobalScope
 // (https://github.com/w3c/ServiceWorker/issues/1356) and surfaces as Workspace RPC errors.
 import { loadLlmSettings } from './agent/llm.js';
 import { sheetTabMatches, htmlTabMatches } from './sidepanel/sessionIsolation.js';
 import { previewEntryForItem } from './agent/vnext/sessionWorkspace/openClassify.js';
 import { handleWorkspaceSys } from './agent/vnext/host/browserSysHost.js';
-import {
-  peekTabLease,
-  preparePageActionTarget,
-  releaseTabLease,
-  releaseTabLeasesByExecution
-} from './agent/vnext/host/tabLease.js';
+import { configureTabLeasePersistence, readTabLease, removeTabLease } from './agent/vnext/host/tabLease.js';
+import { releaseBrowserExecution, reconcileBrowserExecutions } from './agent/vnext/host/browserExecution.js';
 import { createTaskScheduler, resolveTaskPage } from './agent/vnext/host/taskScheduler.js';
 import {
   isPawWorkPageUrl,
@@ -24,6 +23,7 @@ import {
 } from './agent/vnext/host/pawTabGroups.js';
 import { isMentionablePageUrl, normalizePageRef } from './agent/vnext/sessionWorkspace/pageContext.js';
 
+configureTabLeasePersistence(chrome.storage.session);
 const PAWWORK_OFFSCREEN_URL = 'src/offscreen/runtime.html';
 let pawworkOffscreenCreating = null;
 
@@ -64,55 +64,10 @@ async function ensurePawWorkOffscreen() {
   }).finally(() => { pawworkOffscreenCreating = null; });
   return pawworkOffscreenCreating;
 }
-function isTransientOffscreenRpcError(err, response) {
-  if (!err) return false;
-  const msg = String(err?.message || err || response?.error || '');
-  return (
-    /Receiving end does not exist/i.test(msg) ||
-    /Could not establish connection/i.test(msg) ||
-    /The message port closed/i.test(msg)
-  );
-}
-
-/** Empty sendMessage replies may be a dead offscreen. Replay only idempotent reads. */
-const RPC_RETRY_EMPTY_METHODS = new Set([
-  'getWorkspaceState',
-  'getSession',
-  'listArtifacts',
-  'listSkills',
-  'listTasks',
-  'getTask',
-  'getTaskSchedule'
-]);
-
-async function forwardWorkspaceRpc(request) {
-  const payload = {
-    target: 'pawwork-offscreen',
-    action: 'workspace_rpc_execute',
-    method: request.method,
-    params: request.params || {}
-  };
-  let lastErr = null;
-  for (let attempt = 0; attempt < 8; attempt++) {
-    await ensurePawWorkOffscreen();
-    try {
-      const response = await chrome.runtime.sendMessage(payload);
-      if (response && typeof response === 'object') return response;
-      // A missing result is not proof that a write or agent turn never ran.
-      const unknown = Object.assign(
-        new Error('Workspace RPC result is unknown; inspect state before retrying.'),
-        { code: 'RPC_OUTCOME_UNKNOWN' }
-      );
-      if (!RPC_RETRY_EMPTY_METHODS.has(String(request.method || ''))) throw unknown;
-      lastErr = unknown;
-    } catch (err) {
-      lastErr = err;
-      if (!isTransientOffscreenRpcError(err, null)) throw err;
-    }
-    await new Promise((r) => setTimeout(r, 40 * (attempt + 1)));
-  }
-  throw lastErr || new Error('workspace offscreen unavailable');
-}
+const forwardWorkspaceRpc = createWorkspaceRpcTransport({
+  ensureRuntime: ensurePawWorkOffscreen,
+  send: payload => chrome.runtime.sendMessage(payload)
+});
 
 // PageWand Service Worker - Native Downloads & Smart Auto-Zip Engine
 
@@ -593,13 +548,20 @@ function getExtensionFromDataUrlOrPath(urlStr) {
 /** One auto-preview tab per artifact for a short window (host, not model). */
 const htmlPreviewOpened = new Map();
 
-function artifactPreviewUrl(sessionId, artifactIds, entry = 'artifactPreview.html') {
+function previewLangParam(lang) {
+  const v = String(lang || '').toLowerCase();
+  return v === 'en' || v === 'zh' ? v : '';
+}
+
+function artifactPreviewUrl(sessionId, artifactIds, entry = 'artifactPreview.html', lang) {
   const sid = String(sessionId || '');
   const ids = [...new Set((artifactIds || []).map(String).filter(Boolean))];
   const q = new URLSearchParams();
   if (sid) q.set('sessionId', sid);
   if (ids.length) q.set('ids', ids.join(','));
   if (ids.length === 1) q.set('artifactId', ids[0]);
+  const loc = previewLangParam(lang);
+  if (loc) q.set('lang', loc);
   const page = String(entry || 'artifactPreview.html').replace(/^\.\//, '');
   return chrome.runtime.getURL(`src/preview/${page}?${q.toString()}`);
 }
@@ -612,10 +574,12 @@ function sheetKey(sessionId, artifactId) {
   return `${sessionId || ''}::${artifactId || ''}`;
 }
 
-function sheetUrl(sessionId, artifactId) {
+function sheetUrl(sessionId, artifactId, lang) {
   const q = new URLSearchParams();
   q.set('sessionId', String(sessionId || ''));
   q.set('artifactId', String(artifactId || ''));
+  const loc = previewLangParam(lang);
+  if (loc) q.set('lang', loc);
   return chrome.runtime.getURL(`src/preview/sheet.html?${q.toString()}`);
 }
 
@@ -964,31 +928,36 @@ async function patchHtmlPreviewTab(sessionId, artifactId) {
   }
 }
 
+function decodePreviewBase64(b64) {
+  const s = String(b64 || '');
+  if (!s) return undefined;
+  try {
+    const bin = atob(s);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolvePreviewRoute(sessionId, artifactId, opts = {}) {
-  if (opts.kind === 'design' || opts.kind === 'slides' || opts.shell === 'design' || opts.shell === 'slides') {
-    return { entry: 'artifactPreview.html', shell: '' };
-  }
-  if (opts.kind === 'site' || opts.kind === 'web' || opts.kind === 'html-site' || opts.entry === 'site.html') {
-    return { entry: 'site.html', shell: '' };
-  }
-  if (opts.entry === 'design.html') {
-    return { entry: 'artifactPreview.html', shell: '' };
-  }
-  if (opts.entry === 'sheet.html' || opts.entry === 'docs.html') {
-    return { entry: opts.entry, shell: '' };
-  }
+  void opts;
   if (!artifactId) return { entry: 'artifactPreview.html', shell: '' };
   try {
     const rec = await forwardWorkspaceRpc({
       method: 'readArtifact',
-      params: { sessionId, artifactId }
+      params: { sessionId, artifactId, maxBytes: 262144 }
     });
     const payload = rec?.ok ? rec.result || rec : rec;
     const routed = previewEntryForItem({
       text: payload?.content,
       content: payload?.content,
       name: payload?.artifact?.name || payload?.name,
-      mimeType: payload?.mimeType || payload?.artifact?.mimeType
+      mimeType: payload?.mimeType || payload?.artifact?.mimeType,
+      contentKind: payload?.artifact?.contentKind,
+      capability: payload?.artifact?.capability,
+      bytes: decodePreviewBase64(payload?.base64)
     });
     return { entry: routed.entry || 'artifactPreview.html', shell: routed.shell || '' };
   } catch {
@@ -1002,16 +971,20 @@ async function openArtifactPreviewTab(sessionId, artifactIds, opts = {}) {
   const focus = shouldFocusPawWorkTab(opts);
   const reason = opts.reason || (focus ? 'user' : 'preview');
   const routed = await resolvePreviewRoute(sessionId, ids[0], opts);
+  const lang = previewLangParam(opts.lang);
+  const docsQ = new URLSearchParams({
+    sessionId: String(sessionId || ''),
+    artifactId: String(ids[0] || '')
+  });
+  if (lang) docsQ.set('lang', lang);
   const url =
     routed.entry === 'sheet.html'
-      ? sheetUrl(sessionId, ids[0])
+      ? sheetUrl(sessionId, ids[0], lang)
       : routed.entry === 'docs.html'
-        ? chrome.runtime.getURL(
-            `src/preview/docs.html?sessionId=${encodeURIComponent(sessionId)}&artifactId=${encodeURIComponent(ids[0])}`
-          )
+        ? chrome.runtime.getURL(`src/preview/docs.html?${docsQ.toString()}`)
         : routed.entry === 'site.html'
-          ? artifactPreviewUrl(sessionId, ids, 'site.html')
-          : artifactPreviewUrl(sessionId, ids);
+          ? artifactPreviewUrl(sessionId, ids, 'site.html', lang)
+          : artifactPreviewUrl(sessionId, ids, 'artifactPreview.html', lang);
   try {
     const tabs = await chrome.tabs.query({});
     const sid = String(sessionId || '');
@@ -1080,6 +1053,19 @@ function openMarkedHtmlPreviewTab(ev) {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  const senderRole = workspaceSenderRole(sender, chrome.runtime);
+  const offscreenOnly = new Set(['workspace_page_action', 'workspace_sys', 'workspace_tab_lease_peek',
+    'workspace_tab_lease_release', 'workspace_task_resolve_page']);
+  if (offscreenOnly.has(request?.action) && senderRole !== 'offscreen') {
+    sendResponse({ ok: false, code: 'SYS_DENIED', error: 'This browser operation requires the offscreen runtime.' });
+    return false;
+  }
+  if (request?.action === 'session_workspace_event' && senderRole !== 'offscreen') return false;
+  if (['storage_local_get', 'storage_local_set', 'workspace_get_llm_settings'].includes(request?.action) &&
+      !['offscreen', 'ui'].includes(senderRole)) {
+    sendResponse({ ok: false, code: 'RPC_DENIED', error: 'Settings require a trusted runtime or sidepanel.' });
+    return false;
+  }
   if (request?.action === 'session_workspace_event' && isPawWorkOffscreenSender(sender) &&
       ['task-schedule-changed', 'task-updated', 'execution-end'].includes(request.event?.type)) {
     void taskScheduler.reconcile();
@@ -1090,7 +1076,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (sid && ev.type === 'execution-start') setSessionWorkLock(sid, true);
     if (sid && ev.type === 'execution-end') {
       setSessionWorkLock(sid, false);
-      releaseTabLeasesByExecution(sid, ev.executionId);
+      void releaseBrowserExecution(sid, ev.executionId).catch(error => console.warn('[browser] release failed', error));
     }
   }
   if (request?.action === 'session_workspace_event' && request.event?.type === 'artifact_preview') {
@@ -1214,7 +1200,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       title: request.title,
       kind: request.kind,
       shell: request.shell,
-      entry: request.entry
+      entry: request.entry,
+      lang: request.lang
     }).then((r) => sendResponse(r));
     return true;
   }
@@ -1274,9 +1261,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request?.target === 'pawwork-background' && request?.action === 'workspace_page_action') {
-    handleWorkspacePageAction(request)
+    ensureBrowserOwnership().then(() => handleWorkspacePageAction(request))
       .then((result) => sendResponse(result))
-      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error), code: 'NEED_PAGE' }));
+      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error), code: error?.code || 'NEED_PAGE', ...(error?.outcome ? { outcome: error.outcome } : {}) }));
     return true;
   }
 
@@ -1310,7 +1297,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ ok: false, code: 'SYS_DENIED', error: 'browser sys requires the offscreen runtime' });
       return false;
     }
-    handleWorkspaceSys(request)
+    ensureBrowserOwnership().then(() => handleWorkspaceSys(request))
       .then((result) => sendResponse(result))
       .catch((error) => sendResponse({
         ok: false,
@@ -1325,8 +1312,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ ok: false, code: 'SYS_DENIED', error: 'tab lease peek requires the offscreen runtime' });
       return false;
     }
-    sendResponse({ ok: true, lease: peekTabLease(request.tabId) });
-    return false;
+    readTabLease(request.tabId).then(lease => sendResponse({ ok: true, lease }))
+      .catch(error => sendResponse({ ok: false, code: error.code, error: error.message }));
+    return true;
   }
 
   if (request?.target === 'pawwork-background' && request?.action === 'workspace_tab_lease_release') {
@@ -1334,11 +1322,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ ok: false, code: 'SYS_DENIED', error: 'tab lease release requires the offscreen runtime' });
       return false;
     }
-    sendResponse({
-      ok: true,
-      released: releaseTabLeasesByExecution(request.sessionId, request.executionId)
-    });
-    return false;
+    releaseBrowserExecution(request.sessionId, request.executionId)
+      .then(released => sendResponse({ ok: true, released }))
+      .catch(error => sendResponse({ ok: false, code: error.code, error: error.message }));
+    return true;
   }
 
   if (request?.target === 'pawwork-background' && request?.action === 'workspace_task_resolve_page') {
@@ -1353,6 +1340,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request?.target === 'pawwork-background' && request?.action === 'workspace_rpc') {
+    try { assertWorkspaceRpc(String(request.method || ''), request.params ?? {}, senderRole); }
+    catch (error) { sendResponse({ ok: false, code: error.code, error: error.message }); return false; }
     forwardWorkspaceRpc(request)
       .then((result) => sendResponse(result))
       .catch((error) => sendResponse({ ok: false, error: error?.message || String(error), code: error?.code || 'WORKSPACE_FAILED' }));
@@ -1726,7 +1715,8 @@ function watchMentionableOpenTabs() {
   if (!tabsApi) return;
   tabsApi.onCreated?.addListener(() => scheduleOpenTabsBroadcast());
   tabsApi.onRemoved?.addListener((tabId) => {
-    releaseTabLease(tabId);
+    invalidatePageActionTarget(tabId);
+    void removeTabLease(tabId).catch(error => console.warn('[browser] tab cleanup failed', error));
     scheduleOpenTabsBroadcast();
   });
   tabsApi.onReplaced?.addListener(() => scheduleOpenTabsBroadcast());
@@ -1742,465 +1732,14 @@ function watchMentionableOpenTabs() {
 
 watchMentionableOpenTabs();
 
-function isRestrictedPageActionUrl(url) {
-  const raw = String(url || '');
-  if (!raw) return false;
-  const lower = raw.toLowerCase();
-  if (
-    lower.startsWith('chrome://') ||
-    lower.startsWith('chrome-extension://') ||
-    lower.startsWith('edge://') ||
-    lower.startsWith('about:') ||
-    lower.startsWith('devtools://') ||
-    lower.startsWith('view-source:')
-  ) {
-    return true;
-  }
-  try {
-    const parsed = new URL(raw);
-    const host = parsed.hostname.toLowerCase();
-    if (host === 'chromewebstore.google.com') return true;
-    if (host === 'chrome.google.com' && /\/webstore\b/.test(parsed.pathname)) return true;
-  } catch {
-    /* ignore */
-  }
-  return false;
+for (const event of ['onBeforeNavigate', 'onCommitted', 'onHistoryStateUpdated', 'onReferenceFragmentUpdated']) {
+  chrome.webNavigation?.[event]?.addListener(details => invalidatePageActionTarget(details.tabId));
 }
+chrome.tabs.onReplaced?.addListener((_added, removed) => {
+  invalidatePageActionTarget(removed);
+  void removeTabLease(removed).catch(error => console.warn('[browser] replaced tab cleanup failed', error));
+});
 
-async function resolvePageActionTab(request) {
-  const tabId = Number(request?.tabId ?? request?.defaultTabId);
-  let url = String(request?.url || '');
-  let title = '';
-  if (!Number.isFinite(tabId) || tabId <= 0) {
-    return { tabId: NaN, url: '', title: '' };
-  }
-  if (!url) {
-    try {
-      const tab = await chrome.tabs.get(tabId);
-      url = tab?.url || tab?.pendingUrl || '';
-      title = String(tab?.title || '');
-    } catch {
-      /* tab may still accept sendMessage */
-    }
-  } else {
-    try {
-      const tab = await chrome.tabs.get(tabId);
-      title = String(tab?.title || '');
-    } catch {
-      /* title is optional on the receipt */
-    }
-  }
-  return { tabId, url, title };
-}
-
-async function decorateTabLeaseDenied(denied) {
-  if (!denied || denied.code !== 'TAB_LEASED') return denied;
-  let title = denied.title || '';
-  if (!title && denied.tabId) {
-    try {
-      title = String((await chrome.tabs.get(denied.tabId))?.title || '');
-    } catch {
-      /* holder tab may already be gone */
-    }
-  }
-  return title ? { ...denied, title } : denied;
-}
-
-function withPageActionTab(result, tabId, title) {
-  if (!result || typeof result !== 'object') return result;
-  const id = Number(tabId);
-  if (!Number.isFinite(id) || id <= 0 || result.tabId != null) return result;
-  return title ? { ...result, tabId: id, title } : { ...result, tabId: id };
-}
-
-const pageActionRevByTab = new Map();
-
-function parseActionRef(ref) {
-  const s = String(ref || '').trim();
-  if (!s) return null;
-  const framed = s.match(/^f(\d+)\.(a\d+)$/i);
-  if (framed) return { frameId: Number(framed[1]), local: framed[2].toLowerCase() };
-  const local = s.match(/^(a\d+)$/i);
-  if (local) return { frameId: null, local: local[1].toLowerCase() };
-  return null;
-}
-
-function stampPageActionRev(tabId) {
-  const n = (pageActionRevByTab.get(tabId) || 0) + 1;
-  pageActionRevByTab.set(tabId, n);
-  return 't' + n;
-}
-
-function currentPageActionRev(tabId) {
-  const n = pageActionRevByTab.get(tabId);
-  return n ? 't' + n : null;
-}
-
-function stalePageActionRev(tabId, rev) {
-  const have = currentPageActionRev(tabId);
-  const want = rev == null ? '' : String(rev).trim();
-  if (!have) {
-    return { ok: false, error: 'snapshot first — no rev yet', code: 'STALE_REF' };
-  }
-  if (!want || want !== have) {
-    return {
-      ok: false,
-      error: 'snapshot rev is stale — snapshot again',
-      code: 'STALE_REF',
-      rev: have
-    };
-  }
-  return null;
-}
-
-async function listPageActionFrames(tabId) {
-  if (chrome.webNavigation && typeof chrome.webNavigation.getAllFrames === 'function') {
-    try {
-      const frames = await chrome.webNavigation.getAllFrames({ tabId });
-      return (frames || []).filter((f) => {
-        if (!f || !Number.isFinite(f.frameId)) return false;
-        const lower = String(f.url || '').toLowerCase();
-        if (
-          lower.startsWith('chrome://') ||
-          lower.startsWith('chrome-extension://') ||
-          lower.startsWith('edge://') ||
-          lower.startsWith('devtools://') ||
-          lower.startsWith('view-source:')
-        ) {
-          return false;
-        }
-        return true;
-      });
-    } catch {
-      /* permission or tab gone */
-    }
-  }
-  return [{ frameId: 0 }];
-}
-
-async function sendPageActionToFrame(tabId, frameId, payload) {
-  return chrome.tabs.sendMessage(
-    tabId,
-    { action: 'workspace_page_action', ...payload },
-    Number.isFinite(frameId) ? { frameId } : {}
-  );
-}
-
-async function ensurePageActionScripts(tabId) {
-  const frames = await listPageActionFrames(tabId);
-  const missing = [];
-  for (const fr of frames) {
-    try {
-      const pong = await chrome.tabs.sendMessage(tabId, { action: 'ping' }, { frameId: fr.frameId });
-      if (pong && pong.status === 'pong') continue;
-    } catch {
-      /* not injected */
-    }
-    missing.push(fr.frameId);
-  }
-  if (!missing.length) return;
-  const candidates = ['src/content_script.js', 'content_script.js'];
-  for (const frameId of missing) {
-    let injected = false;
-    for (const file of candidates) {
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId, frameIds: [frameId] },
-          files: [file]
-        });
-        injected = true;
-        break;
-      } catch {
-        /* try next path */
-      }
-    }
-    if (!injected) {
-      for (const file of candidates) {
-        try {
-          await chrome.scripting.executeScript({
-            target: { tabId, allFrames: true },
-            files: [file]
-          });
-          break;
-        } catch {
-          /* last resort */
-        }
-      }
-    }
-  }
-}
-
-function prefixFrameRefs(controls, frameId) {
-  return (Array.isArray(controls) ? controls : []).map((c) => {
-    if (!c || typeof c !== 'object') return c;
-    const local = String(c.ref || '').replace(/^f\d+\./i, '');
-    return { ...c, ref: 'f' + frameId + '.' + local };
-  });
-}
-
-async function snapshotAllPageActionFrames(tabId) {
-  await ensurePageActionScripts(tabId);
-  const frames = await listPageActionFrames(tabId);
-  const controls = [];
-  const framesOut = [];
-  for (const fr of frames) {
-    try {
-      const raw = await sendPageActionToFrame(tabId, fr.frameId, { op: 'snapshot' });
-      if (!raw || raw.ok === false) continue;
-      const list = prefixFrameRefs(raw.controls, fr.frameId);
-      for (const row of list) controls.push(row);
-      framesOut.push({
-        frameId: fr.frameId,
-        url: raw.frameUrl || fr.url || '',
-        title: raw.title || '',
-        count: list.length
-      });
-    } catch {
-      /* isolated / about:blank / CSP */
-    }
-  }
-  const rev = stampPageActionRev(tabId);
-  const capped = controls.slice(0, 80);
-  return {
-    ok: true,
-    op: 'snapshot',
-    rev,
-    count: capped.length,
-    controls: capped,
-    frames: framesOut,
-    after: { url: framesOut[0]?.url, count: capped.length }
-  };
-}
-
-function attachFreshSnapshot(result, snap) {
-  if (!result || typeof result !== 'object' || !snap) return result;
-  return {
-    ...result,
-    rev: snap.rev,
-    controls: snap.controls,
-    count: snap.count,
-    frames: snap.frames
-  };
-}
-
-async function resolveNameAcrossFrames(tabId, name) {
-  const frames = await listPageActionFrames(tabId);
-  const hits = [];
-  for (const fr of frames) {
-    try {
-      const raw = await sendPageActionToFrame(tabId, fr.frameId, { op: 'resolve_name', name });
-      const matches = raw && Array.isArray(raw.matches) ? raw.matches : [];
-      for (const m of matches) {
-        if (!m || !m.ref) continue;
-        hits.push({
-          frameId: fr.frameId,
-          local: String(m.ref).replace(/^f\d+\./i, ''),
-          name: m.name || name,
-          ref: 'f' + fr.frameId + '.' + String(m.ref).replace(/^f\d+\./i, '')
-        });
-      }
-    } catch {
-      /* skip frame */
-    }
-  }
-  if (!hits.length) {
-    return { ok: false, error: 'no control matches name', code: 'NO_TARGET' };
-  }
-  if (hits.length > 1) {
-    return {
-      ok: false,
-      error: 'name matches multiple controls',
-      code: 'AMBIGUOUS',
-      matches: hits.map((h) => ({ ref: h.ref, name: h.name }))
-    };
-  }
-  return hits[0];
-}
-
-async function waitTextAnyFrame(tabId, request) {
-  const frames = await listPageActionFrames(tabId);
-  const started = Date.now();
-  if (!frames.length) {
-    return { ok: false, error: 'no frames', code: 'NEED_PAGE' };
-  }
-  const pending = frames.map((fr) =>
-    sendPageActionToFrame(tabId, fr.frameId, {
-      op: 'wait',
-      text: request.text,
-      ms: request.ms
-    }).catch(() => null)
-  );
-  const hit = await new Promise((resolve) => {
-    let left = pending.length;
-    for (const p of pending) {
-      p.then((r) => {
-        if (r && r.ok) resolve(r);
-        else if (--left === 0) resolve(null);
-      });
-    }
-  });
-  const snap = await snapshotAllPageActionFrames(tabId);
-  if (hit) return attachFreshSnapshot({ ...hit, waited: hit.waited ?? Date.now() - started }, snap);
-  return attachFreshSnapshot(
-    { ok: false, error: 'wait timed out', code: 'NO_TARGET', waited: Date.now() - started },
-    snap
-  );
-}
-
-async function handleWorkspacePageAction(request) {
-  const result = await executeWorkspacePageAction(request);
-  const tabId = Number(request?.tabId ?? request?.defaultTabId ?? result?.tabId);
-  let title = result?.title;
-  if ((!title || result?.tabId == null) && Number.isFinite(tabId) && tabId > 0) {
-    try {
-      title = title || String((await chrome.tabs.get(tabId))?.title || '');
-    } catch {
-      /* receipt title is optional */
-    }
-  }
-  return withPageActionTab(result, tabId, title);
-}
-
-async function executeWorkspacePageAction(request) {
-  const gated = preparePageActionTarget(request);
-  if (!gated.ok) return decorateTabLeaseDenied(gated);
-  const resolved = await resolvePageActionTab(request);
-  const tabId = resolved.tabId;
-  if (!Number.isFinite(tabId) || tabId <= 0) {
-    return { ok: false, error: 'page action requires an explicit tabId', code: 'NEED_EXPLICIT_TAB' };
-  }
-  if (isRestrictedPageActionUrl(resolved.url)) {
-    return {
-      ok: false,
-      error: 'cannot act on chrome://, Web Store, or extension pages',
-      code: 'NEED_PAGE'
-    };
-  }
-  const op = String(request?.op || '').trim().toLowerCase();
-  try {
-    await ensurePageActionScripts(tabId);
-  } catch (error) {
-    return { ok: false, error: error?.message || String(error), code: 'NEED_PAGE' };
-  }
-
-  if (op === 'snapshot') {
-    return snapshotAllPageActionFrames(tabId);
-  }
-
-  const usesRef =
-    (request?.ref != null && String(request.ref).trim() !== '') ||
-    (Array.isArray(request?.fields) && request.fields.some((f) => f && f.ref));
-  const stale = usesRef ? stalePageActionRev(tabId, request?.rev) : null;
-  if (stale) return stale;
-
-  if (op === 'wait' && request?.text && !request?.ref) {
-    return waitTextAnyFrame(tabId, request);
-  }
-
-  if (op === 'fill_form') {
-    const fields = Array.isArray(request.fields) ? request.fields : [];
-    if (!fields.length) {
-      return { ok: false, error: 'fields is required', code: 'BAD_INPUT' };
-    }
-    const byFrame = new Map();
-    for (const field of fields) {
-      if (!field || typeof field !== 'object') {
-        return { ok: false, error: 'invalid field', code: 'BAD_INPUT' };
-      }
-      const parsed = parseActionRef(field.ref);
-      if (parsed && parsed.frameId != null) {
-        const list = byFrame.get(parsed.frameId) || [];
-        list.push({ ...field, ref: parsed.local });
-        byFrame.set(parsed.frameId, list);
-        continue;
-      }
-      const name = field.name || field.label;
-      if (name) {
-        const hit = await resolveNameAcrossFrames(tabId, name);
-        if (hit.code) return hit;
-        const list = byFrame.get(hit.frameId) || [];
-        list.push({ ...field, ref: hit.local });
-        byFrame.set(hit.frameId, list);
-        continue;
-      }
-      return { ok: false, error: 'each field needs ref or name', code: 'BAD_INPUT' };
-    }
-    const results = [];
-    let allOk = true;
-    for (const [frameId, frameFields] of byFrame) {
-      let raw;
-      try {
-        raw = await sendPageActionToFrame(tabId, frameId, { op: 'fill_form', fields: frameFields });
-      } catch (error) {
-        allOk = false;
-        results.push({
-          ok: false,
-          error: error?.message || String(error),
-          code: 'NEED_PAGE'
-        });
-        continue;
-      }
-      const rows = raw && Array.isArray(raw.results) ? raw.results : [];
-      if (!raw || raw.ok === false) allOk = false;
-      for (const row of rows) {
-        const local = row && row.ref ? String(row.ref).replace(/^f\d+\./i, '') : '';
-        results.push({
-          ...row,
-          ref: local ? 'f' + frameId + '.' + local : row?.ref
-        });
-      }
-      if (!rows.length && raw && raw.ok === false) {
-        results.push({ ok: false, error: raw.error, code: raw.code || 'NEED_PAGE' });
-      }
-    }
-    const snap = await snapshotAllPageActionFrames(tabId);
-    return attachFreshSnapshot({ ok: allOk, op: 'fill_form', results }, snap);
-  }
-
-  let frameId = null;
-  let localRef = '';
-  const parsed = parseActionRef(request?.ref);
-  if (parsed) {
-    frameId = parsed.frameId != null ? parsed.frameId : 0;
-    localRef = parsed.local;
-  } else if (request?.name || request?.label) {
-    const hit = await resolveNameAcrossFrames(tabId, request.name || request.label);
-    if (hit.code) return hit;
-    frameId = hit.frameId;
-    localRef = hit.local;
-  } else if (op === 'press' || (op === 'wait' && request?.ms != null && !request?.text && !request?.ref)) {
-    frameId = 0;
-  } else {
-    return { ok: false, error: 'need ref or name', code: 'NO_TARGET' };
-  }
-
-  const payload = {
-    op,
-    ref: localRef || undefined,
-    name: request?.name || request?.label,
-    value: request?.value,
-    key: request?.key,
-    text: request?.text,
-    ms: request?.ms
-  };
-  let raw;
-  try {
-    raw = await sendPageActionToFrame(tabId, frameId, payload);
-  } catch (error) {
-    return { ok: false, error: error?.message || String(error), code: 'NEED_PAGE' };
-  }
-  if (!raw || typeof raw !== 'object') {
-    return { ok: false, error: 'empty page action result', code: 'NEED_PAGE' };
-  }
-  if (raw.after && raw.after.ref) {
-    raw.after = {
-      ...raw.after,
-      ref: 'f' + frameId + '.' + String(raw.after.ref).replace(/^f\d+\./i, '')
-    };
-  }
-  const snap = await snapshotAllPageActionFrames(tabId);
-  return attachFreshSnapshot(raw, snap);
-}
 
 /**
  * Read-only fetch proxy for Web Workspace materialization/acquire. The proxy
@@ -2285,10 +1824,22 @@ function bytesToBase64ForMessage(bytes) {
   return btoa(binary);
 }
 
+let browserOwnershipReady = null;
+function ensureBrowserOwnership() {
+  if (!browserOwnershipReady) {
+    browserOwnershipReady = reconcileBrowserExecutions(forwardWorkspaceRpc).catch(error => {
+      browserOwnershipReady = null;
+      throw error;
+    });
+  }
+  return browserOwnershipReady;
+}
+
 // Register wakeup listeners synchronously. The store, not alarms, is authoritative.
 const taskScheduler = createTaskScheduler({
   alarms: chrome.alarms,
   rpc: async (method, params) => {
+    await ensureBrowserOwnership();
     const response = await forwardWorkspaceRpc({ method, params });
     if (!response?.ok) throw Object.assign(new Error(response?.error || 'Task RPC failed'), { code: response?.code });
     return response.result;

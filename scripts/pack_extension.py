@@ -7,29 +7,37 @@ from __future__ import annotations
 
 import argparse
 import shutil
-import subprocess
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEST = ROOT / "extension"
 
-SKIP_SUFFIXES = {".md"}
+RUNTIME_SUFFIXES = {'.js', '.mjs', '.json', '.css', '.html', '.wasm', '.png', '.jpg',
+                    '.jpeg', '.svg', '.gif', '.webp', '.ico', '.woff', '.woff2', '.ttf', '.otf'}
+SKIP_PARTS = {'node_modules', '__pycache__', '__MACOSX', 'secrets'}
 
 
-def tracked_files() -> list[str]:
-    out = subprocess.check_output(
-        ["git", "ls-files", "-z", "manifest.json", "LICENSE", "icons", "src"],
-        cwd=ROOT,
-    )
-    return [p for p in out.decode("utf-8").split("\0") if p]
+def runtime_files(root: Path = ROOT) -> list[str]:
+    """Package runtime roots from the working tree, including uncommitted modules.
 
-
-def include(rel: str) -> bool:
-    path = Path(rel)
-    if path.suffix.lower() in SKIP_SUFFIXES:
-        return False
-    return True
+    No .git is required. Never recurse into build output or collect credentials,
+    hidden files, docs, arbitrary extensions, or symlinks from a user's machine.
+    """
+    files = ['manifest.json', 'LICENSE']
+    for name in ('src', 'icons'):
+        for path in sorted((root / name).rglob('*')):
+            rel = path.relative_to(root)
+            if any(part.startswith('.') or part in SKIP_PARTS for part in rel.parts):
+                continue
+            if path.is_symlink():
+                raise ValueError(f'Runtime symlinks are not supported: {rel}')
+            if not path.is_file() or path.suffix.lower() not in RUNTIME_SUFFIXES:
+                continue
+            if path.name.lower() in {'credentials.json', 'secrets.json'}:
+                continue
+            files.append(rel.as_posix())
+    return sorted(files)
 
 
 def copy_tree() -> list[str]:
@@ -37,12 +45,10 @@ def copy_tree() -> list[str]:
         shutil.rmtree(DEST)
     DEST.mkdir(parents=True)
     copied: list[str] = []
-    for rel in tracked_files():
-        if not include(rel):
-            continue
+    for rel in runtime_files():
         src = ROOT / rel
         if not src.is_file():
-            continue
+            raise ValueError(f'Missing required runtime file: {rel}')
         dst = DEST / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
@@ -82,6 +88,8 @@ def main() -> None:
     args = parser.parse_args()
     copied = copy_tree()
     write_readme()
+    from verify_extension import verify
+    print('integrity:', verify(DEST, ROOT))
     print(f"extension/ files: {len(copied) + 1}")
     print("top-level:", ", ".join(sorted(p.name for p in DEST.iterdir())))
     if args.zip:

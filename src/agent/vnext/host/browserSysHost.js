@@ -5,7 +5,8 @@
 
 import { isInjectableTabUrl } from '../sessionWorkspace/pageContext.js';
 import { SYS_EVAL_JSON_MAX, SYS_EVAL_SOURCE_MAX, SYS_FETCH_BYTES_MAX, SYS_HELP } from '../sessionWorkspace/browserSys.js';
-import { grantTabLease, tryAcquireTabLease } from './tabLease.js';
+import { acquireTabLease, assertTabLeaseOwnerActive } from './tabLease.js';
+import { readDocumentTarget, targetError } from './documentTarget.js';
 
 const SYS_TIMEOUT_MS = 20000;
 const SYS_WAIT_TIMEOUT_MS = 120000;
@@ -18,6 +19,7 @@ const CDP_PROTOCOL = '1.3';
 /** @type {Set<string>} */
 const cdpAttached = new Set();
 const cdpAttaching = new Map();
+const cdpOwners = new Map();
 /** @type {Map<string, Array<{ method: string, params: unknown, ts: number }>>} */
 const cdpEventBuf = new Map();
 
@@ -90,6 +92,9 @@ async function dispatchWorkspaceSys(request = {}) {
     if (op === 'tabs.list') return { ok: true, result: await sysTabsList() };
     if (op === 'tabs.current') return { ok: true, result: await sysTabsCurrent(params) };
     if (op === 'tabs.frames') return { ok: true, result: await sysTabsFrames(params) };
+    // Reads above do not dispatch effects. Fence every other execution-owned call.
+    await assertTabLeaseOwnerActive(request.sessionId, request.executionId);
+    params._signal?.throwIfAborted();
     if (op === 'eval') return await sysEval(params, request);
     if (op === 'waitFor') return await sysWaitFor(params, request);
     if (op === 'fetch') return await sysFetch(params, request);
@@ -99,14 +104,15 @@ async function dispatchWorkspaceSys(request = {}) {
     if (op === 'tabs.open') return await sysTabsOpen(params, request);
     if (op === 'tabs.navigate') return await sysTabsNavigate(params, request);
     if (op === 'tabs.reload') return await sysTabsReload(params, request);
-    if (op === 'tabs.close') return await sysTabsClose(params);
+    if (op === 'tabs.close') return await sysTabsClose(params, request);
     if (op === 'tabs.focus') return await sysTabsFocus(params, request);
     return { ok: false, code: 'BAD_INPUT', error: `unknown sys op: ${op}` };
   } catch (error) {
     return {
       ok: false,
       code: sysFailureCode(error),
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
+      ...(error?.outcome ? { outcome: error.outcome } : {})
     };
   }
 }
@@ -117,7 +123,7 @@ async function sysTabsList() {
 }
 
 async function sysTabsCurrent(params) {
-  const tab = await resolveTab(params, { fallback: 'active' });
+  const tab = await resolveTab(params);
   return publicTab(tab);
 }
 
@@ -131,6 +137,8 @@ async function sysTabsFrames(params) {
     frameId: f.frameId,
     parentFrameId: f.parentFrameId,
     url: f.url || '',
+    documentId: f.documentId || null,
+    documentLifecycle: f.documentLifecycle || null,
     injectable: isSysInjectableUrl(f.url)
   }));
 }
@@ -140,11 +148,16 @@ async function sysTabsOpen(params, request = {}) {
   if (!isNavigableUrl(url)) {
     return { ok: false, code: 'BAD_INPUT', error: 'sys.tabs.open only allows http(s) or about:blank' };
   }
+  await assertTabLeaseOwnerActive(request.sessionId, request.executionId);
+  params._signal?.throwIfAborted();
   const tab = await chrome.tabs.create({
     url,
     active: params.active !== false
   });
-  if (tab?.id) grantTabLease(tab.id, request.sessionId, request.executionId, 'tabs.open');
+  if (tab?.id) {
+    const lease = await acquireTabLease(tab.id, request.sessionId, request.executionId, 'tabs.open');
+    if (!lease.ok) return { ...lease, outcome: 'unknown' };
+  }
   return { ok: true, result: publicTab(tab) };
 }
 
@@ -156,6 +169,7 @@ async function sysTabsNavigate(params, request = {}) {
   const tab = await resolveTab(params);
   const denied = await acquireSysTab(request, tab.id, 'tabs.navigate');
   if (denied) return denied;
+  params._signal?.throwIfAborted();
   const updated = await chrome.tabs.update(tab.id, { url });
   return { ok: true, result: publicTab(updated || tab) };
 }
@@ -164,12 +178,16 @@ async function sysTabsReload(params, request = {}) {
   const tab = await resolveTab(params);
   const denied = await acquireSysTab(request, tab.id, 'tabs.reload');
   if (denied) return denied;
+  params._signal?.throwIfAborted();
   await chrome.tabs.reload(tab.id, { bypassCache: params.bypassCache === true });
   return { ok: true, result: publicTab(await chrome.tabs.get(tab.id)) };
 }
 
-async function sysTabsClose(params) {
+async function sysTabsClose(params, request = {}) {
   const tab = await resolveTab(params);
+  const denied = await acquireSysTab(request, tab.id, 'tabs.close');
+  if (denied) return denied;
+  params._signal?.throwIfAborted();
   await chrome.tabs.remove(tab.id);
   return { ok: true, result: { closed: tab.id } };
 }
@@ -178,6 +196,7 @@ async function sysTabsFocus(params, request = {}) {
   const tab = await resolveTab(params);
   const denied = await acquireSysTab(request, tab.id, 'tabs.focus');
   if (denied) return denied;
+  params._signal?.throwIfAborted();
   if (tab.windowId != null) await chrome.windows.update(tab.windowId, { focused: true });
   const updated = await chrome.tabs.update(tab.id, { active: true });
   return { ok: true, result: publicTab(updated || tab) };
@@ -257,6 +276,13 @@ async function sysCdp(params, request = {}) {
     const denied = await acquireSysTab(request, debuggee.tabId, `cdp:${action || 'send'}`);
     if (denied) return denied;
   }
+  const cdpKey = debuggeeKey(debuggee);
+  const owner = cdpOwners.get(cdpKey);
+  if (owner && (owner.sessionId !== String(request.sessionId || '') || owner.executionId !== String(request.executionId || ''))) {
+    return { ok: false, code: 'CDP_BUSY', error: 'CDP belongs to another execution.' };
+  }
+  params._signal?.throwIfAborted();
+  cdpOwners.set(cdpKey, { sessionId: String(request.sessionId || ''), executionId: String(request.executionId || ''), debuggee });
   if (action === 'attach') {
     await ensureCdpAttached(debuggee);
     return { ok: true, result: { attached: true, ...publicDebuggee(debuggee) } };
@@ -329,6 +355,7 @@ function installCdpHooks() {
     if (key) {
       cdpAttached.delete(key);
       cdpEventBuf.delete(key);
+      cdpOwners.delete(key);
     }
   });
 }
@@ -353,7 +380,10 @@ async function resolveDebuggee(params) {
       err.code = 'NEED_PAGE';
       throw err;
     }
-    return { targetId: id };
+    if (!Number.isInteger(target.tabId) || target.tabId <= 0) {
+      throw targetError('NEED_PAGE', 'CDP target must resolve to a browser tab with ownership.');
+    }
+    return { tabId: target.tabId };
   }
   const tab = await resolveTab(params);
   if (!isCdpAttachableUrl(tab.url)) {
@@ -415,6 +445,7 @@ async function detachCdp(debuggee) {
   }
   cdpAttached.delete(key);
   cdpEventBuf.delete(key);
+  cdpOwners.delete(key);
 }
 
 function debuggeeKey(debuggee) {
@@ -498,9 +529,12 @@ async function sysEval(params, request = {}) {
   const denied = await userScriptsDenied();
   if (denied) return denied;
   params._signal?.throwIfAborted();
-  const frameId = params.frameId == null ? undefined : Number(params.frameId);
-  const target = { tabId: tab.id };
-  if (Number.isFinite(frameId)) target.frameIds = [frameId];
+  const frameId = params.frameId == null ? 0 : Number(params.frameId);
+  const document = await readDocumentTarget(chrome, tab.id, frameId, {
+    documentId: params.documentId, url: params.expectedUrl
+  });
+  const target = { tabId: tab.id, documentIds: [document.documentId] };
+  params._signal?.throwIfAborted();
   const wrapped = wrapEvalSource(source);
   const results = await withTimeout(
     chrome.userScripts.execute({
@@ -513,15 +547,19 @@ async function sysEval(params, request = {}) {
     'sys.eval timed out'
   );
   const first = Array.isArray(results) ? results[0] : null;
+  if (!first || (first.documentId && first.documentId !== document.documentId)) {
+    return { ok: false, code: 'SYS_OUTCOME_UNKNOWN', outcome: 'unknown',
+      error: 'No matching document result was returned. Inspect state before retrying.' };
+  }
   if (first?.error) return { ok: false, code: 'EVAL_FAILED', error: String(first.error) };
   const payload = first && typeof first === 'object' && 'result' in first ? first.result : first;
   if (payload && typeof payload === 'object' && payload.ok === false) {
     return payload;
   }
   if (payload && typeof payload === 'object' && payload.ok === true) {
-    return { ok: true, result: { world, tabId: tab.id, frameId: first?.frameId ?? frameId ?? 0, value: payload.value } };
+    return { ok: true, result: { world, tabId: tab.id, documentId: document.documentId, frameId: first?.frameId ?? frameId ?? 0, value: payload.value } };
   }
-  return { ok: true, result: { world, tabId: tab.id, frameId: first?.frameId ?? frameId ?? 0, value: payload ?? null } };
+  return { ok: false, code: 'SYS_OUTCOME_UNKNOWN', outcome: 'unknown', error: 'Missing eval receipt. Inspect before retrying.' };
 }
 
 /**
@@ -551,9 +589,12 @@ async function sysWaitFor(params, request = {}) {
   const timeoutMs = clampWaitTimeout(params.timeoutMs);
   const pollMs = clampPollMs(params.pollMs);
   const stableMs = clampStableMs(params.stableMs);
-  const frameId = params.frameId == null ? undefined : Number(params.frameId);
-  const target = { tabId: tab.id };
-  if (Number.isFinite(frameId)) target.frameIds = [frameId];
+  const frameId = params.frameId == null ? 0 : Number(params.frameId);
+  const document = await readDocumentTarget(chrome, tab.id, frameId, {
+    documentId: params.documentId, url: params.expectedUrl
+  });
+  const target = { tabId: tab.id, documentIds: [document.documentId] };
+  params._signal?.throwIfAborted();
   const source = wrapWaitForSource({ mode, params, timeoutMs, pollMs, stableMs });
   const results = await withTimeout(
     chrome.userScripts.execute({
@@ -566,6 +607,10 @@ async function sysWaitFor(params, request = {}) {
     'sys.waitFor timed out'
   );
   const first = Array.isArray(results) ? results[0] : null;
+  if (!first || (first.documentId && first.documentId !== document.documentId)) {
+    return { ok: false, code: 'SYS_OUTCOME_UNKNOWN', outcome: 'unknown',
+      error: 'No matching document result was returned. Inspect state before retrying.' };
+  }
   if (first?.error) return { ok: false, code: 'EVAL_FAILED', error: String(first.error) };
   const payload = first && typeof first === 'object' && 'result' in first ? first.result : first;
   if (payload && typeof payload === 'object' && payload.ok === false) {
@@ -575,6 +620,7 @@ async function sysWaitFor(params, request = {}) {
     return { ok: true, result: {
       world,
       tabId: tab.id,
+      documentId: document.documentId,
       frameId: first?.frameId ?? frameId ?? 0,
       value: payload.value ?? null,
       waitedMs: payload.waitedMs ?? null,
@@ -582,7 +628,7 @@ async function sysWaitFor(params, request = {}) {
       timedOut: payload.timedOut === true
     } };
   }
-  return { ok: false, code: 'SYS_FAILED', error: 'sys.waitFor produced no result' };
+  return { ok: false, code: 'SYS_OUTCOME_UNKNOWN', outcome: 'unknown', error: 'sys.waitFor produced no result; inspect before retrying.' };
 }
 
 /** Build the page-world async IIFE that polls until the condition is met. */
@@ -683,9 +729,12 @@ async function sysFetchAsPage(params, request = {}) {
   const denied = await userScriptsDenied();
   if (denied) return denied;
   params._signal?.throwIfAborted();
-  const frameId = params.frameId == null ? undefined : Number(params.frameId);
-  const target = { tabId: tab.id };
-  if (Number.isFinite(frameId)) target.frameIds = [frameId];
+  const frameId = params.frameId == null ? 0 : Number(params.frameId);
+  const document = await readDocumentTarget(chrome, tab.id, frameId, {
+    documentId: params.documentId, url: params.expectedUrl
+  });
+  const target = { tabId: tab.id, documentIds: [document.documentId] };
+  params._signal?.throwIfAborted();
   const results = await withTimeout(
     chrome.userScripts.execute({
       target,
@@ -697,10 +746,15 @@ async function sysFetchAsPage(params, request = {}) {
     'sys.fetch(page) timed out'
   );
   const first = Array.isArray(results) ? results[0] : null;
+  if (!first || (first.documentId && first.documentId !== document.documentId)) {
+    return { ok: false, code: 'SYS_OUTCOME_UNKNOWN', outcome: 'unknown',
+      error: 'No matching document result was returned. Inspect state before retrying.' };
+  }
   if (first?.error) return { ok: false, code: 'FETCH_FAILED', error: String(first.error) };
   const payload = first?.result;
   if (payload && payload.ok === false) return payload;
-  return { ok: true, result: { as: 'page', tabId: tab.id, ...(payload && payload.value ? payload.value : payload || {}) } };
+  if (!payload || payload.ok !== true) return { ok: false, code: 'SYS_OUTCOME_UNKNOWN', outcome: 'unknown', error: 'Missing fetch receipt. Inspect before retrying.' };
+  return { ok: true, result: { as: 'page', tabId: tab.id, documentId: document.documentId, ...(payload && payload.value ? payload.value : payload || {}) } };
 }
 
 async function sysFetchAsExtension(params) {
@@ -749,7 +803,8 @@ async function sysFetchAsExtension(params) {
 }
 
 async function acquireSysTab(request, tabId, kind) {
-  const acquired = tryAcquireTabLease(tabId, request?.sessionId, request?.executionId, kind);
+  const acquired = await acquireTabLease(tabId, request?.sessionId, request?.executionId, kind);
+  request?.params?._signal?.throwIfAborted();
   if (acquired.ok) return null;
   let title = '';
   try {
@@ -773,16 +828,6 @@ async function resolveTab(params, opts = {}) {
       err.code = 'NEED_PAGE';
       throw err;
     }
-  }
-  if (opts.fallback === 'active') {
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    params._signal?.throwIfAborted();
-    if (!tab?.id) {
-      const err = new Error('no active tab');
-      err.code = 'NEED_PAGE';
-      throw err;
-    }
-    return tab;
   }
   const err = new Error('tabId required');
   err.code = 'NEED_PAGE';
@@ -992,4 +1037,25 @@ function withTimeout(promise, ms, message) {
         reject(e);
       });
   });
+}
+
+/** End-of-execution cleanup. Caller revokes ownership before entering this function. */
+export async function releaseBrowserSysResources(sessionId, executionId, leasedTabs = []) {
+  const sid = String(sessionId || '');
+  const eid = String(executionId || '');
+  if (!sid || !eid) return;
+  const ownerKey = `${sid}:${eid}`;
+  for (const active of sysCalls.values()) if (active.owner === ownerKey) active.controller.abort();
+  const targets = new Map();
+  for (const [key, owner] of cdpOwners) {
+    if (owner.sessionId === sid && owner.executionId === eid) targets.set(key, owner.debuggee);
+  }
+  // After SW restart Chrome may still hold our attachment while the JS map is empty.
+  for (const lease of leasedTabs) {
+    if (lease.sessionId === sid && lease.executionId === eid && lease.kinds?.some(kind => kind.startsWith('cdp:'))) {
+      const target = { tabId: lease.tabId };
+      targets.set(debuggeeKey(target), target);
+    }
+  }
+  for (const target of targets.values()) await detachCdp(target);
 }

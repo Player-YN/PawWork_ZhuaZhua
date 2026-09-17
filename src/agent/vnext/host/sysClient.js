@@ -8,7 +8,13 @@ export async function callBrowserSys({ op, params, sessionId, executionId, signa
   };
   signal?.addEventListener('abort', cancel, { once: true });
   try {
-    return await chrome.runtime.sendMessage({ ...envelope, op, params, deadline });
+    const result = await chrome.runtime.sendMessage({ ...envelope, op, params, deadline });
+    if (result && typeof result.ok === 'boolean') return result;
+    return { ok: false, code: 'SYS_OUTCOME_UNKNOWN', callId, outcome: 'unknown',
+      error: 'Browser response missing; inspect state before retrying.' };
+  } catch (error) {
+    return { ok: false, code: 'SYS_OUTCOME_UNKNOWN', callId, outcome: 'unknown',
+      error: `Browser response lost; do not replay automatically. ${error?.message || error}` };
   } finally {
     signal?.removeEventListener('abort', cancel);
   }

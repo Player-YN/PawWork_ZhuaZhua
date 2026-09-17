@@ -5,6 +5,7 @@ import './silenceSdkWarnings.js';
 import { SessionWorkspaceService } from '../agent/vnext/service/sessionWorkspaceService.js';
 import { createSandboxCodeClient } from '../agent/vnext/adapters/sandboxClient.js';
 import { formatRpcError } from '../agent/vnext/host/rpcError.js';
+import { dispatchWorkspaceRpc } from '../agent/vnext/host/workspaceRpcContract.js';
 import { isAbortLike } from '../agent/vnext/host/userStop.js';
 
 const sandboxFrame = document.getElementById('pawwork-code-sandbox');
@@ -21,11 +22,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   void (async () => {
     try {
       const service = await servicePromise;
-      const method = String(message.method || '');
-      if (!method || typeof service[method] !== 'function' || method.startsWith('_')) {
-        throw new Error(`unknown workspace method: ${method}`);
-      }
-      const result = await service[method](message.params || {});
+      const result = await dispatchWorkspaceRpc(service, message, _sender, chrome.runtime);
       sendResponse({ ok: true, result });
     } catch (error) {
       try {
