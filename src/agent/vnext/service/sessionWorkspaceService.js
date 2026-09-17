@@ -55,7 +55,20 @@ import {
 } from '../sessionWorkspace/skillStore.js';
 import { getSkill, listPackagedSkillCatalog } from '../skills/registry.js';
 import { answerClarify, abortSessionClarifies } from '../sessionWorkspace/clarifyGate.js';
+import { abortExecutionApprovals } from '../sessionWorkspace/approvalGate.js';
 import { callBrowserSys } from '../host/sysClient.js';
+import { gatedDispatch, hostAnswerApproval, hostGetPendingApproval } from '../host/operationGate.js';
+import { createCallJournal, createMemoryCallJournal, createUnavailableCallJournal, openCallJournal, slimJournalAudit } from '../host/callJournal.js';
+import {
+  accessPolicyStorageInstalled,
+  createMemoryAccessPolicyStorage,
+  installAccessPolicyStorage,
+  readEffectiveAccessPolicy,
+  writeAccessPolicy
+} from '../host/accessPolicy.js';
+import { installDispatchTicketStorage, dispatchTicketStorageInstalled, putDispatchTicket, dropTicketsForExecution, dropDispatchTicket, listDispatchTickets } from '../host/dispatchTicket.js';
+import { hashOperationPayload, sha256Hex } from '../host/payloadHash.js';
+import { applyVerifyToJournalState, verifyPostconditions } from '../host/postcondition.js';
 import { createUserStopError, isAbortLike } from '../host/userStop.js';
 import {
   allocateLabelN,
@@ -105,6 +118,9 @@ export class SessionWorkspaceService {
     this._resolveTaskPage = typeof opts.resolveTaskPage === 'function' ? opts.resolveTaskPage : null;
     this._peekTabLeaseFn = typeof opts.peekTabLease === 'function' ? opts.peekTabLease : null;
     this._releaseTabLeasesFn = typeof opts.releaseTabLeases === 'function' ? opts.releaseTabLeases : null;
+    this._journal = opts.journal
+      || (opts.memoryJournal === true ? createCallJournal(createMemoryCallJournal()) : createUnavailableCallJournal());
+    this._ensurePolicyAdapters();
     const recovered = recoverInterruptedTasks(store);
     this._startupPersist = recovered.length ? this._persist() : Promise.resolve();
   }
@@ -134,8 +150,33 @@ export class SessionWorkspaceService {
       }
     }
     await hydrateDurableSkillsFromChrome();
-    const service = new SessionWorkspaceService({ ...opts, store, model, callModel: opts.callModel || null });
+    let journal = opts.journal;
+    if (!journal) {
+      try {
+        journal = await openCallJournal({ memory: opts.memoryJournal === true, indexedDB: opts.indexedDB });
+      } catch (error) {
+        if (opts.memoryJournal === true) {
+          journal = createCallJournal(createMemoryCallJournal());
+        } else {
+          journal = createUnavailableCallJournal();
+          console.warn('[SessionWorkspaceService] Call journal unavailable; mutating dispatch is fail-closed.', error?.message || error);
+        }
+      }
+    }
+    const service = new SessionWorkspaceService({ ...opts, store, model, callModel: opts.callModel || null, journal });
     await service._startupPersist;
+    try {
+      await service._journal.recoverOnStartup({
+        isExecutionActive: (sid, eid) => {
+          const slot = service._activeBySession.get(sid);
+          return !!(slot && slot.executionId === eid && !slot.controller.signal.aborted);
+        },
+        dropTicket: (operationId) => service._dropTicket(operationId),
+        listTickets: () => service._listTickets()
+      });
+    } catch {
+      /* journal recover must not block boot */
+    }
     return service;
   }
 
@@ -325,6 +366,335 @@ export class SessionWorkspaceService {
     const s = this.runtime.ensureSession(sessionId);
     this.activeGroupId = readActiveCaptureGroupId(this.runtime.store);
     return s;
+  }
+
+  _ensurePolicyAdapters() {
+    const hasSession = typeof chrome !== 'undefined' && !!chrome.storage?.session;
+    const hasLocal = typeof chrome !== 'undefined' && !!chrome.storage?.local;
+    if (hasSession && hasLocal) return;
+    if (accessPolicyStorageInstalled() || dispatchTicketStorageInstalled()) return;
+    const mem = createMemoryAccessPolicyStorage();
+    installAccessPolicyStorage(mem);
+    installDispatchTicketStorage(mem.session);
+  }
+
+  async _readPolicy() {
+    if (typeof chrome !== 'undefined' && chrome.storage?.local && chrome.storage?.session) {
+      return readEffectiveAccessPolicy();
+    }
+    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+      try {
+        const res = await chrome.runtime.sendMessage({
+          target: 'pawwork-background',
+          action: 'workspace_policy_get'
+        });
+        if (res?.ok && res.result) return res.result;
+      } catch {
+        /* fall through */
+      }
+    }
+    return readEffectiveAccessPolicy();
+  }
+
+  async _putTicket(ticket) {
+    if (typeof chrome !== 'undefined' && chrome.storage?.session) {
+      return putDispatchTicket(ticket);
+    }
+    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+      const res = await chrome.runtime.sendMessage({
+        target: 'pawwork-background',
+        action: 'workspace_ticket_put',
+        ticket
+      });
+      if (!res?.ok) {
+        throw Object.assign(new Error(res?.error || 'ticket put failed'), { code: res?.code || 'TICKET_REQUIRED' });
+      }
+      return res.ticket;
+    }
+    return putDispatchTicket(ticket);
+  }
+
+  async _dropTicket(operationId) {
+    const id = String(operationId || '');
+    if (!id) return false;
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage?.session) {
+        return dropDispatchTicket(id);
+      }
+      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+        await chrome.runtime.sendMessage({
+          target: 'pawwork-background',
+          action: 'workspace_ticket_drop',
+          operationId: id
+        });
+        return true;
+      }
+      return dropDispatchTicket(id);
+    } catch {
+      return false;
+    }
+  }
+
+  async _dropTickets(sessionId, executionId) {
+    const sid = String(sessionId || '');
+    const eid = String(executionId || '');
+    if (!sid || !eid) return 0;
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage?.session) {
+        return dropTicketsForExecution(sid, eid);
+      }
+      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+        const res = await chrome.runtime.sendMessage({
+          target: 'pawwork-background',
+          action: 'workspace_ticket_drop',
+          sessionId: sid,
+          executionId: eid
+        });
+        return Number(res?.result) || 0;
+      }
+      return dropTicketsForExecution(sid, eid);
+    } catch {
+      return 0;
+    }
+  }
+
+  async _listTickets() {
+    try {
+      return await listDispatchTickets();
+    } catch {
+      return [];
+    }
+  }
+
+  async _cleanupExecutionPolicy(sessionId, executionId) {
+    const sid = String(sessionId || '');
+    const eid = String(executionId || '');
+    abortExecutionApprovals(sid, eid);
+    await this._dropTickets(sid, eid);
+    if (!this._journal || this._journal.kind === 'unavailable') return;
+    try {
+      const rows = await this._journal.listBySession(sid);
+      for (const row of rows) {
+        if (eid && String(row.executionId || '') !== eid) continue;
+        if (row.state === 'awaiting_approval') {
+          await this._journal.update(row.operationId, {
+            state: 'failed',
+            outcome: 'denied',
+            error: { code: 'APPROVAL_EXPIRED', message: 'Execution ended before approval.' }
+          });
+        } else if (row.state === 'authorized') {
+          await this._journal.update(row.operationId, {
+            state: 'failed',
+            outcome: 'unknown',
+            error: { code: 'SYS_OUTCOME_UNKNOWN', message: 'Execution ended after authorize before confirmed dispatch.' }
+          });
+          await this._dropTicket(row.operationId);
+        }
+      }
+    } catch {
+      /* cleanup must not block abort */
+    }
+  }
+
+  _throwIfAborted(signal) {
+    if (signal?.aborted) {
+      const err = new Error('Execution aborted.');
+      err.code = 'SYS_ABORTED';
+      throw err;
+    }
+  }
+
+  async _pageAction(message, signal) {
+    this._throwIfAborted(signal);
+    const out = await chrome.runtime.sendMessage({
+      target: 'pawwork-background',
+      action: 'workspace_page_action',
+      ...message
+    });
+    this._throwIfAborted(signal);
+    return out;
+  }
+
+  async _resolveActionIntent(payload, sessionId, executionId, signal) {
+    const op = String(payload?.op || '');
+    const MUTATIONS = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll']);
+    if (!MUTATIONS.has(op)) return { ok: true, skipped: true };
+    this._throwIfAborted(signal);
+    let rev = payload.rev;
+    let snap = null;
+    if (!rev) {
+      snap = await this._pageAction({
+        ...payload,
+        op: 'snapshot',
+        sessionId,
+        executionId,
+        tabId: payload.tabId
+      }, signal);
+      if (!snap?.ok) return snap;
+      rev = snap.rev;
+    }
+    this._throwIfAborted(signal);
+    const resolved = await this._pageAction({
+      ...payload,
+      op: 'resolve_intent',
+      targetOp: op,
+      rev,
+      sessionId,
+      executionId,
+      tabId: payload.tabId
+    }, signal);
+    this._throwIfAborted(signal);
+    if (!resolved?.ok) return resolved;
+    return { ...resolved, rev };
+  }
+
+  _verifyActionFacts(out, req) {
+    return {
+      url: out?.after?.url || out?.url || '',
+      text: out?.after?.text || out?.text || '',
+      controls: Array.isArray(out?.controls) ? out.controls : [],
+      snapshotOk: !out?.observationError && Array.isArray(out?.controls),
+      status: out?.status ?? out?.result?.status,
+      revision: out?.revision ?? out?.artifact?.revision,
+      sha256: out?.sha256,
+      download: out?.download || out?.result?.download
+    };
+  }
+
+  async _verifySysFacts(out, req) {
+    const facts = {
+      status: out?.status ?? out?.result?.status,
+      bodyHash: out?.bodyHash || out?.result?.bodyHash,
+      url: out?.url || req.url,
+      snapshotOk: false
+    };
+    if (req.op === 'download') {
+      const downloadId = out?.result?.downloadId ?? out?.downloadId;
+      if (downloadId && typeof chrome !== 'undefined' && chrome.downloads?.search) {
+        try {
+          const [item] = await chrome.downloads.search({ id: downloadId });
+          facts.download = item
+            ? { state: item.state, bytes: item.fileSize, hash: item.etag || item.finalUrl || '' }
+            : null;
+        } catch {
+          facts.download = downloadId ? { state: 'in_progress' } : null;
+        }
+      } else if (downloadId) {
+        facts.download = { state: 'in_progress' };
+      }
+    }
+    return facts;
+  }
+
+  async _gatedPageAction(payload, sessionId, signal) {
+    const executionId = payload?.executionId || this._activeBySession.get(sessionId)?.executionId;
+    let resolved;
+    try {
+      resolved = await this._resolveActionIntent(payload, sessionId, executionId, signal);
+    } catch (error) {
+      if (error?.code === 'SYS_ABORTED' || signal?.aborted) {
+        return { ok: false, code: 'SYS_ABORTED', error: error?.message || 'Execution aborted.', outcome: 'aborted' };
+      }
+      throw error;
+    }
+    if (resolved && resolved.ok === false) return resolved;
+    if (signal?.aborted) {
+      return { ok: false, code: 'SYS_ABORTED', error: 'Execution aborted.', outcome: 'aborted' };
+    }
+    const classified = resolved?.classified;
+    const payloadHash = resolved?.payloadHash;
+    const control = resolved?.control;
+    return gatedDispatch(
+      {
+        channel: 'action',
+        ...payload,
+        sessionId,
+        executionId,
+        op: payload?.op,
+        ref: resolved?.ref || payload?.ref,
+        name: resolved?.name || payload?.name,
+        url: control?.frameUrl || resolved?.frameUrl || payload?.url,
+        frameUrl: control?.frameUrl || resolved?.frameUrl,
+        documentId: control?.documentId || resolved?.documentId || payload?.documentId,
+        tabId: payload?.tabId,
+        batchSize: resolved?.batchSize || resolved?.frames?.length || 0,
+        frames: resolved?.frames,
+        control,
+        classified,
+        payloadHash,
+        rev: resolved?.rev || payload?.rev,
+        expectedText: payload?.expectedText || payload?.postText,
+        expectedUrl: payload?.expectedUrl || payload?.postUrl,
+        expectAbsent: payload?.expectAbsent || payload?.postAbsent,
+        expectVisible: payload?.expectVisible || payload?.postVisible
+      },
+      {
+        journal: this._journal,
+        signal,
+        broadcast: (ev) => this._broadcastUiEvent(ev),
+        putTicket: (ticket) => this._putTicket(ticket),
+        dropTicket: (operationId) => this._dropTicket(operationId),
+        readPolicy: () => this._readPolicy(),
+        verifyFacts: (out, req) => this._verifyActionFacts(out, req),
+        send: (req) =>
+          this._pageAction({
+            ...req,
+            sessionId,
+            executionId: req.executionId || executionId,
+            tabId: req.tabId ?? payload?.tabId,
+            documentId: req.documentId || resolved?.documentId,
+            url: req.url || resolved?.frameUrl || payload?.url,
+            ticketNonce: req.ticketNonce,
+            payloadHash: req.payloadHash,
+            operationId: req.operationId
+          }, signal)
+      }
+    );
+  }
+
+  _gatedSys(op, params, context, sessionId, signal) {
+    const executionId = this._activeBySession.get(sessionId)?.executionId;
+    return gatedDispatch(
+      {
+        channel: 'sys',
+        op,
+        sysOp: op,
+        sessionId,
+        executionId,
+        tabId: params?.tabId ?? params?.defaultTabId,
+        documentId: params?.documentId,
+        url: params?.url,
+        method: params?.init?.method || params?.method,
+        code: params?.code,
+        init: params?.init,
+        filename: params?.filename,
+        params,
+        unprovable: op === 'fetch' && /POST|PUT|PATCH/i.test(String(params?.init?.method || params?.method || '')) && !params?.postUrl
+      },
+      {
+        journal: this._journal,
+        signal: context?.signal || signal,
+        broadcast: (ev) => this._broadcastUiEvent(ev),
+        putTicket: (ticket) => this._putTicket(ticket),
+        readPolicy: () => this._readPolicy(),
+        verifyFacts: (out, req) => this._verifySysFacts(out, req),
+        send: (req) =>
+          callBrowserSys({
+            sessionId,
+            executionId,
+            signal: context?.signal || signal,
+            deadline: context?.deadline,
+            op,
+            params: {
+              ...(params && typeof params === 'object' ? params : {}),
+              defaultTabId: params?.defaultTabId ?? params?.tabId
+            },
+            operationId: req.operationId,
+            payloadHash: req.payloadHash,
+            ticketNonce: req.ticketNonce
+          })
+      }
+    );
   }
 
   /**
@@ -587,6 +957,15 @@ export class SessionWorkspaceService {
       await this.abortExecution({ sessionId: id });
       await this._awaitSessionIdle(id);
       deleteTasksForSession(this.runtime.store, id);
+      abortExecutionApprovals(id);
+      try {
+        await this._dropTickets(id, this._activeBySession.get(id)?.executionId);
+        const leftover = await this._journal.listBySession(id);
+        for (const row of leftover) await this._dropTicket(row.operationId);
+        await this._journal.deleteSession(id);
+      } catch {
+        /* ignore */
+      }
       this.runtime.deleteSession(id);
       deleted.push(id);
     }
@@ -684,8 +1063,71 @@ export class SessionWorkspaceService {
       storeKind: this.storeKind,
       compact: !!compact,
       visitedPages: Array.isArray(sess.visitedPages) ? sess.visitedPages : [],
-      activeExecution: this._snapshotActiveExecution(sessionId)
+      activeExecution: this._snapshotActiveExecution(sessionId),
+      accessPolicy: await this._readPolicy(),
+      pendingApproval: await hostGetPendingApproval(this._journal, sessionId)
     };
+  }
+
+  async getAccessPolicy() {
+    return this._readPolicy();
+  }
+
+  async setAccessPolicy({ mode, rememberProfile } = {}) {
+    let policy;
+    if (typeof chrome !== 'undefined' && chrome.storage?.local && chrome.storage?.session) {
+      policy = await writeAccessPolicy({ mode, rememberProfile });
+    } else if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+      const res = await chrome.runtime.sendMessage({
+        target: 'pawwork-background',
+        action: 'workspace_policy_set',
+        mode,
+        rememberProfile
+      });
+      if (!res?.ok) throw Object.assign(new Error(res?.error || 'setAccessPolicy failed'), { code: res?.code || 'POLICY_STORAGE_UNAVAILABLE' });
+      policy = res.result;
+    } else {
+      policy = await writeAccessPolicy({ mode, rememberProfile });
+    }
+    this._broadcastUiEvent({ type: 'access-policy-changed', sessionId: 'default', ...policy });
+    return policy;
+  }
+
+  async getPendingApproval({ sessionId = 'default' } = {}) {
+    return { pending: await hostGetPendingApproval(this._journal, sessionId) };
+  }
+
+  async answerApproval(params = {}) {
+    return hostAnswerApproval(this._journal, params);
+  }
+
+  async listJournalAnomalies({ sessionId = 'default' } = {}) {
+    if (!this._journal || this._journal.kind === 'unavailable') {
+      const err = new Error('Call journal is unavailable');
+      err.code = 'JOURNAL_UNAVAILABLE';
+      throw err;
+    }
+    const rows = await this._journal.listAnomalies(sessionId, 50);
+    return { operations: rows };
+  }
+
+  async listJournal({ sessionId = 'default' } = {}) {
+    if (!this._journal || this._journal.kind === 'unavailable') {
+      const err = new Error('Call journal is unavailable');
+      err.code = 'JOURNAL_UNAVAILABLE';
+      throw err;
+    }
+    const operations = await this._journal.listBySession(sessionId);
+    return { sessionId, operations };
+  }
+
+  async exportJournal({ sessionId = 'default' } = {}) {
+    if (!this._journal || this._journal.kind === 'unavailable') {
+      const err = new Error('Call journal is unavailable');
+      err.code = 'JOURNAL_UNAVAILABLE';
+      throw err;
+    }
+    return this._journal.exportSession(sessionId);
   }
 
   async allocateLabel({ sessionId = 'default', kind = 'image', groupId } = {}) {
@@ -1128,15 +1570,15 @@ export class SessionWorkspaceService {
             url: payload?.url || activeTab?.url
           }),
         hostPageAction: (payload) =>
-          chrome.runtime.sendMessage({
-            target: 'pawwork-background',
-            action: 'workspace_page_action',
-            ...payload,
+          this._gatedPageAction(
+            {
+              ...payload,
+              tabId: payload?.tabId ?? activeTab?.tabId ?? activeTab?.id,
+              url: payload?.url || activeTab?.url
+            },
             sessionId,
-            executionId: payload?.executionId || this._activeBySession.get(sessionId)?.executionId,
-            tabId: payload?.tabId ?? activeTab?.tabId ?? activeTab?.id,
-            url: payload?.url || activeTab?.url
-          }),
+            controller.signal
+          ),
         hostFindTab: (url) =>
           chrome.runtime.sendMessage({
             target: 'pawwork-background',
@@ -1145,17 +1587,16 @@ export class SessionWorkspaceService {
             url
           }),
         hostSys: (op, params, context = {}) =>
-          callBrowserSys({
-            sessionId,
-            executionId: this._activeBySession.get(sessionId)?.executionId,
-            signal: context.signal || controller.signal,
-            deadline: context.deadline,
+          this._gatedSys(
             op,
-            params: {
+            {
               ...(params && typeof params === 'object' ? params : {}),
               defaultTabId: params?.defaultTabId ?? params?.tabId ?? activeTab?.tabId ?? activeTab?.id
-            }
-          }),
+            },
+            context,
+            sessionId,
+            controller.signal
+          ),
         taskContext: durableTask,
         taskRun: !!(taskRun && durableTask),
         taskContinuation: taskContinuation === true,
@@ -1287,7 +1728,9 @@ export class SessionWorkspaceService {
       throw error;
     } finally {
       try {
-        await this._releaseTabLeases(sessionId, this._activeBySession.get(sessionId)?.executionId);
+        const endingId = this._activeBySession.get(sessionId)?.executionId;
+        await this._releaseTabLeases(sessionId, endingId);
+        await this._cleanupExecutionPolicy(sessionId, endingId);
       } catch {
         /* */
       }
@@ -1322,6 +1765,7 @@ export class SessionWorkspaceService {
       });
       slot.controller.abort(createUserStopError());
       abortSessionClarifies(slot.sessionId);
+      await this._cleanupExecutionPolicy(slot.sessionId, slot.executionId);
     }
     if (executionId && slots.length === 0) {
       this._broadcastUiEvent({
@@ -1368,6 +1812,7 @@ export class SessionWorkspaceService {
     });
     slot.controller.abort(createUserStopError());
     abortSessionClarifies(sid);
+    await this._cleanupExecutionPolicy(sid, slot.executionId);
     await this._releaseTabLeases(sid, slot.executionId);
     return { ok: true, aborted: true, sessionId: sid, executionId };
   }
@@ -1607,15 +2052,44 @@ export class SessionWorkspaceService {
 
   async updateArtifact({ sessionId = 'default', artifactId, content, mimeType, base64, name, expectedRevision } = {}) {
     this.ensureSession(sessionId);
+    const bytes = bytesFromRpcContent({ content, base64 });
+    const sha256 = await sha256Hex(typeof Buffer !== 'undefined' ? Buffer.from(bytes).toString('base64') : String(bytes.byteLength));
+    if (expectedRevision != null) {
+      return gatedDispatch(
+        {
+          channel: 'artifact',
+          op: 'updateArtifact',
+          sessionId,
+          executionId: this._activeBySession.get(sessionId)?.executionId,
+          artifactId,
+          expectedRevision,
+          sha256
+        },
+        {
+          journal: this._journal,
+          broadcast: (ev) => this._broadcastUiEvent(ev),
+          putTicket: (ticket) => this._putTicket(ticket),
+          readPolicy: () => this._readPolicy(),
+          send: async () => {
+            const fs = createSessionGuestFs(this.runtime.store, { sessionId, executionId: null });
+            const rec = updateArtifactContent(this.runtime.store, fs, sessionId, artifactId, bytes, {
+              mimeType,
+              name,
+              expectedRevision
+            });
+            await this._persist();
+            return { ok: true, artifact: rec, revision: rec.revision, sha256 };
+          },
+          verifyFacts: async (out) => ({
+            revision: out?.artifact?.revision,
+            sha256,
+            idempotent: false
+          })
+        }
+      );
+    }
     const fs = createSessionGuestFs(this.runtime.store, { sessionId, executionId: null });
-    const rec = updateArtifactContent(
-      this.runtime.store,
-      fs,
-      sessionId,
-      artifactId,
-      bytesFromRpcContent({ content, base64 }),
-      { mimeType, name, expectedRevision }
-    );
+    const rec = updateArtifactContent(this.runtime.store, fs, sessionId, artifactId, bytes, { mimeType, name, expectedRevision });
     await this._persist();
     return { ok: true, artifact: rec };
   }
@@ -1686,6 +2160,15 @@ export class SessionWorkspaceService {
     await this.abortExecution({ sessionId });
     await this._awaitSessionIdle(sessionId);
     deleteTasksForSession(this.runtime.store, sessionId);
+    abortExecutionApprovals(sessionId);
+    try {
+      await this._dropTickets(sessionId, this._activeBySession.get(sessionId)?.executionId);
+      const leftover = await this._journal.listBySession(sessionId);
+      for (const row of leftover) await this._dropTicket(row.operationId);
+      await this._journal.deleteSession(sessionId);
+    } catch {
+      /* journal GC must not block session delete */
+    }
     const result = this.runtime.deleteSession(sessionId);
     await this._persist();
     return result;

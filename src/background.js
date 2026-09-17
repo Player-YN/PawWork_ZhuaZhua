@@ -7,6 +7,8 @@ import { loadLlmSettings } from './agent/llm.js';
 import { sheetTabMatches, htmlTabMatches } from './sidepanel/sessionIsolation.js';
 import { previewEntryForItem } from './agent/vnext/sessionWorkspace/openClassify.js';
 import { handleWorkspaceSys } from './agent/vnext/host/browserSysHost.js';
+import { putDispatchTicket, expireDispatchTickets, dropDispatchTicket, dropTicketsForExecution } from './agent/vnext/host/dispatchTicket.js';
+import { bindAccessPolicyChromeListener, readEffectiveAccessPolicy, writeAccessPolicy } from './agent/vnext/host/accessPolicy.js';
 import { configureTabLeasePersistence, readTabLease, removeTabLease } from './agent/vnext/host/tabLease.js';
 import { releaseBrowserExecution, reconcileBrowserExecutions } from './agent/vnext/host/browserExecution.js';
 import { createTaskScheduler, resolveTaskPage } from './agent/vnext/host/taskScheduler.js';
@@ -24,6 +26,8 @@ import {
 import { isMentionablePageUrl, normalizePageRef } from './agent/vnext/sessionWorkspace/pageContext.js';
 
 configureTabLeasePersistence(chrome.storage.session);
+bindAccessPolicyChromeListener();
+void expireDispatchTickets();
 const PAWWORK_OFFSCREEN_URL = 'src/offscreen/runtime.html';
 let pawworkOffscreenCreating = null;
 
@@ -1061,7 +1065,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return false;
   }
   if (request?.action === 'session_workspace_event' && senderRole !== 'offscreen') return false;
-  if (['storage_local_get', 'storage_local_set', 'workspace_get_llm_settings'].includes(request?.action) &&
+  if (['storage_local_get', 'storage_local_set', 'storage_session_get', 'storage_session_set',
+        'workspace_get_llm_settings', 'workspace_policy_get', 'workspace_policy_set',
+        'workspace_ticket_put', 'workspace_ticket_drop'].includes(request?.action) &&
       !['offscreen', 'ui'].includes(senderRole)) {
     sendResponse({ ok: false, code: 'RPC_DENIED', error: 'Settings require a trusted runtime or sidepanel.' });
     return false;
@@ -1249,6 +1255,57 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request?.target === 'pawwork-background' && request?.action === 'storage_local_set') {
     handleStorageLocalSet(request.values)
       .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
+    return true;
+  }
+  if (request?.target === 'pawwork-background' && request?.action === 'storage_session_get') {
+    handleStorageSessionGet(request.keys)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
+    return true;
+  }
+  if (request?.target === 'pawwork-background' && request?.action === 'storage_session_set') {
+    handleStorageSessionSet(request.values)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
+    return true;
+  }
+  if (request?.target === 'pawwork-background' && request?.action === 'workspace_policy_get') {
+    readEffectiveAccessPolicy()
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
+    return true;
+  }
+  if (request?.target === 'pawwork-background' && request?.action === 'workspace_policy_set') {
+    if (senderRole !== 'offscreen') {
+      sendResponse({ ok: false, code: 'RPC_DENIED', error: 'Access policy writes go through workspace RPC.' });
+      return false;
+    }
+    writeAccessPolicy({ mode: request.mode, rememberProfile: request.rememberProfile })
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error), code: error?.code }));
+    return true;
+  }
+  if (request?.target === 'pawwork-background' && request?.action === 'workspace_ticket_put') {
+    if (senderRole !== 'offscreen') {
+      sendResponse({ ok: false, code: 'SYS_DENIED', error: 'Dispatch tickets are issued by the offscreen runtime.' });
+      return false;
+    }
+    putDispatchTicket(request.ticket)
+      .then((ticket) => sendResponse({ ok: true, ticket }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error), code: error?.code || 'TICKET_REQUIRED' }));
+    return true;
+  }
+  if (request?.target === 'pawwork-background' && request?.action === 'workspace_ticket_drop') {
+    if (senderRole !== 'offscreen') {
+      sendResponse({ ok: false, code: 'SYS_DENIED', error: 'Dispatch tickets are dropped by the offscreen runtime.' });
+      return false;
+    }
+    const drop = request.sessionId && request.executionId
+      ? dropTicketsForExecution(request.sessionId, request.executionId)
+      : dropDispatchTicket(request.operationId);
+    Promise.resolve(drop)
+      .then((result) => sendResponse({ ok: true, result }))
       .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
     return true;
   }
@@ -1535,11 +1592,14 @@ async function handleNativeDownloads(urls) {
 const STORAGE_BRIDGE_KEY =
   /^(pagewand_|DEEPSEEK_|selected_model$)/;
 
+const STORAGE_BRIDGE_DENIED = new Set(['pagewand_access_policy', 'pagewand_access_policy_session']);
+
 function assertStorageBridgeKeys(keys) {
   const list = Array.isArray(keys) ? keys : keys != null ? [keys] : [];
   for (const key of list) {
-    if (!STORAGE_BRIDGE_KEY.test(String(key))) {
-      throw new Error(`storage bridge denied key: ${key}`);
+    const name = String(key);
+    if (STORAGE_BRIDGE_DENIED.has(name) || !STORAGE_BRIDGE_KEY.test(name)) {
+      throw new Error(`storage bridge denied key: ${name}`);
     }
   }
   return list.map(String);
@@ -1557,6 +1617,20 @@ async function handleStorageLocalSet(values) {
   }
   assertStorageBridgeKeys(Object.keys(values));
   await chrome.storage.local.set(values);
+}
+
+async function handleStorageSessionGet(keys) {
+  const list = assertStorageBridgeKeys(keys);
+  if (!list.length) return {};
+  return chrome.storage.session.get(list);
+}
+
+async function handleStorageSessionSet(values) {
+  if (!values || typeof values !== 'object' || Array.isArray(values)) {
+    throw new Error('storage_session_set requires an object');
+  }
+  assertStorageBridgeKeys(Object.keys(values));
+  await chrome.storage.session.set(values);
 }
 
 /**

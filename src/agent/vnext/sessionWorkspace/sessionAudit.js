@@ -15,7 +15,9 @@ const KEEP = new Set([
   'stale-ref',
   'action-outcome',
   'execution-start',
-  'execution-end'
+  'execution-end',
+  'journal',
+  'policy'
 ]);
 
 export function sessionAuditKey(sessionId) {
@@ -75,6 +77,12 @@ export function slimAuditEvent(ev = {}) {
   if (ev.matched === false) row.matched = false;
   if (ev.dueAt) row.dueAt = String(ev.dueAt).slice(0, 80);
   if (ev.nextAction) row.nextAction = String(ev.nextAction).slice(0, 200);
+  if (ev.operationId) row.operationId = String(ev.operationId).slice(0, 80);
+  if (ev.state) row.state = String(ev.state).slice(0, 40);
+  if (ev.risk) row.risk = String(ev.risk).slice(0, 32);
+  if (ev.confidence) row.confidence = String(ev.confidence).slice(0, 16);
+  if (ev.accessMode) row.accessMode = String(ev.accessMode).slice(0, 16);
+  if (ev.rawEscape) row.rawEscape = String(ev.rawEscape).slice(0, 16);
   return row;
 }
 

@@ -3814,6 +3814,26 @@ ${fragment}
     return undefined;
   }
 
+  function actionPaymentHints(el) {
+    const hints = {};
+    try {
+      const root = el.closest('form') || el.parentElement;
+      if (!root) return undefined;
+      const text = String(root.innerText || '').slice(0, 2000);
+      if (/[¥$€£]|USD|CNY|RMB/.test(text)) hints.currency = true;
+      const inputs = root.querySelectorAll ? root.querySelectorAll('input') : [];
+      for (const input of inputs) {
+        const type = String(input.type || '').toLowerCase();
+        const name = String(input.name || input.autocomplete || '').toLowerCase();
+        if (type === 'password' || /cc-|card|cvv|cvc|cardnumber/.test(name)) {
+          hints.secrets = 'payment';
+          break;
+        }
+      }
+    } catch (_) {}
+    return hints.currency || hints.secrets ? hints : undefined;
+  }
+
   function summarizeActionControl(el, ref) {
     const type = actionControlType(el);
     const name = actionAccessibleName(el);
@@ -3824,11 +3844,14 @@ ${fragment}
       name: name || undefined,
       type: type || undefined,
       value: actionMaskedValue(el),
-      required: !!el.required
+      required: !!el.required,
+      frameUrl: location.href
     };
     if (el.disabled) row.disabled = true;
     if (!isElementVisible(el)) row.visible = false;
     if (region) row.region = region;
+    const hints = actionPaymentHints(el);
+    if (hints) row.hints = hints;
     const options = actionSelectOptions(el);
     if (options) row.options = options;
     return row;

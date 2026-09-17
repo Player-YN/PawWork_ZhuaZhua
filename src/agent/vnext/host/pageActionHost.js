@@ -1,11 +1,116 @@
 /** Live-page action transport: explicit tab, serialized calls, document-bound snapshots. */
 import { preparePersistentPageActionTarget, assertTabLeaseOwnerActive } from './tabLease.js';
 import { createPageSnapshotRegistry, readDocumentTarget, targetError } from './documentTarget.js';
+import { consumeDispatchTicket, dropDispatchTicket } from './dispatchTicket.js';
+import {
+  classifyRisk,
+  needsDispatchTicket,
+  mergeBatchClassification,
+  CLASSIFIED_SOURCE_SW,
+  RISK_PAYMENT,
+  CONF_KNOWN
+} from './riskClassify.js';
+import { hashOperationPayload } from './payloadHash.js';
 
 const snapshots = createPageSnapshotRegistry();
+const lastControls = new Map();
 const actionQueues = new Map();
-export function invalidatePageActionTarget(tabId) { snapshots.invalidate(tabId); }
+export function invalidatePageActionTarget(tabId) {
+  snapshots.invalidate(tabId);
+  lastControls.delete(Number(tabId));
+}
 const MUTATIONS = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll']);
+
+function rememberControls(tabId, controls) {
+  lastControls.set(Number(tabId), Array.isArray(controls) ? controls : []);
+}
+
+function lookupControl(tabId, ref, name) {
+  const list = lastControls.get(Number(tabId)) || [];
+  const want = String(ref || '').trim();
+  if (want) {
+    const hit = list.find((row) => String(row.ref || '') === want || String(row.ref || '').endsWith(want));
+    if (hit) return hit;
+  }
+  if (name) {
+    const hit = list.find((row) => String(row.name || '') === String(name));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+export function actionHashInput(op, request, control, extra = {}) {
+  return {
+    channel: 'action',
+    op,
+    ref: extra.ref || request.ref || control?.ref || '',
+    name: control?.name || request.name || request.label || '',
+    key: request.key,
+    url: control?.frameUrl || extra.frameUrl || '',
+    frameUrl: control?.frameUrl || extra.frameUrl || '',
+    tabId: extra.tabId ?? request.tabId,
+    documentId: control?.documentId || extra.documentId || '',
+    frameId: extra.frameId ?? control?.frameId ?? null,
+    value: request.value,
+    fields: request.fields
+  };
+}
+
+export function batchFillHashInput(request, frameIntents, tabId) {
+  const fields = (Array.isArray(frameIntents) ? frameIntents : []).map((row) => ({
+    ref: row.prefixed || row.control?.ref || row.field?.ref || '',
+    name: row.control?.name || row.field?.name || row.field?.label || '',
+    valueChars: row.field?.value != null ? String(row.field.value).length : 0,
+    frameId: row.frameId ?? row.control?.frameId ?? null,
+    frameUrl: row.control?.frameUrl || row.extra?.frameUrl || '',
+    documentId: row.control?.documentId || row.extra?.documentId || ''
+  })).sort((a, b) => {
+    const af = Number(a.frameId) - Number(b.frameId);
+    if (af) return af;
+    return String(a.ref).localeCompare(String(b.ref));
+  });
+  const docs = [...new Set(fields.map((field) => field.documentId).filter(Boolean))];
+  return {
+    channel: 'action',
+    op: 'fill_form',
+    tabId,
+    documentId: docs.length === 1 ? docs[0] : '',
+    fields
+  };
+}
+
+function classifyInputFromControl(op, request, control, extra = {}) {
+  return {
+    channel: 'action',
+    op,
+    ref: extra.ref || request.ref || control?.ref,
+    name: control?.name || request.name || request.label,
+    key: request.key,
+    url: control?.frameUrl || extra.frameUrl,
+    frameUrl: control?.frameUrl || extra.frameUrl,
+    control,
+    hints: control?.hints,
+    tabId: extra.tabId ?? request.tabId,
+    frameId: extra.frameId ?? control?.frameId,
+    documentId: control?.documentId || extra.documentId
+  };
+}
+
+async function authorizePageActionDispatch(request, extra = {}) {
+  const op = String(extra.op || request.op || '').toLowerCase();
+  if (!MUTATIONS.has(op)) return { ok: true, skipped: true };
+  const control = extra.control || lookupControl(extra.tabId, extra.ref || request.ref, request.name || request.label);
+  const classifyInput = classifyInputFromControl(op, request, control, extra);
+  const classified = classifyRisk(classifyInput);
+  if (!needsDispatchTicket(classified) && classified.risk === 'read') return { ok: true, classified, skipped: true };
+  const payloadHash = await hashOperationPayload(actionHashInput(op, request, control, extra));
+  return consumeDispatchTicket({
+    ...request,
+    payloadHash,
+    tabId: classifyInput.tabId,
+    documentId: classifyInput.documentId
+  }, classifyInput);
+}
 
 function isRestrictedPageActionUrl(url) {
   const raw = String(url || '');
@@ -69,6 +174,16 @@ function parseActionRef(ref) {
   const local = s.match(/^(a\d+)$/i);
   if (local) return { frameId: null, local: local[1].toLowerCase() };
   return null;
+}
+
+function resolvePrefixedRef(snapshot, ref) {
+  const parsed = parseActionRef(ref);
+  if (!parsed) return { ok: false, error: 'need ref or name', code: 'NO_TARGET' };
+  const frameId = parsed.frameId != null ? parsed.frameId : 0;
+  if (snapshot?.frames && !snapshot.frames.some((frame) => frame.frameId === frameId)) {
+    return { ok: false, error: 'Target frame was not in the snapshot.', code: 'STALE_REF' };
+  }
+  return { frameId, local: parsed.local };
 }
 
 async function listPageActionFrames(tabId) {
@@ -154,11 +269,199 @@ async function ensurePageActionScripts(tabId) {
   }
 }
 
-function prefixFrameRefs(controls, frameId) {
+async function resolveFillFormTargets(request, tabId, snapshot) {
+  const fields = Array.isArray(request.fields) ? request.fields : [];
+  if (!fields.length) return { ok: false, error: 'fields is required', code: 'BAD_INPUT' };
+  const targets = [];
+  for (const field of fields) {
+    if (!field || typeof field !== 'object') {
+      return { ok: false, error: 'invalid field', code: 'BAD_INPUT' };
+    }
+    let hit;
+    if (field.ref) {
+      hit = resolvePrefixedRef(snapshot, field.ref);
+      if (hit.code) return { ok: false, error: hit.error, code: hit.code };
+    } else if (field.name || field.label) {
+      hit = await resolveNameAcrossFrames(tabId, field.name || field.label, snapshot);
+      if (hit.code) return { ok: false, error: hit.error, code: hit.code };
+    } else {
+      return { ok: false, error: 'each field needs ref or name', code: 'BAD_INPUT' };
+    }
+    const frameId = hit.frameId;
+    const localRef = hit.local || '';
+    const expectedFrame = snapshot?.frames.find((frame) => frame.frameId === frameId);
+    const prefixed = localRef ? `f${frameId}.${localRef}` : (field.ref || '');
+    const found = lookupControl(tabId, prefixed, field.name || field.label);
+    const control = {
+      ...(found || {}),
+      name: found?.name || field.name || field.label || '',
+      ref: prefixed,
+      role: found?.role || '',
+      hints: found?.hints,
+      frameUrl: expectedFrame?.url || found?.frameUrl || hit.frameUrl || '',
+      documentId: expectedFrame?.documentId || found?.documentId || hit.documentId || '',
+      frameId
+    };
+    const extra = {
+      op: 'fill_form',
+      tabId,
+      frameId,
+      documentId: control.documentId,
+      frameUrl: control.frameUrl,
+      ref: prefixed,
+      control
+    };
+    targets.push({
+      field: { ...field, ref: localRef, name: field.name || field.label },
+      frameId,
+      localRef,
+      prefixed,
+      control,
+      extra,
+      classified: classifyRisk(classifyInputFromControl('fill_form', request, control, extra))
+    });
+  }
+  return { ok: true, targets };
+}
+
+function fillFormBatchResult(request, tabId, targets) {
+  const classified = mergeBatchClassification(targets.map((row) => row.classified), targets);
+  classified.source = CLASSIFIED_SOURCE_SW;
+  const uniqueFrames = classified.target?.frames || [];
+  const top = targets.find((row) => row.classified.risk === classified.risk) || targets[0];
+  return {
+    ok: true,
+    op: 'fill_form',
+    tabId,
+    frameId: top.frameId,
+    documentId: uniqueFrames.length === 1 ? top.control.documentId : '',
+    frameUrl: top.control.frameUrl,
+    ref: top.prefixed,
+    name: top.control.name,
+    control: top.control,
+    frames: uniqueFrames,
+    batchSize: uniqueFrames.length,
+    classified,
+    targets
+  };
+}
+
+async function authorizeFillFormBatch(request, tabId, targets) {
+  const batch = fillFormBatchResult(request, tabId, targets);
+  const classified = batch.classified;
+  if (classified.risk === RISK_PAYMENT && classified.confidence === CONF_KNOWN) {
+    if (request.operationId) await dropDispatchTicket(request.operationId);
+    return {
+      ok: false,
+      code: 'PAYMENT_DENIED',
+      error: 'Known payment is never dispatched.',
+      classified,
+      frames: batch.frames
+    };
+  }
+  const payloadHash = await hashOperationPayload(batchFillHashInput(request, targets, tabId));
+  const classifyInput = {
+    ...classifyInputFromControl('fill_form', request, batch.control, {
+      op: 'fill_form',
+      tabId,
+      frameId: batch.frameId,
+      documentId: batch.documentId,
+      frameUrl: batch.frameUrl,
+      ref: batch.ref,
+      control: batch.control
+    }),
+    batchSize: batch.batchSize,
+    frames: batch.frames
+  };
+  const gate = await consumeDispatchTicket({
+    ...request,
+    payloadHash,
+    tabId,
+    documentId: batch.documentId
+  }, classifyInput);
+  return { ...gate, classified, frames: batch.frames, payloadHash, batchSize: batch.batchSize };
+}
+
+async function resolveMutationIntent(request, tabId, snapshot) {
+  const op = String(request.targetOp || request.act || request.intentOp || '').toLowerCase();
+  if (!MUTATIONS.has(op)) {
+    return { ok: true, skipped: true, op, classified: classifyRisk({ channel: 'action', op }) };
+  }
+  if (op === 'fill_form') {
+    const resolved = await resolveFillFormTargets(request, tabId, snapshot);
+    if (!resolved.ok) return resolved;
+    const batch = fillFormBatchResult(request, tabId, resolved.targets);
+    const payloadHash = await hashOperationPayload(batchFillHashInput(request, resolved.targets, tabId));
+    return { ...batch, payloadHash };
+  }
+  let frameId = 0;
+  let localRef = '';
+  let hit = null;
+  if (request.ref) {
+    hit = resolvePrefixedRef(snapshot, request.ref);
+    if (hit.code) return { ok: false, error: hit.error, code: hit.code };
+  } else if (request.name || request.label) {
+    hit = await resolveNameAcrossFrames(tabId, request.name || request.label, snapshot);
+    if (hit.code) return { ok: false, error: hit.error, code: hit.code };
+  } else if (op === 'press' || (op === 'wait' && request.ms != null && !request.text)) {
+    hit = { frameId: 0, local: '', frameUrl: '', documentId: '' };
+  } else {
+    return { ok: false, error: 'need ref or name', code: 'NO_TARGET' };
+  }
+  frameId = hit.frameId;
+  localRef = hit.local || '';
+  const expectedFrame = snapshot?.frames.find((f) => f.frameId === frameId);
+  const prefixed = localRef ? `f${frameId}.${localRef}` : (request.ref || '');
+  const found = lookupControl(tabId, prefixed, request.name || request.label || request.fields?.[0]?.name);
+  const control = {
+    ...(found || {}),
+    name: found?.name || request.name || request.label || '',
+    ref: prefixed,
+    role: found?.role || '',
+    hints: found?.hints,
+    frameUrl: expectedFrame?.url || found?.frameUrl || hit.frameUrl || '',
+    documentId: expectedFrame?.documentId || found?.documentId || hit.documentId || '',
+    frameId
+  };
+  const extra = {
+    op,
+    tabId,
+    frameId,
+    documentId: control.documentId,
+    frameUrl: control.frameUrl,
+    ref: prefixed,
+    control
+  };
+  const classifyInput = classifyInputFromControl(op, request, control, extra);
+  const classified = { ...classifyRisk(classifyInput), source: CLASSIFIED_SOURCE_SW };
+  const payloadHash = await hashOperationPayload(actionHashInput(op, request, control, extra));
+  return {
+    ok: true,
+    op,
+    tabId,
+    frameId,
+    documentId: control.documentId,
+    frameUrl: control.frameUrl,
+    ref: prefixed,
+    name: control.name,
+    control,
+    classified,
+    payloadHash,
+    hashInput: extra
+  };
+}
+
+function prefixFrameRefs(controls, frameId, frameMeta = {}) {
   return (Array.isArray(controls) ? controls : []).map((c) => {
     if (!c || typeof c !== 'object') return c;
     const local = String(c.ref || '').replace(/^f\d+\./i, '');
-    return { ...c, ref: 'f' + frameId + '.' + local };
+    return {
+      ...c,
+      ref: 'f' + frameId + '.' + local,
+      frameId,
+      frameUrl: c.frameUrl || frameMeta.url || '',
+      documentId: c.documentId || frameMeta.documentId || ''
+    };
   });
 }
 
@@ -173,7 +476,10 @@ async function snapshotAllPageActionFrames(tabId) {
       const target = await readDocumentTarget(chrome, tabId, fr.frameId, fr);
       const raw = await sendPageActionToFrame(tabId, fr.frameId, { op: 'snapshot' }, target);
       if (!raw || raw.ok === false) continue;
-      const list = prefixFrameRefs(raw.controls, fr.frameId);
+      const list = prefixFrameRefs(raw.controls, fr.frameId, {
+        url: raw.frameUrl || target.url || fr.url || '',
+        documentId: target.documentId
+      });
       controls.push(...list);
       framesOut.push({ ...target, title: raw.title || '', count: list.length });
     } catch (error) {
@@ -186,6 +492,7 @@ async function snapshotAllPageActionFrames(tabId) {
   if (!framesOut.some(frame => frame.frameId === 0)) throw targetError('NEED_PAGE', 'No top-frame snapshot was returned.');
   const { rev } = snapshots.capture(tabId, framesOut);
   const capped = controls.slice(0, 80);
+  rememberControls(tabId, capped);
   return { ok: true, op: 'snapshot', rev, documentId: root.documentId,
     count: capped.length, controls: capped, frames: framesOut,
     after: { url: root.url, documentId: root.documentId, count: capped.length } };
@@ -225,7 +532,9 @@ async function resolveNameAcrossFrames(tabId, name, snapshot) {
           frameId: fr.frameId,
           local: String(m.ref).replace(/^f\d+\./i, ''),
           name: m.name || name,
-          ref: 'f' + fr.frameId + '.' + String(m.ref).replace(/^f\d+\./i, '')
+          ref: 'f' + fr.frameId + '.' + String(m.ref).replace(/^f\d+\./i, ''),
+          frameUrl: fr.url || '',
+          documentId: fr.documentId || ''
         });
       }
     } catch (error) {
@@ -328,6 +637,13 @@ async function executeWorkspacePageAction(request) {
     return snapshotAllPageActionFrames(tabId);
   }
 
+  if (op === 'resolve_intent') {
+    const snap = snapshots.require(tabId, request.rev);
+    for (const frame of snap.frames) await readDocumentTarget(chrome, tabId, frame.frameId, frame);
+    await assertTabLeaseOwnerActive(request.sessionId, request.executionId);
+    return resolveMutationIntent(request, tabId, snap);
+  }
+
   const usesRef = !!request.ref || (Array.isArray(request.fields) && request.fields.some(f => f?.ref));
   const snapshot = MUTATIONS.has(op) || usesRef ? snapshots.require(tabId, request.rev) : null;
   if (snapshot) {
@@ -340,32 +656,15 @@ async function executeWorkspacePageAction(request) {
   }
 
   if (op === 'fill_form') {
-    const fields = Array.isArray(request.fields) ? request.fields : [];
-    if (!fields.length) {
-      return { ok: false, error: 'fields is required', code: 'BAD_INPUT' };
-    }
+    const resolved = await resolveFillFormTargets(request, tabId, snapshot);
+    if (!resolved.ok) return resolved;
+    const formGate = await authorizeFillFormBatch(request, tabId, resolved.targets);
+    if (!formGate.ok) return formGate;
     const byFrame = new Map();
-    for (const field of fields) {
-      if (!field || typeof field !== 'object') {
-        return { ok: false, error: 'invalid field', code: 'BAD_INPUT' };
-      }
-      const parsed = parseActionRef(field.ref);
-      if (parsed && parsed.frameId != null) {
-        const list = byFrame.get(parsed.frameId) || [];
-        list.push({ ...field, ref: parsed.local });
-        byFrame.set(parsed.frameId, list);
-        continue;
-      }
-      const name = field.name || field.label;
-      if (name) {
-        const hit = await resolveNameAcrossFrames(tabId, name, snapshot);
-        if (hit.code) return hit;
-        const list = byFrame.get(hit.frameId) || [];
-        list.push({ ...field, ref: hit.local });
-        byFrame.set(hit.frameId, list);
-        continue;
-      }
-      return { ok: false, error: 'each field needs ref or name', code: 'BAD_INPUT' };
+    for (const target of resolved.targets) {
+      const list = byFrame.get(target.frameId) || [];
+      list.push({ ...target.field, ref: target.localRef, name: target.field.name });
+      byFrame.set(target.frameId, list);
     }
     const results = [];
     let allOk = true;
@@ -437,10 +736,32 @@ async function executeWorkspacePageAction(request) {
     text: request?.text,
     ms: request?.ms
   };
+  const expectedFrame = snapshot?.frames.find(f => f.frameId === frameId);
+  if (MUTATIONS.has(op)) {
+    const prefixed = localRef ? `f${frameId}.${localRef}` : request.ref;
+    const found = lookupControl(tabId, prefixed, request?.name || request?.label);
+    const gate = await authorizePageActionDispatch(request, {
+      op,
+      tabId,
+      frameId,
+      documentId: expectedFrame?.documentId || found?.documentId || request.documentId,
+      frameUrl: expectedFrame?.url || found?.frameUrl || '',
+      ref: prefixed,
+      control: {
+        ...(found || {}),
+        name: found?.name || request?.name || request?.label,
+        ref: prefixed,
+        frameUrl: expectedFrame?.url || found?.frameUrl || '',
+        documentId: expectedFrame?.documentId || found?.documentId || '',
+        frameId
+      }
+    });
+    if (!gate.ok) return gate;
+  }
   let raw;
   try {
     await assertTabLeaseOwnerActive(request.sessionId, request.executionId);
-    raw = await sendPageActionToFrame(tabId, frameId, payload, snapshot?.frames.find(f => f.frameId === frameId));
+    raw = await sendPageActionToFrame(tabId, frameId, payload, expectedFrame);
   } catch (error) {
     return { ok: false, error: error?.message || String(error), code: error?.code || 'NEED_PAGE', ...(error?.outcome ? { outcome: error.outcome } : {}) };
   }

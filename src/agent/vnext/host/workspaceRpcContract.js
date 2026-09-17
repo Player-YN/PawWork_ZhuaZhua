@@ -1,7 +1,8 @@
 /** Explicit transport contract. Adding a service method does NOT expose it over RPC. */
 const reads = [
   'listSessions', 'getSession', 'getActiveExecution', 'listTasks', 'getTask',
-  'getWorkspaceState', 'listSkills', 'getSkillDetail', 'listArtifacts', 'readArtifact',
+  'getWorkspaceState', 'getAccessPolicy', 'getPendingApproval', 'listJournal', 'listJournalAnomalies',
+  'exportJournal', 'listSkills', 'getSkillDetail', 'listArtifacts', 'readArtifact',
   'readArtifactPreview', 'downloadArtifact', 'readArtifactChunk',
   'getStorageStats', 'estimateStorage', 'readOutput', 'getTaskResult'
 ];
@@ -11,7 +12,7 @@ const writes = [
   'removeClipboardItems', 'clearClipboard', 'removeGroupItem', 'addPageItems',
   'clearCaptureSelection', 'syncTabSelection', 'sendMessage', 'abortExecution',
   'abortCurrentExecution',
-  'answerClarify', 'abortTask', 'upsertSkill', 'importSkill', 'deleteSkill',
+  'answerClarify', 'answerApproval', 'setAccessPolicy', 'abortTask', 'upsertSkill', 'importSkill', 'deleteSkill',
   'createArtifact', 'rewriteGuestMedia', 'revertArtifact', 'updateArtifact',
   'deleteArtifact', 'deleteSession', 'sweepOrphans', 'applyStoragePressure',
   'setActiveWorkbook', 'setActiveHtml', 'createBlankArtifact', 'createSheetArtifact',

@@ -7,6 +7,50 @@ import { isInjectableTabUrl } from '../sessionWorkspace/pageContext.js';
 import { SYS_EVAL_JSON_MAX, SYS_EVAL_SOURCE_MAX, SYS_FETCH_BYTES_MAX, SYS_HELP } from '../sessionWorkspace/browserSys.js';
 import { acquireTabLease, assertTabLeaseOwnerActive } from './tabLease.js';
 import { readDocumentTarget, targetError } from './documentTarget.js';
+import { consumeDispatchTicket } from './dispatchTicket.js';
+import { classifyRisk, needsDispatchTicket } from './riskClassify.js';
+import { hashOperationPayload } from './payloadHash.js';
+
+function classifySysRequest(request, extras = {}) {
+  const params = request.params && typeof request.params === 'object' ? request.params : {};
+  return {
+    channel: 'sys',
+    op: request.op,
+    sysOp: request.op,
+    url: extras.url || params.url,
+    method: extras.method || params.init?.method || params.method,
+    code: params.code ?? params.source,
+    action: params.action,
+    tabId: extras.tabId ?? params.tabId,
+    documentId: extras.documentId || params.documentId,
+    init: params.init,
+    bodyText: typeof params.init?.body === 'string' ? params.init.body : '',
+    filename: params.filename
+  };
+}
+
+async function authorizeSysDispatch(request, extras = {}) {
+  const classifyInput = classifySysRequest(request, extras);
+  const classified = classifyRisk(classifyInput);
+  if (!needsDispatchTicket(classified)) return { ok: true, classified, skipped: true };
+  const params = request.params && typeof request.params === 'object' ? request.params : {};
+  const payloadHash = await hashOperationPayload({
+    channel: 'sys',
+    op: request.op,
+    sysOp: request.op,
+    url: params.url || '',
+    method: params.init?.method || params.method || '',
+    code: params.code ?? params.source,
+    tabId: extras.tabId ?? params.tabId,
+    documentId: params.documentId || ''
+  });
+  return consumeDispatchTicket({
+    ...request,
+    payloadHash,
+    tabId: extras.tabId ?? params.tabId,
+    documentId: params.documentId || ''
+  }, { ...classifyInput, params });
+}
 
 const SYS_TIMEOUT_MS = 20000;
 const SYS_WAIT_TIMEOUT_MS = 120000;
@@ -99,8 +143,8 @@ async function dispatchWorkspaceSys(request = {}) {
     if (op === 'waitFor') return await sysWaitFor(params, request);
     if (op === 'fetch') return await sysFetch(params, request);
     if (op === 'cdp') return await sysCdp(params, request);
-    if (op === 'download') return await sysDownload(params);
-    if (op === 'screenshot') return await sysScreenshot(params);
+    if (op === 'download') return await sysDownload(params, request);
+    if (op === 'screenshot') return await sysScreenshot(params, request);
     if (op === 'tabs.open') return await sysTabsOpen(params, request);
     if (op === 'tabs.navigate') return await sysTabsNavigate(params, request);
     if (op === 'tabs.reload') return await sysTabsReload(params, request);
@@ -150,6 +194,8 @@ async function sysTabsOpen(params, request = {}) {
   }
   await assertTabLeaseOwnerActive(request.sessionId, request.executionId);
   params._signal?.throwIfAborted();
+  const navGate = await authorizeSysDispatch(request, { url });
+  if (!navGate.ok) return navGate;
   const tab = await chrome.tabs.create({
     url,
     active: params.active !== false
@@ -170,6 +216,8 @@ async function sysTabsNavigate(params, request = {}) {
   const denied = await acquireSysTab(request, tab.id, 'tabs.navigate');
   if (denied) return denied;
   params._signal?.throwIfAborted();
+  const navGate = await authorizeSysDispatch(request, { url, tabId: tab.id });
+  if (!navGate.ok) return navGate;
   const updated = await chrome.tabs.update(tab.id, { url });
   return { ok: true, result: publicTab(updated || tab) };
 }
@@ -179,6 +227,8 @@ async function sysTabsReload(params, request = {}) {
   const denied = await acquireSysTab(request, tab.id, 'tabs.reload');
   if (denied) return denied;
   params._signal?.throwIfAborted();
+  const navGate = await authorizeSysDispatch(request, { tabId: tab.id });
+  if (!navGate.ok) return navGate;
   await chrome.tabs.reload(tab.id, { bypassCache: params.bypassCache === true });
   return { ok: true, result: publicTab(await chrome.tabs.get(tab.id)) };
 }
@@ -188,6 +238,8 @@ async function sysTabsClose(params, request = {}) {
   const denied = await acquireSysTab(request, tab.id, 'tabs.close');
   if (denied) return denied;
   params._signal?.throwIfAborted();
+  const gate = await authorizeSysDispatch(request, { tabId: tab.id });
+  if (!gate.ok) return gate;
   await chrome.tabs.remove(tab.id);
   return { ok: true, result: { closed: tab.id } };
 }
@@ -197,13 +249,15 @@ async function sysTabsFocus(params, request = {}) {
   const denied = await acquireSysTab(request, tab.id, 'tabs.focus');
   if (denied) return denied;
   params._signal?.throwIfAborted();
+  const gate = await authorizeSysDispatch(request, { tabId: tab.id });
+  if (!gate.ok) return gate;
   if (tab.windowId != null) await chrome.windows.update(tab.windowId, { focused: true });
   const updated = await chrome.tabs.update(tab.id, { active: true });
   return { ok: true, result: publicTab(updated || tab) };
 }
 
 /** chrome.downloads.download: this profile's cookie jar + this-machine IP. No tab Referer. Not credentials:omit. */
-async function sysDownload(params) {
+async function sysDownload(params, request = {}) {
   let url = String(params.url || '').trim();
   if (params.base64 != null && String(params.base64)) {
     const mime = String(params.mimeType || 'application/octet-stream').replace(/[^\w.+/-]/g, '') || 'application/octet-stream';
@@ -214,6 +268,8 @@ async function sysDownload(params) {
     return { ok: false, code: 'BAD_INPUT', error: 'sys.download only allows http(s) or data: url' };
   }
   const filename = sanitizeDownloadName(params.filename);
+  const gate = await authorizeSysDispatch(request, { url, filename });
+  if (!gate.ok) return gate;
   const downloadId = await chrome.downloads.download({
     url,
     filename: filename || undefined,
@@ -223,11 +279,13 @@ async function sysDownload(params) {
   return { ok: true, result: { downloadId, filename: filename || null } };
 }
 
-async function sysScreenshot(params) {
+async function sysScreenshot(params, request = {}) {
   const tab = await resolveTab(params);
   const [active] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
   if (active?.id !== tab.id) return { ok: false, code: 'TAB_NOT_VISIBLE', error: 'Target tab is not visible. Focus it first or use CDP Page.captureScreenshot.' };
   params._signal?.throwIfAborted();
+  const shotGate = await authorizeSysDispatch(request, { tabId: tab.id, url: tab.url });
+  if (!shotGate.ok) return shotGate;
   const format = String(params.format || 'png').toLowerCase() === 'jpeg' ? 'jpeg' : 'png';
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
     format,
@@ -282,6 +340,10 @@ async function sysCdp(params, request = {}) {
     return { ok: false, code: 'CDP_BUSY', error: 'CDP belongs to another execution.' };
   }
   params._signal?.throwIfAborted();
+  if (action === 'attach' || (action === 'send' || params.method)) {
+    const gate = await authorizeSysDispatch(request, { tabId: debuggee.tabId, method: params.method, action });
+    if (!gate.ok) return gate;
+  }
   cdpOwners.set(cdpKey, { sessionId: String(request.sessionId || ''), executionId: String(request.executionId || ''), debuggee });
   if (action === 'attach') {
     await ensureCdpAttached(debuggee);
@@ -535,6 +597,8 @@ async function sysEval(params, request = {}) {
   });
   const target = { tabId: tab.id, documentIds: [document.documentId] };
   params._signal?.throwIfAborted();
+  const gate = await authorizeSysDispatch(request, { tabId: tab.id, documentId: document.documentId, url: tab.url });
+  if (!gate.ok) return gate;
   const wrapped = wrapEvalSource(source);
   const results = await withTimeout(
     chrome.userScripts.execute({
@@ -595,6 +659,8 @@ async function sysWaitFor(params, request = {}) {
   });
   const target = { tabId: tab.id, documentIds: [document.documentId] };
   params._signal?.throwIfAborted();
+  const waitGate = await authorizeSysDispatch(request, { tabId: tab.id, documentId: document.documentId, url: tab.url });
+  if (!waitGate.ok) return waitGate;
   const source = wrapWaitForSource({ mode, params, timeoutMs, pollMs, stableMs });
   const results = await withTimeout(
     chrome.userScripts.execute({
@@ -704,7 +770,7 @@ function clampStableMs(ms) {
 async function sysFetch(params, request = {}) {
   const as = String(params.as || 'extension').toLowerCase();
   if (as === 'page') return sysFetchAsPage(params, request);
-  if (as === 'extension') return sysFetchAsExtension(params);
+  if (as === 'extension') return sysFetchAsExtension(params, request);
   return { ok: false, code: 'BAD_INPUT', error: 'sys.fetch as must be page or extension' };
 }
 
@@ -735,6 +801,13 @@ async function sysFetchAsPage(params, request = {}) {
   });
   const target = { tabId: tab.id, documentIds: [document.documentId] };
   params._signal?.throwIfAborted();
+  const fetchGate = await authorizeSysDispatch(request, {
+    tabId: tab.id,
+    documentId: document.documentId,
+    url: url.href,
+    method: init.method
+  });
+  if (!fetchGate.ok) return fetchGate;
   const results = await withTimeout(
     chrome.userScripts.execute({
       target,
@@ -757,7 +830,7 @@ async function sysFetchAsPage(params, request = {}) {
   return { ok: true, result: { as: 'page', tabId: tab.id, documentId: document.documentId, ...(payload && payload.value ? payload.value : payload || {}) } };
 }
 
-async function sysFetchAsExtension(params) {
+async function sysFetchAsExtension(params, request = {}) {
   let parsed;
   try {
     parsed = new URL(String(params.url || ''));
@@ -769,6 +842,8 @@ async function sysFetchAsExtension(params) {
   }
   const init = sanitizeFetchInit(params.init);
   const method = String(init.method || 'GET').toUpperCase();
+  const fetchGate = await authorizeSysDispatch(request, { url: parsed.href, method });
+  if (!fetchGate.ok) return fetchGate;
   const res = await fetch(parsed.href, {
       method,
       headers: init.headers,

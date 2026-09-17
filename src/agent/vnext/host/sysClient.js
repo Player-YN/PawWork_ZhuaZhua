@@ -1,8 +1,17 @@
 /** One browser call, with an identity independent of the message port. */
-export async function callBrowserSys({ op, params, sessionId, executionId, signal, deadline }) {
+export async function callBrowserSys({ op, params, sessionId, executionId, signal, deadline, operationId, payloadHash, ticketNonce }) {
   signal?.throwIfAborted();
   const callId = crypto.randomUUID();
-  const envelope = { target: 'pawwork-background', action: 'workspace_sys', sessionId, executionId, callId };
+  const envelope = {
+    target: 'pawwork-background',
+    action: 'workspace_sys',
+    sessionId,
+    executionId,
+    callId,
+    operationId,
+    payloadHash,
+    ticketNonce
+  };
   const cancel = () => {
     void chrome.runtime.sendMessage({ ...envelope, op: 'cancel' }).catch(() => {});
   };
