@@ -1,0 +1,222 @@
+{
+  "baseline": "User-uploaded uncommitted workspace, not origin/main",
+  "version": "1.2.0-bot-candidate",
+  "changes": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "status": "modified",
+      "addedLines": 3,
+      "removedLines": 0
+    },
+    {
+      "path": "AGENTS.md",
+      "status": "modified",
+      "addedLines": 13,
+      "removedLines": 4
+    },
+    {
+      "path": "README.md",
+      "status": "modified",
+      "addedLines": 15,
+      "removedLines": 0
+    },
+    {
+      "path": "docs/CHROME_BOT_OPTIMIZATION.md",
+      "status": "added",
+      "addedLines": 224,
+      "removedLines": 0
+    },
+    {
+      "path": "manifest.json",
+      "status": "modified",
+      "addedLines": 2,
+      "removedLines": 1
+    },
+    {
+      "path": "scripts/pack_extension.py",
+      "status": "modified",
+      "addedLines": 26,
+      "removedLines": 18
+    },
+    {
+      "path": "scripts/verify_extension.py",
+      "status": "added",
+      "addedLines": 118,
+      "removedLines": 0
+    },
+    {
+      "path": "src/AGENTS.md",
+      "status": "modified",
+      "addedLines": 10,
+      "removedLines": 7
+    },
+    {
+      "path": "src/agent/AGENTS.md",
+      "status": "modified",
+      "addedLines": 10,
+      "removedLines": 3
+    },
+    {
+      "path": "src/agent/vnext/host/browserExecution.js",
+      "status": "added",
+      "addedLines": 40,
+      "removedLines": 0
+    },
+    {
+      "path": "src/agent/vnext/host/browserSysHost.js",
+      "status": "modified",
+      "addedLines": 98,
+      "removedLines": 32
+    },
+    {
+      "path": "src/agent/vnext/host/documentTarget.js",
+      "status": "added",
+      "addedLines": 45,
+      "removedLines": 0
+    },
+    {
+      "path": "src/agent/vnext/host/pageActionHost.js",
+      "status": "added",
+      "addedLines": 459,
+      "removedLines": 0
+    },
+    {
+      "path": "src/agent/vnext/host/sysClient.js",
+      "status": "modified",
+      "addedLines": 7,
+      "removedLines": 1
+    },
+    {
+      "path": "src/agent/vnext/host/tabLease.js",
+      "status": "modified",
+      "addedLines": 127,
+      "removedLines": 12
+    },
+    {
+      "path": "src/agent/vnext/host/workspaceClient.js",
+      "status": "modified",
+      "addedLines": 20,
+      "removedLines": 13
+    },
+    {
+      "path": "src/agent/vnext/host/workspaceRpcContract.js",
+      "status": "added",
+      "addedLines": 75,
+      "removedLines": 0
+    },
+    {
+      "path": "src/agent/vnext/host/workspaceRpcTransport.js",
+      "status": "added",
+      "addedLines": 35,
+      "removedLines": 0
+    },
+    {
+      "path": "src/agent/vnext/service/sessionWorkspaceService.js",
+      "status": "modified",
+      "addedLines": 51,
+      "removedLines": 74
+    },
+    {
+      "path": "src/agent/vnext/sessionWorkspace/browserSys.js",
+      "status": "modified",
+      "addedLines": 9,
+      "removedLines": 8
+    },
+    {
+      "path": "src/agent/vnext/sessionWorkspace/prompt.js",
+      "status": "modified",
+      "addedLines": 3,
+      "removedLines": 2
+    },
+    {
+      "path": "src/agent/vnext/sessionWorkspace/tools.js",
+      "status": "modified",
+      "addedLines": 2,
+      "removedLines": 2
+    },
+    {
+      "path": "src/background.js",
+      "status": "modified",
+      "addedLines": 58,
+      "removedLines": 526
+    },
+    {
+      "path": "src/offscreen/runtime.js",
+      "status": "modified",
+      "addedLines": 2,
+      "removedLines": 5
+    },
+    {
+      "path": "src/preview/artifactPreview.js",
+      "status": "modified",
+      "addedLines": 1,
+      "removedLines": 13
+    },
+    {
+      "path": "src/preview/docs.js",
+      "status": "modified",
+      "addedLines": 1,
+      "removedLines": 10
+    },
+    {
+      "path": "src/preview/sheet.js",
+      "status": "modified",
+      "addedLines": 1,
+      "removedLines": 10
+    },
+    {
+      "path": "src/preview/site.js",
+      "status": "modified",
+      "addedLines": 1,
+      "removedLines": 13
+    },
+    {
+      "path": "tests/bot-leases.test.mjs",
+      "status": "added",
+      "addedLines": 79,
+      "removedLines": 0
+    },
+    {
+      "path": "tests/bot-pack.test.mjs",
+      "status": "added",
+      "addedLines": 44,
+      "removedLines": 0
+    },
+    {
+      "path": "tests/bot-page-target.test.mjs",
+      "status": "added",
+      "addedLines": 105,
+      "removedLines": 0
+    },
+    {
+      "path": "tests/bot-rpc.test.mjs",
+      "status": "added",
+      "addedLines": 95,
+      "removedLines": 0
+    },
+    {
+      "path": "tests/bot-sys-lifecycle.test.mjs",
+      "status": "added",
+      "addedLines": 83,
+      "removedLines": 0
+    },
+    {
+      "path": "tests/browser-smoke.cjs",
+      "status": "modified",
+      "addedLines": 22,
+      "removedLines": 5
+    },
+    {
+      "path": "tests/runtime-regression.test.mjs",
+      "status": "modified",
+      "addedLines": 3,
+      "removedLines": 1
+    },
+    {
+      "path": "tests/tab-lease.test.mjs",
+      "status": "modified",
+      "addedLines": 4,
+      "removedLines": 2
+    }
+  ]
+}

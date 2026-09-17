@@ -86,7 +86,7 @@ Guest FS（`fs.js`）：
 
 清单：`canvasInventory.js` 的 `SESSION_TOOL_NAMES`（含 `task`）。`toolSchedule.js` 原样返回该列表。
 
-System prompt 原则在 `prompt.js`（`SYSTEM_PROMPT_VERSION = 'v13-site-tool-reuse'`：现成站内工具优先；UNKNOWN / STALE / documentId；宿主状态不读思考）。具体配方在 skills，按需 `inspect view=skill` 载入，不靠宿主关键词路由。侧栏 current/next **不**写进 prompt。
+System prompt 在 `prompt.js`（`SYSTEM_PROMPT_VERSION = 'v14-general-agent'`：通用执行 Agent 身份与工作方式；world 不在 prefix）。具体配方在 skills，按需 `inspect view=skill` 载入，不靠宿主关键词路由。侧栏 current/next **不**写进 prompt。
 
 交付物打开：`openClassify.js` 负责 kind；`artifactCapability.js` 是家族 × 打开面 × 徽标的单一映射。主 chip 是 `docs` / `data` / `web` / `media` / `files`；`design`/`slides` 只兼容旧数据。未知 HTML/JS 不得在 extension origin 执行。仅文件名的 `.html` 保持中性，不假装 proven site/doc；首次打开分类后可持久化 `capability` hint。site 本波 = 可编辑/可渲染的静态 HTML+CSS + 宿主 postMessage bridge（`src/sandbox/siteFrame.*`），**不是**任意 guest JS。
 

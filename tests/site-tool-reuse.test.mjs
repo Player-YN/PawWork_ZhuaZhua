@@ -26,15 +26,25 @@ function sessionTools() {
 }
 
 test('prefix prefers ready-made site tools and does not dump the skill body', () => {
-  assert.equal(SYSTEM_PROMPT_VERSION, 'v13-site-tool-reuse');
+  assert.equal(SYSTEM_PROMPT_VERSION, 'v14-general-agent');
   const prefix = buildSessionAgentInstructions();
-  assert.match(prefix, /先募集现成工具/);
-  assert.match(prefix, /run 是胶水/);
-  assert.match(prefix, /现成站内工具优先/);
-  assert.match(prefix, /sys\.tabs\.list/);
+  assert.match(prefix, /你是"爪爪"/);
+  assert.match(prefix, /不预设某种工具或路径总是更好/);
+  assert.match(prefix, /也可以编写代码或组合多种能力/);
+  // v13 site-tool-reuse principle sentences are not required in the prefix
+  assert.doesNotMatch(prefix, /先募集现成工具/);
+  assert.doesNotMatch(prefix, /run 是胶水/);
+  assert.doesNotMatch(prefix, /现成站内工具优先/);
   assert.doesNotMatch(prefix, /site-tool-reuse/);
   assert.doesNotMatch(prefix, /If the preferred route fails/);
   assert.doesNotMatch(prefix, /Parameterize/);
+  assert.doesNotMatch(prefix, /\[Session world/);
+  const spliced = buildSessionAgentInstructions({
+    skillInstructions: 'id: site-tool-reuse\ndescription: demo'
+  });
+  assert.match(spliced, /--- Skills ---/);
+  assert.match(spliced, /id: site-tool-reuse/);
+  assert.ok(spliced.startsWith(prefix));
 });
 
 test('site-tool-reuse is catalog-discoverable and loads only on inspect', async () => {
