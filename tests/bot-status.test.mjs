@@ -59,6 +59,9 @@ test('current maps host tool facts, not commentary', () => {
   const current = currentFromToolCall('run', { path: '/artifacts/notes.txt' }, 'zh');
   assert.equal(current.source, 'tool-call');
   assert.match(current.text, /notes\.txt/);
+  const codeOnly = currentFromToolCall('run', { code: '1+1' }, 'zh');
+  assert.match(codeOnly.text, /运行访客代码/);
+  assert.match(codeOnly.doneText, /已运行访客代码/);
 });
 
 test('abortCurrentExecution targets the live slot; stale exact abort is a no-op', async () => {

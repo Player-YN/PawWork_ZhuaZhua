@@ -75,6 +75,7 @@ import {
   dispatchStagedUpload
 } from '../host/uploadChannel.js';
 import { clampWaitTimeout } from '../sessionWorkspace/browserSys.js';
+import { classifyCachedMutation } from '../host/pageActionHost.js';
 import { applyVerifyToJournalState, verifyPostconditions } from '../host/postcondition.js';
 import { createUserStopError, isAbortLike } from '../host/userStop.js';
 import {
@@ -118,6 +119,8 @@ export class SessionWorkspaceService {
     this.storeKind = store.kind || 'memory';
     /** @type {Map<string, { controller: AbortController, executionId: string|null, sessionId: string, finished?: Promise<void> }>} */
     this._activeBySession = new Map();
+    /** @type {Map<string, { tabId: number, rev: string, frames: object[], controls: object[] }>} */
+    this._actionSnapCache = new Map();
     /** @type {Map<string, AbortController>} */
     this._activeByExecution = new Map();
     this._taskMutationQueue = Promise.resolve();
@@ -519,12 +522,24 @@ export class SessionWorkspaceService {
       ...message
     });
     this._throwIfAborted(signal);
+    this._rememberActionSnapshot(message?.sessionId, out);
     return out;
+  }
+
+  _rememberActionSnapshot(sessionId, out) {
+    const sid = String(sessionId || '');
+    if (!sid || !out || out.ok === false || !out.rev || !Array.isArray(out.controls)) return;
+    this._actionSnapCache.set(sid, {
+      tabId: Number(out.tabId),
+      rev: String(out.rev),
+      frames: Array.isArray(out.frames) ? out.frames : [],
+      controls: out.controls
+    });
   }
 
   async _resolveActionIntent(payload, sessionId, executionId, signal) {
     const op = String(payload?.op || '');
-    const MUTATIONS = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll', 'upload']);
+    const MUTATIONS = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll', 'upload', 'pointer']);
     if (!MUTATIONS.has(op)) return { ok: true, skipped: true };
     this._throwIfAborted(signal);
     let rev = payload.rev;
@@ -538,6 +553,11 @@ export class SessionWorkspaceService {
       }), signal);
       if (!snap?.ok) return snap;
       rev = snap.rev;
+    }
+    const cached = this._actionSnapCache.get(sessionId);
+    if (rev && cached && cached.rev === String(rev) && Number(cached.tabId) === Number(payload.tabId)) {
+      const local = await classifyCachedMutation({ ...payload, targetOp: op, rev, tabId: payload.tabId }, cached);
+      if (local && local.ok !== false) return { ...local, rev };
     }
     this._throwIfAborted(signal);
     const resolved = await this._pageAction(buildPageActionTransport(payload, {

@@ -3,38 +3,43 @@
  * turn. Never invents thought chrome. Never writes Runtime / next.
  */
 
-import { nextStatusCopy } from './botStatusUi.js';
 import {
   PULSE_COMPLETE_MS,
   TURN_MEMORY_CAP,
-  compactStatusTask,
   disclosureMode,
   foldStubFromState,
   formatDisclosureDuration,
+  formatSummaryRowText,
+  persistLiveActionBrief,
   rememberEndedProjection,
-  shouldShowDurableTaskCard,
   visibleSummaryRows
 } from './executionStatus.js';
 
 const HYDRATED_DOM_CAP = 3;
+
+/** Shine the glyphs only — never the full-width row chrome. */
+export const LIVE_ACTION_SHINE = {
+  glyphClass: 'turn-disclosure-current-text',
+  rowClass: 'turn-disclosure-current',
+  clip: 'text'
+};
+
+export function planLiveDisclosurePaint(state, lastText = '') {
+  const text = persistLiveActionBrief(state, lastText);
+  return {
+    hidden: !text,
+    text,
+    keepMounted: !!text,
+    shineTarget: LIVE_ACTION_SHINE.glyphClass,
+    shineClip: LIVE_ACTION_SHINE.clip
+  };
+}
 
 function node(tag, className, content) {
   const el = document.createElement(tag);
   if (className) el.className = className;
   if (content != null) el.textContent = String(content);
   return el;
-}
-
-function safeUrl(url) {
-  const s = String(url || '').trim();
-  if (!s) return '';
-  try {
-    const u = new URL(s);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
-    return u.host + (u.pathname && u.pathname !== '/' ? u.pathname : '');
-  } catch {
-    return '';
-  }
 }
 
 function statusWord(status, t) {
@@ -46,12 +51,6 @@ function statusWord(status, t) {
   if (status === 'unknown') return t('botRowUnknown');
   if (status === 'needs_human') return t('botRowNeedsHuman');
   return status;
-}
-
-function kindWord(kind, t) {
-  const key = `botKind_${kind}`;
-  const label = t(key);
-  return label === key ? kind : label;
 }
 
 export function prefersReducedMotion(matchMediaFn) {
@@ -110,18 +109,21 @@ export function placeInterruptAfterDisclosure(wrap, el) {
   return el;
 }
 
+function existingLiveBrief(el) {
+  const glyphs = el?.querySelector?.(`.${LIVE_ACTION_SHINE.glyphClass}`);
+  const current = el?.querySelector?.(`.${LIVE_ACTION_SHINE.rowClass}`);
+  return String(glyphs?.textContent || current?.textContent || '').trim();
+}
+
 function fillRows(list, rows, t) {
   list.replaceChildren();
   for (const row of rows) {
     const li = node('li', 'turn-disclosure-row');
     li.dataset.status = row.status || '';
+    if (row.count > 1) li.dataset.count = String(row.count);
     li.append(
       node('span', 'turn-disclosure-row-mark', statusWord(row.status, t)),
-      node(
-        'span',
-        'turn-disclosure-row-text',
-        [kindWord(row.kind, t), row.label, row.object].filter(Boolean).join(' · ')
-      )
+      node('span', 'turn-disclosure-row-text', formatSummaryRowText(row, t))
     );
     list.append(li);
   }
@@ -190,54 +192,21 @@ export function createTurnDisclosureUi(deps) {
       if (executionId) el.dataset.executionId = String(executionId);
       return el;
     }
-    el = node('section', 'turn-disclosure is-live');
+    el = node('section', 'turn-disclosure is-live is-empty');
+    el.hidden = true;
     el.dataset.mode = 'live';
     if (executionId) el.dataset.executionId = String(executionId);
     insertTurnDisclosure(wrap, el);
     return el;
   }
 
-  function paintMeta(el, state, accessPolicy) {
-    const ul = node('ul', 'turn-disclosure-meta');
-    ul.setAttribute('role', 'list');
-    const page = state.targetPage;
-    if (page && (page.title || page.url)) {
-      const li = node('li', '', page.title || safeUrl(page.url));
-      li.dataset.k = 'page';
-      ul.append(li);
-    }
-    if (state.lease?.kind === 'conflict') {
-      const li = node('li', 'is-conflict', t('botLeaseConflict')
-        .replace('{title}', state.lease.title || `#${state.lease.tabId || 'tab'}`)
-        .replace('{name}', state.lease.holderSessionId || 'session'));
-      li.dataset.k = 'lease';
-      ul.append(li);
-    } else if (state.lease?.kind === 'owned' && (state.phase === 'running' || state.phase === 'waiting_user')) {
-      const li = node('li', '', t('botLeaseOwned'));
-      li.dataset.k = 'lease';
-      ul.append(li);
-    }
-    const task = compactStatusTask(state.task);
-    if (shouldShowDurableTaskCard(task)) {
-      const bits = [t(`durableTaskStatus_${task.status}`)];
-      if (task.dueAt) bits.push(task.dueAt);
-      const li = node('li', '', bits.filter(Boolean).join(' · '));
-      li.dataset.k = 'task';
-      ul.append(li);
-    }
-    const mode = accessPolicy?.mode === 'full' ? 'full' : accessPolicy?.mode === 'guarded' ? 'guarded' : '';
-    if (mode) {
-      const li = node('li', '', mode === 'full' ? t('accessChipFull') : t('accessChipGuarded'));
-      li.dataset.k = 'access';
-      li.setAttribute('aria-hidden', 'true');
-      ul.append(li);
-    }
-    const existing = el.querySelector('.turn-disclosure-meta');
-    if (existing) existing.replaceWith(ul);
-    else el.append(ul);
+  function stripInstrumentExtras(el) {
+    el.querySelector('.turn-disclosure-next')?.remove();
+    el.querySelector('.turn-disclosure-meta')?.remove();
+    el.querySelector('.turn-disclosure-rows')?.remove();
   }
 
-  function paintLive(el, state, { mode, accessPolicy } = {}) {
+  function paintLive(el, state, { mode } = {}) {
     const id = String(state.executionId || el.dataset.executionId || 'live');
     el.dataset.executionId = id;
     el.dataset.mode = mode;
@@ -249,40 +218,40 @@ export function createTurnDisclosureUi(deps) {
       el.replaceWith(section);
       el = section;
     }
+    const lastText = existingLiveBrief(el);
+    const plan = planLiveDisclosurePaint(state, lastText);
+    stripInstrumentExtras(el);
+    if (plan.hidden) {
+      el.classList.add('is-empty');
+      el.hidden = true;
+      if (!lastText) el.replaceChildren();
+      return el;
+    }
+    el.hidden = false;
+    el.classList.remove('is-empty');
     const labelId = `td-${id}-label`;
     el.setAttribute('aria-labelledby', labelId);
-    const currentText =
-      state.current?.text ||
-      (state.phase === 'waiting_timer' ? t('botPhase_waiting_timer') : t('botCurrentNone'));
     let head = el.querySelector('.turn-disclosure-head');
     if (!head) {
       head = node('div', 'turn-disclosure-head');
       el.prepend(head);
     }
-    head.replaceChildren();
-    const current = node('span', 'turn-disclosure-current', currentText);
+    let current = head.querySelector(`.${LIVE_ACTION_SHINE.rowClass}`);
+    let glyphs = current?.querySelector?.(`.${LIVE_ACTION_SHINE.glyphClass}`);
+    if (!current) {
+      current = node('span', LIVE_ACTION_SHINE.rowClass);
+      glyphs = node('span', LIVE_ACTION_SHINE.glyphClass, plan.text);
+      current.append(glyphs);
+      head.replaceChildren(current);
+    } else if (!glyphs) {
+      glyphs = node('span', LIVE_ACTION_SHINE.glyphClass, plan.text);
+      current.replaceChildren(glyphs);
+    } else if (glyphs.textContent !== plan.text) {
+      glyphs.textContent = plan.text;
+    }
     current.id = labelId;
-    head.append(current);
-
-    const nextCopy = nextStatusCopy(state, t);
-    let nextEl = el.querySelector('.turn-disclosure-next');
-    if (nextCopy) {
-      if (!nextEl) nextEl = node('p', 'turn-disclosure-next');
-      nextEl.textContent = nextCopy.text;
-      nextEl.className = `turn-disclosure-next${nextCopy.kind === 'meta' ? ' is-meta' : ''}`;
-      if (!nextEl.parentNode) head.after(nextEl);
-    } else {
-      nextEl?.remove();
-    }
-    paintMeta(el, state, accessPolicy);
-    let list = el.querySelector('.turn-disclosure-rows');
-    if (!list) {
-      list = node('ol', 'turn-disclosure-rows');
-      list.setAttribute('role', 'list');
-      el.append(list);
-    }
-    const rows = visibleSummaryRows(state.summary, 8);
-    fillRows(list, rows, t);
+    if (state.current?.status) current.dataset.status = state.current.status;
+    else if (current.dataset) delete current.dataset.status;
     return el;
   }
 
@@ -375,7 +344,7 @@ export function createTurnDisclosureUi(deps) {
     cancelPulse(id);
     if (disclosureMode(state) === 'sticky') {
       ensure(wrap, { executionId: id });
-      return paintLive(disclosureOf(wrap), state, { mode: 'sticky', accessPolicy: extra.accessPolicy });
+      return paintLive(disclosureOf(wrap), state, { mode: 'sticky' });
     }
     if (holdOpen.has(id) || extra.keepOpen) {
       const el = fold(wrap, state, extra);
@@ -383,9 +352,11 @@ export function createTurnDisclosureUi(deps) {
       hydrate(el, state);
       return el;
     }
-    if (reduced() || extra.immediate) return fold(wrap, state, extra);
+    if (reduced() || extra.immediate || !persistLiveActionBrief(state, existingLiveBrief(disclosureOf(wrap)))) {
+      return fold(wrap, state, extra);
+    }
     const el = ensure(wrap, { executionId: id });
-    paintLive(el, state, { mode: 'live', accessPolicy: extra.accessPolicy });
+    paintLive(el, state, { mode: 'live' });
     el.classList.add('is-pulse');
     el.dataset.mode = 'pulse_complete';
     const onInteract = () => {
@@ -420,7 +391,7 @@ export function createTurnDisclosureUi(deps) {
     }
     if (mode === 'pulse_complete') return scheduleFold(wrap, state, extra);
     const el = ensure(wrap, { executionId: state.executionId });
-    return paintLive(el, state, { mode, accessPolicy: extra.accessPolicy });
+    return paintLive(el, state, { mode });
   }
 
   function foldPreviousPulse(root) {

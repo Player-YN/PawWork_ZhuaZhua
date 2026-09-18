@@ -654,6 +654,10 @@ body {
     font-size: 11px;
     font-weight: 650;
   }
+
+  .context-usage-popover {
+    width: min(260px, calc(100vw - 12px));
+  }
   .turn-disclosure.is-live:not(.is-sticky) .turn-disclosure-meta,
   .turn-disclosure.is-live:not(.is-sticky) .turn-disclosure-next {
     display: none;

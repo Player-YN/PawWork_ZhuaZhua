@@ -116,14 +116,27 @@ function applyHostLamp(next, ev, isZh) {
       return next;
     }
     if (name === 'run') {
-      next.label = isZh ? '正在写入交付物' : 'Writing a deliverable';
+      const object = String(args.name || args.path || args.title || args.entry || args.entryFile || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .split('/')
+        .filter(Boolean)
+        .pop();
+      const op = String(args.op || '');
+      if (object) next.label = isZh ? `正在写 ${object}` : `Writing ${object}`;
+      else if (op === 'write_artifact' || op === 'update_artifact' || op === 'write_package_file') {
+        next.label = isZh ? '正在写入交付物' : 'Writing a deliverable';
+      } else if (op === 'write_scratch') next.label = isZh ? '正在写临时文件' : 'Writing a scratch file';
+      else if (op === 'sheet' || op === 'createWorkbook') next.label = isZh ? '正在登记表格' : 'Registering a sheet';
+      else if (op === 'doc' || op === 'createDocument') next.label = isZh ? '正在登记文档' : 'Registering a document';
+      else next.label = isZh ? '正在运行访客代码' : 'Running guest code';
       next.visible = false;
       return next;
     }
     if (name === 'action') {
       const op = String(args.op || '');
       const object = String(args.name || '').replace(/\s+/g, ' ').trim().slice(0, 32);
-      if (op === 'click') next.label = isZh ? `正在点击${object ? ` ${object}` : ''}` : `Clicking${object ? ` ${object}` : ''}`;
+      if (op === 'click' || op === 'pointer') next.label = isZh ? `正在点击${object ? ` ${object}` : ''}` : `Clicking${object ? ` ${object}` : ''}`;
       else if (op === 'fill' || op === 'fill_form') next.label = isZh ? `正在填写${object ? ` ${object}` : ''}` : `Filling${object ? ` ${object}` : ''}`;
       else if (op === 'snapshot') next.label = isZh ? '正在读取当前标签' : 'Reading the current tab';
       else if (op === 'wait') next.label = isZh ? '正在等待页面' : 'Waiting on the page';

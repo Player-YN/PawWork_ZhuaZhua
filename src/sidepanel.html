@@ -398,23 +398,44 @@
           <span id="composerTypewriter" class="composer-typewriter" aria-hidden="true"></span>
         </div>
         <div class="composer-actions">
-          <span
-            class="context-ring"
-            id="contextRing"
-            role="meter"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow="0"
-            aria-label="上下文 0%"
-            title="上下文 0%"
-            data-ratio="0"
-          >
-            <svg class="context-ring-svg" viewBox="0 0 32 32" aria-hidden="true">
-              <circle class="context-ring-track" cx="16" cy="16" r="12"></circle>
-              <circle class="context-ring-fill" cx="16" cy="16" r="12"></circle>
-            </svg>
-            <span class="context-ring-label" id="contextRingLabel" hidden>Compacting</span>
-          </span>
+          <div class="composer-context" id="composerContext">
+            <button
+              type="button"
+              class="context-usage-btn"
+              id="contextUsageBtn"
+              aria-haspopup="dialog"
+              aria-expanded="false"
+              aria-controls="contextUsagePopover"
+              data-i18n-aria="contextChip"
+              aria-label="上下文"
+            >
+              <span class="context-ring" id="contextRing" aria-hidden="true" data-ratio="0">
+                <svg class="context-ring-svg" viewBox="0 0 32 32" aria-hidden="true">
+                  <circle class="context-ring-track" cx="16" cy="16" r="12"></circle>
+                  <circle class="context-ring-fill" cx="16" cy="16" r="12"></circle>
+                </svg>
+                <span class="context-ring-label sr-only" id="contextRingLabel" hidden>Compacting</span>
+              </span>
+              <span class="context-usage-chip sr-only" id="contextUsageChip" data-i18n="contextChip">上下文</span>
+            </button>
+            <div
+              class="context-usage-popover"
+              id="contextUsagePopover"
+              hidden
+              role="dialog"
+              aria-labelledby="contextUsagePopoverTitle"
+            >
+              <div class="context-usage-popover-head">
+                <h3 id="contextUsagePopoverTitle" data-i18n="contextPopoverTitle">上下文用量</h3>
+                <p class="context-usage-headline" id="contextUsageHeadline"></p>
+              </div>
+              <div class="context-usage-bar" id="contextUsageBar" hidden>
+                <span class="context-usage-bar-fill" id="contextUsageBarFill"></span>
+              </div>
+              <ul class="context-usage-parts" id="contextUsageParts"></ul>
+              <p class="context-usage-note" id="contextUsageNote" hidden></p>
+            </div>
+          </div>
           <span id="promptQueueHint" class="prompt-queue-hint" hidden></span>
           <!-- Hover + scroll wheel on send: chat (accent) ↔ run (purple). Same shape. -->
           <button type="button" class="send-btn is-send" id="sendBtn" data-mode="chat" data-submit="chat" title="发送（对话）· 悬停滚轮切换运行" aria-label="发送（对话）">
@@ -591,37 +612,34 @@
             <span data-i18n="accessChipFull">Full Access</span>
           </label>
         </section>
-        <!-- 1. Inference / chat model -->
         <section class="settings-api-card" id="settingsInferenceCard" aria-labelledby="settingsInferenceTitle">
-          <h4 class="settings-api-card-title" id="settingsInferenceTitle">1. 推理模型 API</h4>
-          <p class="settings-hint" id="inferenceEmptyHint">添加后会以供应商卡片显示。点卡片可编辑或设为当前使用。</p>
+          <h4 class="settings-api-card-title" id="settingsInferenceTitle" data-i18n="settingsInferenceTitle">推理</h4>
+          <p class="settings-hint" id="inferenceEmptyHint" data-i18n="inferenceEmptyHint">尚未添加推理 API。</p>
           <div id="inferenceVendorList" class="api-vendor-list"></div>
-          <button type="button" class="api-add-btn" id="addInferenceBtn">＋ 添加供应商</button>
+          <button type="button" class="api-add-btn" id="addInferenceBtn" data-i18n="addInferenceBtn">＋ 添加推理 API</button>
           <div id="inferenceEditor" class="api-vendor-editor" hidden>
             <div class="provider-presets-row" id="inferencePresetRow" role="group" aria-label="快捷模板">
-              <span class="settings-hint settings-presets-label">快捷模板：</span>
               <button type="button" class="provider-preset-chip" data-preset="deepseek">DeepSeek</button>
               <button type="button" class="provider-preset-chip" data-preset="openai">OpenAI</button>
               <button type="button" class="provider-preset-chip" data-preset="openrouter">OpenRouter</button>
               <button type="button" class="provider-preset-chip" data-preset="minimax">MiniMax</button>
-              <button type="button" class="provider-preset-chip" data-preset="openai-compatible">自定义</button>
+              <button type="button" class="provider-preset-chip" data-preset="openai-compatible" data-i18n="presetCustom">自定义</button>
             </div>
 
-            <label class="settings-label" for="apiBaseInput">Base URL <span class="settings-req">*</span></label>
+            <label class="settings-label" for="apiBaseInput">Base URL</label>
             <input type="text" id="apiBaseInput" class="modal-input" placeholder="https://api.deepseek.com/v1" autocomplete="off" />
-            <p class="settings-hint settings-field-hint">Chat Completions 根路径（如 <code>…/v1</code>）。勿填图像路径。</p>
 
             <label class="settings-label" for="apiKeyInput">API Key</label>
             <input type="password" id="apiKeyInput" class="modal-input" placeholder="sk-..." autocomplete="off" />
 
-            <label class="settings-label" for="providerModelInput">当前模型</label>
+            <label class="settings-label" for="providerModelInput" data-i18n="settingsChatModel">模型</label>
             <div class="chat-model-input-row">
-              <input type="text" id="providerModelInput" class="modal-input" placeholder="deepseek-v4-flash / openai/gpt-4o / 自由填写…" autocomplete="off" list="providerModelSuggestions" />
-              <button type="button" id="providerModelRefreshBtn" class="btn btn-secondary settings-mini-btn" data-i18n="apiProbeBtn" title="GET {base}/models 探测密钥是否可用并列出模型">探测 API</button>
+              <input type="text" id="providerModelInput" class="modal-input" placeholder="deepseek-v4-flash" autocomplete="off" list="providerModelSuggestions" />
+              <button type="button" id="providerModelRefreshBtn" class="btn btn-secondary settings-mini-btn" data-i18n="apiProbeBtn" data-i18n-title="apiProbeBtnHint">探测</button>
             </div>
             <p class="settings-hint" id="apiProbeResult" hidden></p>
-            <input type="search" id="providerModelFilter" class="modal-input" placeholder="搜索已探测到的模型 id…" autocomplete="off" hidden />
-            <div id="providerModelCatalog" class="api-model-catalog" hidden role="listbox" aria-label="探测到的模型"></div>
+            <input type="search" id="providerModelFilter" class="modal-input" data-i18n-placeholder="modelPickerSearchChat" placeholder="搜索推理模型…" autocomplete="off" hidden />
+            <div id="providerModelCatalog" class="api-model-catalog" hidden role="listbox"></div>
             <datalist id="providerModelSuggestions">
               <option value="deepseek-v4-flash"></option>
               <option value="deepseek-v4-pro"></option>
@@ -631,46 +649,43 @@
               <option value="openai/gpt-4o"></option>
               <option value="MiniMax-Text-01"></option>
             </datalist>
-            <p class="settings-hint" id="settingsApiHint">Key 仅存本机。同一 API 下切换模型不必重填 Base / Key。协议：OpenAI 兼容 Chat Completions。</p>
+            <p class="settings-hint" id="settingsApiHint" hidden></p>
             <div class="api-editor-actions">
-              <button type="button" class="btn btn-secondary" id="cancelInferenceEditorBtn">取消</button>
-              <button type="button" class="btn btn-primary" id="saveInferenceEditorBtn">保存此供应商</button>
+              <button type="button" class="btn btn-secondary" id="cancelInferenceEditorBtn" data-i18n="cancel">取消</button>
+              <button type="button" class="btn btn-primary" id="saveInferenceEditorBtn" data-i18n="saveInferenceBtn">保存推理 API</button>
             </div>
           </div>
         </section>
 
-        <!-- 2. Image generation model -->
         <section class="settings-api-card" id="settingsImageCard" aria-labelledby="settingsImageTitle">
-          <h4 class="settings-api-card-title" id="settingsImageTitle">2. 图像生成 API</h4>
-          <p class="settings-hint" id="imageGenStatusLine">未添加生图 API。可挂在某个推理供应商上，或使用独立 Base / Key。</p>
+          <h4 class="settings-api-card-title" id="settingsImageTitle" data-i18n="settingsImageTitle">生图</h4>
+          <p class="settings-hint" id="imageGenStatusLine" data-i18n="imageGenEmptyHint">尚未添加生图 API。</p>
           <div id="imageVendorList" class="api-vendor-list"></div>
-          <button type="button" class="api-add-btn" id="addImageBtn">＋ 添加生图 API</button>
+          <button type="button" class="api-add-btn" id="addImageBtn" data-i18n="addImageBtn">＋ 添加生图 API</button>
           <div id="imageEditor" class="api-vendor-editor" hidden>
             <div class="provider-presets-row" id="imagePresetRow" role="group" aria-label="生图模板">
-              <span class="settings-hint settings-presets-label">模板：</span>
-              <button type="button" class="provider-preset-chip" data-image-preset="openrouter">OpenRouter 生图</button>
+              <button type="button" class="provider-preset-chip" data-image-preset="openrouter">OpenRouter</button>
               <button type="button" class="provider-preset-chip" data-image-preset="openai">OpenAI</button>
               <button type="button" class="provider-preset-chip" data-image-preset="minimax">MiniMax</button>
-              <button type="button" class="provider-preset-chip" data-image-preset="openai-compatible">自定义</button>
+              <button type="button" class="provider-preset-chip" data-image-preset="openai-compatible" data-i18n="presetCustom">自定义</button>
             </div>
             <input type="checkbox" id="providerImageEnabledCheck" hidden />
             <div id="imageConfigFields" class="image-config-fields">
               <div id="imageCustomApiFields" class="image-custom-api-fields">
-                <label class="settings-label" for="providerImageBaseInput">图像 Base URL</label>
-                <input type="text" id="providerImageBaseInput" class="modal-input" placeholder="inherit chat / 与推理相同" autocomplete="off" />
-                <label class="settings-label" for="providerImageKeyInput">图像 API Key</label>
-                <input type="password" id="providerImageKeyInput" class="modal-input" placeholder="inherit chat / 与推理相同" autocomplete="off" />
-                <p class="settings-hint settings-field-hint">留空则继承推理 Base / Key。OpenRouter 模板已填 <code>https://openrouter.ai/api/v1</code>（生图走 <code>/images</code>），不必去文档里找。</p>
+                <label class="settings-label" for="providerImageBaseInput">Base URL</label>
+                <input type="text" id="providerImageBaseInput" class="modal-input" placeholder="https://openrouter.ai/api/v1" autocomplete="off" />
+                <label class="settings-label" for="providerImageKeyInput">API Key</label>
+                <input type="password" id="providerImageKeyInput" class="modal-input" placeholder="sk-or-..." autocomplete="off" />
               </div>
               <input type="hidden" id="providerImageProtocolInput" value="openrouter-image" />
-              <label class="settings-label" for="providerImageModelInput">图像模型</label>
+              <label class="settings-label" for="providerImageModelInput" data-i18n="settingsImageModel">模型</label>
               <div class="chat-model-input-row">
                 <input type="text" id="providerImageModelInput" class="modal-input" placeholder="google/gemini-2.5-flash-image" autocomplete="off" list="providerImageModelSuggestions" />
-                <button type="button" id="providerImageProbeBtn" class="btn btn-secondary settings-mini-btn" data-i18n="apiProbeImageBtn" title="GET {base}/models 筛出生图模型">探测生图</button>
+                <button type="button" id="providerImageProbeBtn" class="btn btn-secondary settings-mini-btn" data-i18n="apiProbeImageBtn" data-i18n-title="apiProbeImageBtnHint">探测</button>
               </div>
               <p class="settings-hint" id="imageProbeResult" hidden></p>
-              <input type="search" id="providerImageModelFilter" class="modal-input" placeholder="搜索生图模型…" autocomplete="off" hidden />
-              <div id="providerImageCatalog" class="api-model-catalog" hidden role="listbox" aria-label="探测到的生图模型"></div>
+              <input type="search" id="providerImageModelFilter" class="modal-input" data-i18n-placeholder="modelPickerSearchImage" placeholder="搜索生图模型…" autocomplete="off" hidden />
+              <div id="providerImageCatalog" class="api-model-catalog" hidden role="listbox"></div>
               <datalist id="providerImageModelSuggestions">
                 <option value="google/gemini-2.5-flash-image"></option>
                 <option value="openai/gpt-image-1"></option>
@@ -678,51 +693,52 @@
                 <option value="image-01"></option>
               </datalist>
               <details class="settings-advanced" id="imageAdvancedDetails">
-                <summary>高级：API path</summary>
-                <label class="settings-label" for="providerImagePathInput">图像 API path</label>
+                <summary data-i18n="settingsImageAdvanced">高级：path</summary>
+                <label class="settings-label" for="providerImagePathInput">path</label>
                 <input type="text" id="providerImagePathInput" class="modal-input" placeholder="/images" autocomplete="off" />
-                <p class="settings-hint settings-field-hint">OpenRouter 用 <code>/images</code>。MiniMax 用 <code>/image_generation</code>。</p>
               </details>
             </div>
             <div class="api-editor-actions">
-              <button type="button" class="btn btn-secondary" id="cancelImageEditorBtn">取消</button>
-              <button type="button" class="btn btn-primary" id="saveImageEditorBtn">保存生图 API</button>
+              <button type="button" class="btn btn-secondary" id="cancelImageEditorBtn" data-i18n="cancel">取消</button>
+              <button type="button" class="btn btn-primary" id="saveImageEditorBtn" data-i18n="saveImageBtn">保存生图 API</button>
             </div>
           </div>
         </section>
 
         <section class="settings-api-card" id="settingsWebAcquireCard" aria-labelledby="settingsWebAcquireTitle">
-          <h4 class="settings-api-card-title" id="settingsWebAcquireTitle">3. 网页搜索 / 抽取 API</h4>
-          <p class="settings-hint" id="webAcquireStatusLine">未添加搜索 Key 时模型不能公开网搜索。绑定页优先于公开网。</p>
+          <h4 class="settings-api-card-title" id="settingsWebAcquireTitle" data-i18n="settingsWebTitle">搜索 / 抽取</h4>
+          <p class="settings-hint" id="webAcquireStatusLine" data-i18n="webAcquireEmptyHint">尚未添加搜索 Key。</p>
           <div id="webVendorList" class="api-vendor-list"></div>
-          <button type="button" class="api-add-btn" id="addWebAcquireBtn">＋ 添加搜索 / 抽取 API</button>
+          <button type="button" class="api-add-btn" id="addWebAcquireBtn" data-i18n="addWebAcquireBtn">＋ 添加搜索 / 抽取</button>
           <div id="webAcquireEditor" class="api-vendor-editor" hidden>
             <div class="provider-presets-row" id="webVendorPresetRow" role="group" aria-label="搜索供应商">
-              <span class="settings-hint settings-presets-label">供应商：</span>
               <button type="button" class="provider-preset-chip" data-web-preset="tavily">Tavily</button>
-              <button type="button" class="provider-preset-chip" data-web-preset="brave">Brave Search</button>
+              <button type="button" class="provider-preset-chip" data-web-preset="brave">Brave</button>
               <button type="button" class="provider-preset-chip" data-web-preset="firecrawl">Firecrawl</button>
             </div>
             <select id="webSearchProviderSelect" class="modal-input" hidden>
-              <option value="tavily">Tavily（默认）</option>
-              <option value="brave">Brave Search</option>
+              <option value="tavily">Tavily</option>
+              <option value="brave">Brave</option>
             </select>
             <div id="tavilyKeyRow">
               <label class="settings-label" for="tavilyKeyInput">Tavily API Key</label>
               <input type="password" id="tavilyKeyInput" class="modal-input" placeholder="tvly-..." autocomplete="off" />
             </div>
             <div id="braveKeyRow" hidden>
-              <label class="settings-label" for="braveKeyInput">Brave Search API Key</label>
+              <label class="settings-label" for="braveKeyInput">Brave API Key</label>
               <input type="password" id="braveKeyInput" class="modal-input" placeholder="BSA..." autocomplete="off" />
             </div>
             <div id="firecrawlKeyRow" hidden>
-              <label class="settings-label" for="firecrawlKeyInput">Firecrawl API Key（增强 fetch）</label>
+              <label class="settings-label" for="firecrawlKeyInput">Firecrawl API Key</label>
               <input type="password" id="firecrawlKeyInput" class="modal-input" placeholder="fc-..." autocomplete="off" />
-              <p class="settings-hint settings-field-hint">配了之后 acquire fetch 会把公开网页抽成 Markdown；失败则回退普通 GET。</p>
             </div>
+            <div class="chat-model-input-row web-probe-row">
+              <button type="button" id="webAcquireProbeBtn" class="btn btn-secondary settings-mini-btn" data-i18n="webAcquireProbeBtn">探测</button>
+            </div>
+            <p class="settings-hint" id="webAcquireProbeResult" hidden></p>
             <div class="api-editor-actions">
-              <button type="button" class="btn btn-secondary" id="cancelWebAcquireBtn">取消</button>
-              <button type="button" class="btn btn-primary" id="saveWebAcquireBtn">保存此 API</button>
+              <button type="button" class="btn btn-secondary" id="cancelWebAcquireBtn" data-i18n="cancel">取消</button>
+              <button type="button" class="btn btn-primary" id="saveWebAcquireBtn" data-i18n="saveWebAcquireBtn">保存</button>
             </div>
           </div>
         </section>

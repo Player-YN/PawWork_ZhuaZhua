@@ -3880,13 +3880,16 @@ ${fragment}
       pawActionEls.set(ref, el);
       controls.push(summarizeActionControl(el, ref));
     });
+    let canvasCount = 0;
+    try { canvasCount = document.querySelectorAll('canvas').length; } catch (_) {}
     return {
       ok: true,
       op: 'snapshot',
       frameUrl: location.href,
       title: document.title,
       count: controls.length,
-      controls
+      controls,
+      canvasCount
     };
   }
 
@@ -4226,6 +4229,24 @@ ${fragment}
     if (op === 'wait') return waitActionCondition(request);
 
     if (op === 'snapshot') return takeActionSnapshot();
+
+    if (op === 'pointer') {
+      const x = Number(request.x);
+      const y = Number(request.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > 1 || y > 1) {
+        return { ok: false, code: 'BAD_INPUT', error: 'pointer requires x and y in 0–1 viewport units' };
+      }
+      const px = x * (window.innerWidth || 1);
+      const py = y * (window.innerHeight || 1);
+      let el = null;
+      try { el = document.elementFromPoint(px, py); } catch (_) {}
+      if (!el || el.nodeType !== 1) {
+        return { ok: false, code: 'NO_TARGET', error: 'no element at viewport point', x, y };
+      }
+      const clicked = clickActionTarget(el);
+      if (clicked && clicked.ok === false) return clicked;
+      return { ok: true, op, methodUsed: 'point', x, y, after: actionAfter(el, { source: 'point' }) };
+    }
 
     if (op === 'resolve_name') {
       const query = request.name != null ? request.name : request.label;

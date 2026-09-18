@@ -71,6 +71,66 @@ export async function loadWebAcquireSettings() {
   }
 }
 
+/** GET credit-usage: v2 first, then v1. */
+export function firecrawlCreditUsageUrls(baseURL) {
+  const root = String(baseURL || 'https://api.firecrawl.dev').replace(/\/$/, '');
+  return [`${root}/v2/team/credit-usage`, `${root}/v1/team/credit-usage`];
+}
+
+export function firecrawlAuthHeaders(apiKey) {
+  return {
+    Authorization: `Bearer ${String(apiKey || '').trim()}`,
+    Accept: 'application/json'
+  };
+}
+
+/**
+ * Parse Firecrawl team credit-usage JSON.
+ * @returns {{ ok: boolean, remaining: number|null, plan: number|null }}
+ */
+export function summarizeFirecrawlCreditUsage(json) {
+  const data =
+    json && typeof json === 'object' && json.data && typeof json.data === 'object' ? json.data : json;
+  if (!data || typeof data !== 'object') return { ok: false, remaining: null, plan: null };
+  const remainingRaw = data.remainingCredits ?? data.remaining_credits;
+  const planRaw = data.planCredits ?? data.plan_credits;
+  const remaining = Number(remainingRaw);
+  const plan = Number(planRaw);
+  const hasRemaining = Number.isFinite(remaining);
+  const failed = json && json.success === false;
+  return {
+    ok: !failed && hasRemaining,
+    remaining: hasRemaining ? remaining : null,
+    plan: Number.isFinite(plan) ? plan : null
+  };
+}
+
+export function tavilySearchProbeUrl(baseURL) {
+  const root = String(baseURL || 'https://api.tavily.com').replace(/\/$/, '');
+  return `${root}/search`;
+}
+
+export function tavilySearchProbeBody(apiKey) {
+  return {
+    api_key: String(apiKey || '').trim(),
+    query: 'ping',
+    max_results: 1,
+    search_depth: 'basic'
+  };
+}
+
+export function braveSearchProbeUrl(baseURL) {
+  const root = String(baseURL || 'https://api.search.brave.com').replace(/\/$/, '');
+  return `${root}/res/v1/web/search?q=ping&count=1`;
+}
+
+export function braveSearchProbeHeaders(apiKey) {
+  return {
+    Accept: 'application/json',
+    'X-Subscription-Token': String(apiKey || '').trim()
+  };
+}
+
 export async function saveWebAcquireSettings(patch = {}) {
   const prev = await loadWebAcquireSettings();
   const take = (key) =>

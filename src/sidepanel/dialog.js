@@ -99,10 +99,31 @@ export function restoreDialogFocus(dialog) {
 }
 
 /**
+ * Accept one CSS selector or a list. A comma-joined string is one query, not characters.
+ * @param {string|string[]|null|undefined} input
+ * @returns {string[]}
+ */
+export function normalizeDialogCloseSelectors(input) {
+  if (Array.isArray(input)) {
+    return input.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim());
+  }
+  if (typeof input === 'string' && input.trim()) return [input.trim()];
+  return [];
+}
+
+function querySelectorAllSafe(root, sel) {
+  try {
+    return [...root.querySelectorAll(sel)];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Wire once: Esc (native cancel), backdrop click, optional close buttons, focus restore on close.
  * @param {HTMLDialogElement|null|undefined} dialog
  * @param {{
- *   closeSelectors?: string[],
+ *   closeSelectors?: string|string[],
  *   closeOnBackdrop?: boolean,
  *   onClose?: () => void
  * }} [opts]
@@ -111,7 +132,7 @@ export function wireDialogChrome(dialog, opts = {}) {
   if (!dialog || dialog.dataset.pwDialogWired === '1') return;
   dialog.dataset.pwDialogWired = '1';
   const closeOnBackdrop = opts.closeOnBackdrop !== false;
-  const closeSelectors = opts.closeSelectors || [];
+  const closeSelectors = normalizeDialogCloseSelectors(opts.closeSelectors);
 
   dialog.addEventListener('close', () => {
     restoreDialogFocus(dialog);
@@ -130,12 +151,12 @@ export function wireDialogChrome(dialog, opts = {}) {
   }
 
   for (const sel of closeSelectors) {
-    dialog.querySelectorAll(sel).forEach((el) => {
+    for (const el of querySelectorAllSafe(dialog, sel)) {
       el.addEventListener('click', (e) => {
         e.preventDefault();
         closeDialog(dialog);
       });
-    });
+    }
   }
 }
 

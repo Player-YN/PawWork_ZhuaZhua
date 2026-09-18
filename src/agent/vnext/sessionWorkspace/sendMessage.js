@@ -420,6 +420,7 @@ export async function sendMessage(store, input) {
     const sessNow = store.get('sessions', sessionId) || session;
     const usage = sessNow.contextUsage || {};
     const promptTokens = Number(extra.promptTokens ?? usage.promptTokens) || 0;
+    const source = extra.source || usage.source || (promptTokens ? 'estimate' : 'none');
     const ev = {
       type: 'context-usage',
       sessionId,
@@ -428,7 +429,8 @@ export async function sendMessage(store, input) {
       contextWindow,
       ratio: contextUsageRatio(promptTokens, contextWindow),
       threshold: COMPACT_RATIO,
-      compacting: extra.compacting === true
+      compacting: extra.compacting === true,
+      source
     };
     try {
       onEvent(ev);
@@ -456,13 +458,13 @@ export async function sendMessage(store, input) {
         compact
       })
     ) {
-      emitUsage({ promptTokens: estimated });
+      emitUsage({ promptTokens: estimated, source: 'estimate' });
       return { compact, live };
     }
     const cut = findCompactCutIndex(allMessages);
     const folded = allMessages.slice(0, cut);
     const throughMessageId = folded[folded.length - 1]?.messageId || null;
-    emitUsage({ promptTokens: estimated, compacting: true });
+    emitUsage({ promptTokens: estimated, compacting: true, source: 'estimate' });
     try {
       onEvent({ type: 'compacting', sessionId, contextWindow, promptTokens: estimated });
     } catch {
@@ -507,7 +509,8 @@ export async function sendMessage(store, input) {
     const liveAfter = messagesAfterCompact(allMessages, nextCompact);
     emitUsage({
       promptTokens:
-        estimateTextTokens(nextCompact.text) + estimateMessagesTokens(liveAfter)
+        estimateTextTokens(nextCompact.text) + estimateMessagesTokens(liveAfter),
+      source: 'estimate'
     });
     return { compact: nextCompact, live: liveAfter };
   }
@@ -670,14 +673,16 @@ export async function sendMessage(store, input) {
         /* keep placeholder */
       }
     }
-    const promptTokens =
-      resultUsage.promptTokens ||
+    const estimatedTokens =
       estimateTextTokens(system) + estimateTextTokens(worldBlock) + estimateMessagesTokens(history);
+    const fromApi = resultUsage.source === 'api' && resultUsage.promptTokens > 0;
+    const promptTokens = fromApi ? resultUsage.promptTokens : estimatedTokens;
     const contextUsage = {
       promptTokens,
       completionTokens: resultUsage.completionTokens || 0,
       contextWindow,
       ratio: contextUsageRatio(promptTokens, contextWindow),
+      source: fromApi ? 'api' : 'estimate',
       updatedAt: Date.now()
     };
     if (sess2 && store.has('sessions', sessionId)) {
@@ -693,7 +698,8 @@ export async function sendMessage(store, input) {
     }
     emitUsage({
       promptTokens: contextUsage.promptTokens,
-      completionTokens: contextUsage.completionTokens
+      completionTokens: contextUsage.completionTokens,
+      source: contextUsage.source
     });
 
     settleExecution(store, execution, 'settled');

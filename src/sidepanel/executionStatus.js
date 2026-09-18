@@ -102,16 +102,48 @@ export function shouldShowDurableTaskCard(task) {
   return !!(compact && compact.prominent);
 }
 
+function firstNamed(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = firstNamed(item);
+      if (hit) return hit;
+    }
+    return '';
+  }
+  if (typeof value === 'object') {
+    return value.name || value.path || value.title || value.filename || value.file || '';
+  }
+  return '';
+}
+
+function firstFileKey(files) {
+  if (!files || typeof files !== 'object' || Array.isArray(files)) return '';
+  const keys = Object.keys(files);
+  return keys[0] || '';
+}
+
 function objectName(args, result) {
   const raw =
     args?.name ||
     args?.path ||
     args?.title ||
+    args?.filename ||
+    args?.file ||
+    args?.entry ||
+    args?.entryFile ||
     result?.name ||
     result?.path ||
     result?.title ||
+    result?.filename ||
     args?.artifactId ||
     result?.artifactId ||
+    firstNamed(result?.artifacts) ||
+    firstNamed(result?.writtenFiles) ||
+    firstNamed(result?.written) ||
+    firstNamed(result?.files) ||
+    firstFileKey(args?.files) ||
     '';
   const s = text(raw, NAME_CAP);
   if (!s) return '';
@@ -119,59 +151,217 @@ function objectName(args, result) {
   return text(base, NAME_CAP);
 }
 
+function pair(running, done) {
+  return { running, done };
+}
+
+function runBrief(op, object, isZh) {
+  if (object) {
+    return isZh ? pair(`正在写 ${object}`, `已写 ${object}`) : pair(`Writing ${object}`, `Wrote ${object}`);
+  }
+  if (op === 'write_artifact' || op === 'update_artifact' || op === 'write_package_file' || op === 'persist') {
+    return isZh ? pair('正在写入交付物', '已写入交付物') : pair('Writing a deliverable', 'Wrote a deliverable');
+  }
+  if (op === 'write_scratch') {
+    return isZh ? pair('正在写临时文件', '已写临时文件') : pair('Writing a scratch file', 'Wrote a scratch file');
+  }
+  if (op === 'sheet' || op === 'createWorkbook') {
+    return isZh ? pair('正在登记表格', '已登记表格') : pair('Registering a sheet', 'Registered a sheet');
+  }
+  if (op === 'doc' || op === 'createDocument') {
+    return isZh ? pair('正在登记文档', '已登记文档') : pair('Registering a document', 'Registered a document');
+  }
+  if (op === 'html' || op === 'site') {
+    return isZh ? pair('正在登记网站', '已登记网站') : pair('Registering a site', 'Registered a site');
+  }
+  if (op === 'ingestPdf') {
+    return isZh ? pair('正在导入 PDF', '已导入 PDF') : pair('Ingesting a PDF', 'Ingested a PDF');
+  }
+  if (op === 'skill') {
+    return isZh ? pair('正在处理 skill', '已处理 skill') : pair('Handling a skill', 'Handled a skill');
+  }
+  if (op === 'shelf') {
+    return isZh ? pair('正在整理货架', '已整理货架') : pair('Updating the shelf', 'Updated the shelf');
+  }
+  if (op === 'read') {
+    return isZh ? pair('正在读取访客文件', '已读取访客文件') : pair('Reading a guest file', 'Read a guest file');
+  }
+  return isZh ? pair('正在运行访客代码', '已运行访客代码') : pair('Running guest code', 'Ran guest code');
+}
+
+export function settleToolCurrent(current, lang = 'zh', ok = true) {
+  if (!current) return null;
+  if (ok) {
+    return { ...current, text: current.doneText || current.text, status: 'success' };
+  }
+  const isZh = zh(lang);
+  const fail = isZh
+    ? current.object
+      ? `未能完成 ${current.object}`
+      : String(current.text || '').replace(/^正在/, '未能') || '未成功'
+    : current.object
+      ? `Failed: ${current.object}`
+      : `Failed: ${current.text || 'tool'}`;
+  return { ...current, text: text(fail, 160), status: 'error' };
+}
+
 export function currentFromToolCall(name, args = {}, lang = 'zh') {
   const isZh = zh(lang);
   const object = objectName(args, {});
   const op = text(args.op || args.act || args.action, 40);
   const view = text(args.view, 40);
-  let label = '';
+  let running = '';
+  let done = '';
   if (name === 'action') {
-    if (op === 'click') label = isZh ? `正在点击${object ? ` ${object}` : ''}` : `Clicking${object ? ` ${object}` : ''}`;
-    else if (op === 'fill' || op === 'fill_form') label = isZh ? `正在填写${object ? ` ${object}` : ''}` : `Filling${object ? ` ${object}` : ''}`;
-    else if (op === 'select') label = isZh ? `正在选择${object ? ` ${object}` : ''}` : `Selecting${object ? ` ${object}` : ''}`;
-    else if (op === 'press') label = isZh ? `正在按键${args.key ? ` ${text(args.key, 16)}` : ''}` : `Pressing${args.key ? ` ${text(args.key, 16)}` : ''}`;
-    else if (op === 'scroll') label = isZh ? '正在滚动页面' : 'Scrolling the page';
-    else if (op === 'wait') label = isZh ? '正在等待页面' : 'Waiting on the page';
-    else if (op === 'snapshot') label = isZh ? '正在读取当前标签' : 'Reading the current tab';
-    else if (op === 'upload') label = isZh ? '正在上传文件' : 'Uploading a file';
-    else label = isZh ? '正在操作页面' : 'Acting on the page';
+    if (op === 'click') {
+      running = isZh ? `正在点击${object ? ` ${object}` : ''}` : `Clicking${object ? ` ${object}` : ''}`;
+      done = isZh ? `已点击${object ? ` ${object}` : ''}` : `Clicked${object ? ` ${object}` : ''}`;
+    } else if (op === 'fill' || op === 'fill_form') {
+      running = isZh ? `正在填写${object ? ` ${object}` : ''}` : `Filling${object ? ` ${object}` : ''}`;
+      done = isZh ? `已填写${object ? ` ${object}` : ''}` : `Filled${object ? ` ${object}` : ''}`;
+    } else if (op === 'select') {
+      running = isZh ? `正在选择${object ? ` ${object}` : ''}` : `Selecting${object ? ` ${object}` : ''}`;
+      done = isZh ? `已选择${object ? ` ${object}` : ''}` : `Selected${object ? ` ${object}` : ''}`;
+    } else if (op === 'press') {
+      const key = args.key ? ` ${text(args.key, 16)}` : '';
+      running = isZh ? `正在按键${key}` : `Pressing${key}`;
+      done = isZh ? `已按键${key}` : `Pressed${key}`;
+    } else if (op === 'scroll') {
+      running = isZh ? '正在滚动页面' : 'Scrolling the page';
+      done = isZh ? '已滚动页面' : 'Scrolled the page';
+    } else if (op === 'wait') {
+      running = isZh ? '正在等待页面' : 'Waiting on the page';
+      done = isZh ? '已等待页面' : 'Waited on the page';
+    } else if (op === 'snapshot') {
+      running = isZh ? '正在读取当前标签' : 'Reading the current tab';
+      done = isZh ? '已读取当前标签' : 'Read the current tab';
+    } else if (op === 'upload') {
+      running = isZh ? '正在上传文件' : 'Uploading a file';
+      done = isZh ? '已上传文件' : 'Uploaded a file';
+    } else {
+      running = isZh ? '正在操作页面' : 'Acting on the page';
+      done = isZh ? '已操作页面' : 'Acted on the page';
+    }
   } else if (name === 'run') {
-    label = object
-      ? isZh
-        ? `正在写 ${object}`
-        : `Writing ${object}`
-      : isZh
-        ? '正在写入交付物'
-        : 'Writing a deliverable';
+    const labels = runBrief(op, object, isZh);
+    running = labels.running;
+    done = labels.done;
   } else if (name === 'inspect') {
-    if (view === 'sys') label = isZh ? '正在查阅 sys 目录' : 'Reading the sys catalog';
-    else if (view === 'html') label = isZh ? '正在读取页面 HTML' : 'Reading page HTML';
-    else if (view === 'artifacts' || view === 'files') label = isZh ? '正在查看交付物' : 'Looking at deliverables';
-    else if (view === 'skill' || view === 'skills') label = isZh ? '正在查阅做法' : 'Reading a playbook';
-    else label = isZh ? '正在读取会话内容' : 'Reading session context';
+    if (view === 'sys') {
+      running = isZh ? '正在查阅 sys 目录' : 'Reading the sys catalog';
+      done = isZh ? '已查阅 sys 目录' : 'Read the sys catalog';
+    } else if (view === 'html') {
+      running = isZh ? '正在读取页面 HTML' : 'Reading page HTML';
+      done = isZh ? '已读取页面 HTML' : 'Read page HTML';
+    } else if (view === 'artifacts' || view === 'files') {
+      running = isZh ? '正在查看交付物' : 'Looking at deliverables';
+      done = isZh ? '已查看交付物' : 'Looked at deliverables';
+    } else if (view === 'skill' || view === 'skills') {
+      running = isZh ? '正在查阅做法' : 'Reading a playbook';
+      done = isZh ? '已查阅做法' : 'Read a playbook';
+    } else {
+      running = isZh ? '正在读取会话内容' : 'Reading session context';
+      done = isZh ? '已读取会话内容' : 'Read session context';
+    }
   } else if (name === 'acquire') {
-    if (op === 'search' || args.action === 'search') label = isZh ? '正在检索公开网' : 'Searching the public web';
-    else if (op === 'fetch' || args.action === 'fetch') label = isZh ? '正在获取文件' : 'Fetching a file';
-    else if (args.action === 'image') label = isZh ? '正在生成图片' : 'Generating an image';
-    else label = isZh ? '正在获取内容' : 'Acquiring content';
+    if (op === 'search' || args.action === 'search') {
+      running = isZh ? '正在检索公开网' : 'Searching the public web';
+      done = isZh ? '已检索公开网' : 'Searched the public web';
+    } else if (op === 'fetch' || args.action === 'fetch') {
+      running = isZh ? '正在获取文件' : 'Fetching a file';
+      done = isZh ? '已获取文件' : 'Fetched a file';
+    } else if (args.action === 'image') {
+      running = isZh ? '正在生成图片' : 'Generating an image';
+      done = isZh ? '已生成图片' : 'Generated an image';
+    } else {
+      running = isZh ? '正在获取内容' : 'Acquiring content';
+      done = isZh ? '已获取内容' : 'Acquired content';
+    }
   } else if (name === 'web') {
-    label = op === 'read' ? (isZh ? '正在读取网站' : 'Reading the site') : isZh ? '正在写网站' : 'Writing the site';
+    running = op === 'read' ? (isZh ? '正在读取网站' : 'Reading the site') : isZh ? '正在写网站' : 'Writing the site';
+    done = op === 'read' ? (isZh ? '已读取网站' : 'Read the site') : isZh ? '已写网站' : 'Wrote the site';
   } else if (name === 'sheet') {
-    label = op === 'read' ? (isZh ? '正在读取表格' : 'Reading the sheet') : isZh ? '正在写表格' : 'Writing the sheet';
+    running = op === 'read' ? (isZh ? '正在读取表格' : 'Reading the sheet') : isZh ? '正在写表格' : 'Writing the sheet';
+    done = op === 'read' ? (isZh ? '已读取表格' : 'Read the sheet') : isZh ? '已写表格' : 'Wrote the sheet';
   } else if (name === 'doc') {
-    label = op === 'read' ? (isZh ? '正在读取文档' : 'Reading the document') : isZh ? '正在写文档' : 'Writing the document';
+    running = op === 'read' ? (isZh ? '正在读取文档' : 'Reading the document') : isZh ? '正在写文档' : 'Writing the document';
+    done = op === 'read' ? (isZh ? '已读取文档' : 'Read the document') : isZh ? '已写文档' : 'Wrote the document';
   } else if (name === 'task') {
-    if (op === 'wait') label = isZh ? '正在登记等待' : 'Scheduling a wait';
-    else if (op === 'complete') label = isZh ? '正在完成任务' : 'Completing the task';
-    else if (op === 'schedule') label = isZh ? '正在安排定时任务' : 'Scheduling a task';
-    else if (op === 'plan' || op === 'checkpoint') label = isZh ? '正在更新任务进度' : 'Updating task progress';
-    else label = isZh ? '正在查看任务' : 'Inspecting the task';
+    if (op === 'wait') {
+      running = isZh ? '正在登记等待' : 'Scheduling a wait';
+      done = isZh ? '已登记等待' : 'Scheduled a wait';
+    } else if (op === 'complete') {
+      running = isZh ? '正在完成任务' : 'Completing the task';
+      done = isZh ? '已完成任务' : 'Completed the task';
+    } else if (op === 'schedule') {
+      running = isZh ? '正在安排定时任务' : 'Scheduling a task';
+      done = isZh ? '已安排定时任务' : 'Scheduled a task';
+    } else if (op === 'plan' || op === 'checkpoint') {
+      running = isZh ? '正在更新任务进度' : 'Updating task progress';
+      done = isZh ? '已更新任务进度' : 'Updated task progress';
+    } else {
+      running = isZh ? '正在查看任务' : 'Inspecting the task';
+      done = isZh ? '已查看任务' : 'Inspected the task';
+    }
   } else if (name === 'clarify') {
-    label = isZh ? '正在询问用户' : 'Asking the user';
+    running = isZh ? '正在询问用户' : 'Asking the user';
+    done = isZh ? '已询问用户' : 'Asked the user';
   } else {
-    label = isZh ? `正在调用 ${name || '工具'}` : `Calling ${name || 'tool'}`;
+    running = isZh ? `正在调用 ${name || '工具'}` : `Calling ${name || 'tool'}`;
+    done = isZh ? `已调用 ${name || '工具'}` : `Called ${name || 'tool'}`;
   }
-  return { text: text(label, 160), object, source: 'tool-call', tool: name, op };
+  return {
+    text: text(running, 160),
+    doneText: text(done, 160),
+    object,
+    source: 'tool-call',
+    tool: name,
+    op,
+    view,
+    status: 'running'
+  };
+}
+
+const PAGE_READ_TEXT = /读取当前标签|已读取当前标签|Reading the current tab|Read the current tab/;
+
+/** Snapshot / tab HTML peek — status noise, not the live action brief. */
+export function isPageReadStatus(current) {
+  if (!current || typeof current !== 'object') return false;
+  if (current.tool === 'action' && current.op === 'snapshot') return true;
+  if (current.tool === 'inspect' && current.view === 'html') return true;
+  return PAGE_READ_TEXT.test(String(current.text || current.doneText || ''));
+}
+
+function rememberLiveAction(state) {
+  if (!state || typeof state !== 'object') return state;
+  const cur = state.current;
+  if (cur?.text && !isPageReadStatus(cur) && (cur.source === 'host' || cur.status === 'running')) {
+    if (state.lastLiveAction === cur.text) return state;
+    return { ...state, lastLiveAction: cur.text };
+  }
+  return state;
+}
+
+/**
+ * One-line live 摘要: last host-fact current action.
+ * Persists between tool hops (page-read / settled success do not blank it).
+ * Never next, lease, policy, page-read, or 「成功 页面·…」 rows.
+ */
+export function liveActionBrief(state) {
+  const current = state?.current;
+  if (current?.source === 'host' && current.text) return current.text;
+  if (current?.text && !isPageReadStatus(current) && current.status === 'running') return current.text;
+  if (disclosureMode(state) === 'sticky' && current?.text && !isPageReadStatus(current)) {
+    return current.text;
+  }
+  const remembered = text(state?.lastLiveAction, 160);
+  if (remembered && disclosureMode(state) !== 'hidden') return remembered;
+  return '';
+}
+
+/** Keep the last painted sentence when the reducer has a page-read / gap hop. */
+export function persistLiveActionBrief(state, lastPainted = '') {
+  return liveActionBrief(state) || text(lastPainted, 160);
 }
 
 function summaryKind(name, args) {
@@ -181,7 +371,21 @@ function summaryKind(name, args) {
   if (name === 'doc') return 'doc';
   if (name === 'task') return 'task';
   if (name === 'clarify') return 'wait';
-  if (name === 'run' || ((name === 'sheet' || name === 'doc' || name === 'web') && text(args.act || args.op) === 'write')) {
+  if (name === 'run') {
+    const op = text(args.op || args.act, 40);
+    if (
+      op === 'write_artifact' ||
+      op === 'update_artifact' ||
+      op === 'write_package_file' ||
+      op === 'persist' ||
+      op === 'write_scratch'
+    ) {
+      return 'write';
+    }
+    if (objectName(args, {})) return 'write';
+    return 'run';
+  }
+  if ((name === 'sheet' || name === 'doc' || name === 'web') && text(args.act || args.op) === 'write') {
     return 'write';
   }
   if (name === 'acquire' && (args.action === 'image' || args.op === 'image')) return 'write';
@@ -235,7 +439,8 @@ export function createExecutionStatus(seed = {}) {
     aborted: false,
     startedAt: 0,
     endedAt: 0,
-    artifactCount: 0
+    artifactCount: 0,
+    lastLiveAction: text(seed.lastLiveAction, 160)
   };
 }
 
@@ -317,6 +522,10 @@ function applyTask(state, task, lang) {
  * @param {{ lang?: string, aimedCount?: number, targetPage?: object|null, task?: object|null }} [ctx]
  */
 export function applyExecutionStatus(state, ev, ctx = {}) {
+  return rememberLiveAction(reduceExecutionStatus(state, ev, ctx));
+}
+
+function reduceExecutionStatus(state, ev, ctx = {}) {
   const lang = ctx.lang || 'zh';
   const prev = state && typeof state === 'object' ? state : createExecutionStatus({ lang });
   let next = {
@@ -387,6 +596,7 @@ export function applyExecutionStatus(state, ev, ctx = {}) {
     next.pendingTools = 0;
     next.activeTools = [];
     next.current = null;
+    next.lastLiveAction = '';
     next.summary = [];
     next.artifactCount = 0;
     next.startedAt = Number(ev.startedAt) || Date.now();
@@ -516,14 +726,31 @@ export function applyExecutionStatus(state, ev, ctx = {}) {
         }
       }
     }
+    const priorCurrent = idx >= 0 ? next.activeTools[idx]?.current : null;
     if (idx >= 0) next.activeTools.splice(idx, 1);
     next.pendingTools = next.activeTools.length;
+    const refinedArgs = {
+      op: priorCurrent?.op || args.op || args.act || args.action || '',
+      name: priorCurrent?.object || '',
+      ...args,
+      name: args.name || objectName(args, result) || priorCurrent?.object,
+      path: args.path || result.path || firstNamed(result.writtenFiles) || firstNamed(result.artifacts),
+      title: args.title || result.title || result.name
+    };
+    const refined = currentFromToolCall(name, refinedArgs, lang);
     next.summary = next.summary.map((row) => {
       if (id && row.id === id && row.status === 'running') {
+        const nextLabel =
+          refined.object && refined.object !== row.object
+            ? summaryLabel(row.kind, refined, lang)
+            : row.label;
         return {
           ...row,
+          kind: refined.object && row.kind === 'run' ? 'write' : row.kind,
           status: ok ? 'success' : 'error',
-          code: code || row.code
+          code: code || row.code,
+          object: refined.object || row.object,
+          label: nextLabel || row.label
         };
       }
       return row;
@@ -555,7 +782,14 @@ export function applyExecutionStatus(state, ev, ctx = {}) {
     if (ok && countsDeliverable(name, args, result)) {
       next.artifactCount = Math.max(0, Number(next.artifactCount) || 0) + 1;
     }
-    next.current = currentFromActive(next.activeTools);
+    const settled = settleToolCurrent(refined, lang, ok);
+    const stillRunning = currentFromActive(next.activeTools);
+    if (stillRunning) next.current = stillRunning;
+    else if (next.phase === 'running' || next.phase === 'verifying' || next.phase === 'waiting_timer') {
+      next.current = settled;
+    } else if (next.current?.source !== 'host') {
+      next.current = settled || next.current;
+    }
     if (code && recoveredCodes.has(code) === false && ev.ok === false) {
       next.summary = pushSummary(next.summary, {
         id: `err-${next.summary.length}`,
@@ -696,8 +930,54 @@ export function applyExecutionStatus(state, ev, ctx = {}) {
   return next;
 }
 
-export function visibleSummaryRows(summary, limit = 8) {
+export function summaryCollapseKey(row) {
+  return [row?.kind || '', row?.label || '', row?.object || '', row?.tool || ''].join('\0');
+}
+
+export function collapseConsecutiveSummary(summary) {
   const list = Array.isArray(summary) ? summary : [];
+  const out = [];
+  for (const row of list) {
+    if (!row) continue;
+    const last = out[out.length - 1];
+    if (last && summaryCollapseKey(last) === summaryCollapseKey(row)) {
+      last.count = (Number(last.count) || 1) + 1;
+      last.status = row.status || last.status;
+      last.id = row.id || last.id;
+      last.code = row.code || last.code;
+      if (row.object) last.object = row.object;
+    } else {
+      out.push({ ...row, count: Math.max(1, Number(row.count) || 1) });
+    }
+  }
+  return out;
+}
+
+export function formatSummaryRowText(row, t) {
+  const kindKey = `botKind_${row?.kind || ''}`;
+  const kindLabel = typeof t === 'function' ? t(kindKey) : '';
+  const kind = kindLabel && kindLabel !== kindKey ? kindLabel : '';
+  const object = text(row?.object, NAME_CAP);
+  const rawLabel = text(row?.label, 160);
+  const count = Math.max(1, Number(row?.count) || 1);
+  let main = rawLabel;
+  if (object && main && !main.includes(object)) main = `${main} · ${object}`;
+  else if (object && !main) main = object;
+  const writeKind = kind && /写|Write/i.test(kind);
+  const writeDup = writeKind && /写|Write|deliverable/i.test(main);
+  const kindAlready = kind && (main === kind || main.startsWith(`${kind} ·`) || main.startsWith(kind));
+  if (kind && main && !kindAlready && !writeDup) main = `${kind} · ${main}`;
+  else if (!main) main = kind;
+  const genericWrite = /^(写入交付物|Write deliverable)$/i.test(rawLabel);
+  if (count > 1) {
+    const stem = genericWrite || (!object && writeDup) ? kind || main : main || kind;
+    return `${stem}×${count}`;
+  }
+  return main || kind || rawLabel;
+}
+
+export function visibleSummaryRows(summary, limit = 8) {
+  const list = collapseConsecutiveSummary(summary);
   return list.slice(Math.max(0, list.length - limit));
 }
 

@@ -51,7 +51,7 @@ test('site-tool-reuse is catalog-discoverable and loads only on inspect', async 
   const catalog = listPackagedSkillCatalog();
   const row = catalog.find((s) => s.id === 'site-tool-reuse');
   assert.ok(row);
-  assert.match(row.description, /already-open|logged-in|live website/i);
+  assert.match(row.description, /already-open|logged-in|live website|discover and compare/i);
   const listed = formatSkillsForSystemPrompt({ catalog });
   assert.match(listed, /id: site-tool-reuse/);
   assert.match(listed, /description:/);
@@ -115,11 +115,19 @@ test('open tab overview is tabCount plus at most 10 domains and never titles', (
   assert.doesNotMatch(world, /title":/);
 });
 
-test('run and action descriptions stay contract-stable while preferring site tools', () => {
+test('run and action descriptions list channels without a forced primary path', () => {
   const tools = sessionTools();
-  assert.match(tools.run.description, /glue and compute/);
-  assert.match(tools.action.description, /ready-made page controls/);
+  assert.doesNotMatch(tools.run.description, /Do not use run for a pure click/);
+  assert.doesNotMatch(tools.run.description, /not the default way to do the user job/);
+  assert.doesNotMatch(tools.action.description, /Prefer this for in-site/);
+  assert.doesNotMatch(tools.action.description, /ready-made page controls beat/);
+  assert.match(tools.action.description, /pointer/);
+  assert.match(tools.action.description, /RAW_ESCAPE_DENIED|NO_TARGET/);
   assert.deepEqual(tools.action.parameters.required, ['op']);
   assert.ok(tools.action.parameters.properties.op.enum.includes('upload'));
+  assert.ok(tools.action.parameters.properties.op.enum.includes('pointer'));
+  assert.ok(tools.action.parameters.properties.tabId);
+  assert.match(tools.action.description, /JPEG|screenshot/);
+  assert.doesNotMatch(tools.action.description, /must screenshot first|prefer structure/i);
   assert.ok(tools.run.parameters.properties.code);
 });

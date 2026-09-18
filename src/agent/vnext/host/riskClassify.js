@@ -85,7 +85,7 @@ const PAYMENT_HOST_RE =
 
 const ACTION_READ = new Set(['snapshot', 'wait', 'resolve_name', 'resolve_intent']);
 const ACTION_FILL = new Set(['fill', 'fill_form', 'select', 'scroll']);
-const ACTION_MUTATE = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll', 'upload']);
+const ACTION_MUTATE = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll', 'upload', 'pointer']);
 
 const SYS_READ = new Set([
   'help',
@@ -335,6 +335,29 @@ function classifyAction(input = {}) {
       reason: 'btn:discard',
       summary: `危险删除「${name}」`,
       signals: ['delete-danger'],
+      target: base
+    });
+  }
+
+  if (op === 'pointer') {
+    const pointerMethod = String(input.method || '').toLowerCase();
+    if (pointerMethod === 'cdp') {
+      return verdict({
+        risk: RISK_RAW,
+        confidence: CONF_KNOWN,
+        effectConfidence: CONF_UNKNOWN,
+        reason: 'action:pointer:cdp',
+        summary: '视口坐标 CDP 鼠标',
+        signals: ['pointer-cdp'],
+        target: base
+      });
+    }
+    return verdict({
+      risk: RISK_COMMIT,
+      confidence: CONF_UNKNOWN,
+      reason: 'action:pointer:point',
+      summary: '视口坐标脚本点击',
+      signals: ['pointer-point'],
       target: base
     });
   }

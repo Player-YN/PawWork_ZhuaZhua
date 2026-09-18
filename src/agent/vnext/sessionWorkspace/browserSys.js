@@ -6,6 +6,7 @@
  */
 
 import { extendDeadlineForWaitFor } from './runDeadline.js';
+import { screenshotToModelParts } from './actionObserve.js';
 
 export const SYS_EVAL_JSON_MAX = 1_000_000;
 export const SYS_FETCH_BYTES_MAX = 8 * 1024 * 1024;
@@ -108,6 +109,7 @@ export const SYS_MODEL_HINT = [
 export function createGuestSys(opts = {}) {
   const host = opts.hostSys;
   const writtenFiles = new Set();
+  const visionParts = [];
   const defaultTabId = opts.defaultTabId != null ? Number(opts.defaultTabId) : null;
 
   async function call(op, params = {}) {
@@ -153,6 +155,13 @@ export function createGuestSys(opts = {}) {
       throw err;
     }
     const value = res.result !== undefined ? res.result : res;
+    if (name === 'screenshot' && value && typeof value.base64 === 'string' && value.base64) {
+      visionParts.push(...screenshotToModelParts({
+        base64: value.base64,
+        mediaType: value.contentType || (value.format === 'jpeg' ? 'image/jpeg' : 'image/png'),
+        label: 'Page screenshot'
+      }));
+    }
     if (saveTo != null) {
       opts.signal?.throwIfAborted();
       if (value.ok === false) throw Object.assign(new Error(`HTTP ${value.status}: response was not saved`), { code: 'HTTP_ERROR' });
@@ -164,10 +173,14 @@ export function createGuestSys(opts = {}) {
       const { base64, ...receipt } = value;
       return { ...receipt, path: saveTo, bytes: bytes.byteLength };
     }
+    if (name === 'screenshot' && value && typeof value === 'object' && value.base64) {
+      const { base64, ...receipt } = value;
+      return { ...receipt, bytes: Math.ceil(String(base64).length * 0.75), vision: true };
+    }
     return value;
   }
 
-  return { ...wrapSysFromCall(call), writtenFiles };
+  return { ...wrapSysFromCall(call), writtenFiles, visionParts };
 }
 
 /**

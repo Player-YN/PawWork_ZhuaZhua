@@ -123,36 +123,59 @@ export async function requestCanvasPreview(hostCanvas, opts = {}) {
   }
 }
 
+function factsJsonForModel(output = {}) {
+  const json = { ...output };
+  delete json.modelParts;
+  delete json.imageBase64;
+  delete json.base64;
+  delete json.dataUrl;
+  delete json.image;
+  return json;
+}
+
+function collectModelFileParts(parts = []) {
+  const value = [];
+  for (const p of parts) {
+    if (!p || typeof p !== 'object') continue;
+    if (p.type === 'text' && p.text) {
+      value.push({ type: 'text', text: String(p.text) });
+      continue;
+    }
+    if ((p.type === 'file' || p.type === 'file-data' || p.type === 'image') && (p.data || p.image)) {
+      const raw = typeof p.data === 'object' && p.data?.data != null ? p.data.data : p.data ?? p.image;
+      const data = typeof raw === 'string' ? raw : '';
+      if (data) {
+        value.push({
+          type: 'file',
+          data: { type: 'data', data },
+          mediaType: p.mediaType || 'image/jpeg'
+        });
+      }
+    }
+  }
+  return value;
+}
+
 /**
  * AI SDK tool output: pixels via content parts, metadata via JSON.
+ * When a screenshot/file is attached, facts always ride in a leading text part.
+ * Never vision-only. Never put raw image bytes in the JSON text.
  * @param {{ output?: any }} opts
  */
 export function sessionToolToModelOutput(opts = {}) {
   const o = opts.output || {};
-  if (Array.isArray(o.modelParts) && o.modelParts.length) {
-    const value = [];
-    for (const p of o.modelParts) {
-      if (!p || typeof p !== 'object') continue;
-      if (p.type === 'text' && p.text) {
-        value.push({ type: 'text', text: String(p.text) });
-        continue;
-      }
-      if ((p.type === 'file' || p.type === 'file-data' || p.type === 'image') && (p.data || p.image)) {
-        const raw = typeof p.data === 'object' && p.data?.data != null ? p.data.data : p.data ?? p.image;
-        const data = typeof raw === 'string' ? raw : '';
-        if (data) {
-          value.push({
-            type: 'file',
-            data: { type: 'data', data },
-            mediaType: p.mediaType || 'image/jpeg'
-          });
-        }
-      }
+  const json = factsJsonForModel(o);
+  const parts = Array.isArray(o.modelParts) ? o.modelParts : [];
+  const media = collectModelFileParts(parts);
+  const hasFile = media.some((p) => p.type === 'file');
+  if (hasFile) {
+    let facts = '{}';
+    try {
+      facts = JSON.stringify(json);
+    } catch {
+      facts = '{"ok":false}';
     }
-    if (value.length) return { type: 'content', value };
+    return { type: 'content', value: [{ type: 'text', text: facts }, ...media] };
   }
-  const json = { ...o };
-  delete json.modelParts;
-  delete json.imageBase64;
   return { type: 'json', value: json };
 }

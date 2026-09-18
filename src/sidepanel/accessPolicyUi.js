@@ -71,7 +71,7 @@ export function createAccessPolicyUi(deps) {
     if (!dialog) return Promise.resolve({ confirmed: false, rememberProfile: false });
     const remember = dialog.querySelector('#accessRememberProfile');
     if (remember) remember.checked = false;
-    wireDialogChrome(dialog, { closeSelectors: '[data-access-cancel], .modal-close-btn' });
+    wireDialogChrome(dialog, { closeSelectors: ['[data-access-cancel]', '.modal-close-btn'] });
     openDialog(dialog);
     return new Promise((resolve) => {
       const finish = (confirmed) => {

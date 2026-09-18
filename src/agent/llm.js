@@ -6,9 +6,10 @@
  *   pagewand_active_provider_id: string
  * Legacy keys (pagewand_api_key / pagewand_api_base / selected_model) migrate once.
  *
- * Chat baseURL + model are chat-only. Optional provider.image is a separate
- * image-generation endpoint (own baseURL / key / model; empty inherits chat).
- * Picker switches both modalities. Never overwrite chat base with an image path.
+ * Chat baseURL + model are chat-only. Image APIs are a separate active id
+ * (`pagewand_active_image_provider_id`): either purpose:'image' vendors or
+ * a leftover nested `image` on a chat record. Never overwrite chat base
+ * with an image path.
  */
 
 export const DEFAULT_BASE = 'https://api.deepseek.com/v1';
@@ -27,6 +28,7 @@ export const DEFAULT_OPENROUTER_IMAGE_MODEL = 'google/gemini-2.5-flash-image';
 /** chrome.storage.local keys */
 export const PROVIDERS_STORAGE_KEY = 'pagewand_providers';
 export const ACTIVE_PROVIDER_ID_KEY = 'pagewand_active_provider_id';
+export const ACTIVE_IMAGE_PROVIDER_ID_KEY = 'pagewand_active_image_provider_id';
 
 /**
  * UI presets — fill form templates; user still edits before save.
@@ -109,10 +111,59 @@ export const PROVIDER_PRESETS = [
  *   apiKey: string,
  *   model: string,
  *   createdAt: number,
+ *   purpose?: 'chat'|'image',
  *   image?: PageWandProviderImage,
  *   lastProbe?: PageWandProviderProbe
  * }} PageWandProvider
  */
+
+/** Dedicated 生图 vendor (not a chat API). */
+export function isImageOnlyProvider(provider) {
+  if (!provider || typeof provider !== 'object') return false;
+  if (provider.purpose === 'image') return true;
+  if (provider.purpose === 'chat') return false;
+  const hasChat =
+    !!String(provider.model || '').trim() || !!String(provider.apiKey || '').trim();
+  return !!(provider.image && provider.image.enabled && !hasChat);
+}
+
+/** Appears in the inference settings list / chat picker. */
+export function isChatProvider(provider) {
+  return !!provider && !isImageOnlyProvider(provider);
+}
+
+/** Appears in the image settings list / 生图 picker. */
+export function isImageProvider(provider) {
+  return !!(provider?.image && provider.image.enabled);
+}
+
+export function listChatProviders(providers) {
+  return (Array.isArray(providers) ? providers : []).filter(isChatProvider);
+}
+
+export function listImageProviders(providers) {
+  return (Array.isArray(providers) ? providers : []).filter(isImageProvider);
+}
+
+export function resolveActiveImageProvider(providers, activeImageProviderId) {
+  const list = listImageProviders(providers);
+  if (!list.length) return { activeImageProviderId: null, activeImage: null };
+  const want = String(activeImageProviderId || '');
+  const hit = want && list.find((p) => p.id === want);
+  const activeImage = hit || list[0];
+  return { activeImageProviderId: activeImage.id, activeImage };
+}
+
+export function imageVendorLabel(provider) {
+  const img = provider?.image && typeof provider.image === 'object' ? provider.image : {};
+  const proto = String(img.protocol || '');
+  const base = String(img.baseURL || provider?.baseURL || '');
+  if (/openrouter/i.test(proto) || /openrouter/i.test(base)) return 'OpenRouter';
+  if (/minimax/i.test(proto) || /minimax/i.test(base) || /minimaxi/i.test(base)) return 'MiniMax';
+  if (/openai/i.test(base) && !/openrouter/i.test(base)) return 'OpenAI';
+  if (provider?.purpose === 'image' && provider?.name) return provider.name;
+  return provider?.name || 'Image';
+}
 
 function normalizeLastProbe(raw) {
   if (!raw || typeof raw !== 'object') return undefined;
@@ -238,6 +289,8 @@ export function normalizeProvider(p) {
     typeof p.createdAt === 'number' && Number.isFinite(p.createdAt) ? p.createdAt : Date.now();
   /** @type {PageWandProvider} */
   const out = { id, name, baseURL, apiKey, model, createdAt };
+  const purpose = /** @type {any} */ (p).purpose;
+  if (purpose === 'image' || purpose === 'chat') out.purpose = purpose;
   const image = normalizeImageConfig(/** @type {any} */ (p).image);
   if (image) out.image = image;
   const lastProbe = normalizeLastProbe(/** @type {any} */ (p).lastProbe);
@@ -248,12 +301,20 @@ export function normalizeProvider(p) {
 /**
  * Migrate legacy single-key settings → pagewand_providers once.
  * Also ensures active id is valid when providers exist.
- * @returns {Promise<{ providers: PageWandProvider[], activeProviderId: string|null, active: PageWandProvider|null, migrated: boolean }>}
+ * @returns {Promise<{
+ *   providers: PageWandProvider[],
+ *   activeProviderId: string|null,
+ *   active: PageWandProvider|null,
+ *   activeImageProviderId: string|null,
+ *   activeImage: PageWandProvider|null,
+ *   migrated: boolean
+ * }>}
  */
 export async function loadProvidersState() {
   const res = await storageGet([
     PROVIDERS_STORAGE_KEY,
     ACTIVE_PROVIDER_ID_KEY,
+    ACTIVE_IMAGE_PROVIDER_ID_KEY,
     'pagewand_api_key',
     'pagewand_api_base',
     'selected_model',
@@ -296,20 +357,35 @@ export async function loadProvidersState() {
     }
   }
 
-  if (activeProviderId && !providers.some((p) => p.id === activeProviderId)) {
-    activeProviderId = providers[0]?.id || null;
+  const chatList = listChatProviders(providers);
+  if (activeProviderId && !chatList.some((p) => p.id === activeProviderId)) {
+    activeProviderId = chatList[0]?.id || null;
     migrated = true;
     await storageSet({ [ACTIVE_PROVIDER_ID_KEY]: activeProviderId });
   }
 
-  if (!activeProviderId && providers.length > 0) {
-    activeProviderId = providers[0].id;
+  if (!activeProviderId && chatList.length > 0) {
+    activeProviderId = chatList[0].id;
     migrated = true;
     await storageSet({ [ACTIVE_PROVIDER_ID_KEY]: activeProviderId });
+  }
+
+  const imageWant =
+    typeof res[ACTIVE_IMAGE_PROVIDER_ID_KEY] === 'string' ? res[ACTIVE_IMAGE_PROVIDER_ID_KEY] : null;
+  const imageResolved = resolveActiveImageProvider(providers, imageWant);
+  if (imageResolved.activeImageProviderId !== imageWant) {
+    await storageSet({ [ACTIVE_IMAGE_PROVIDER_ID_KEY]: imageResolved.activeImageProviderId });
   }
 
   const active = providers.find((p) => p.id === activeProviderId) || null;
-  return { providers, activeProviderId, active, migrated };
+  return {
+    providers,
+    activeProviderId,
+    active,
+    activeImageProviderId: imageResolved.activeImageProviderId,
+    activeImage: imageResolved.activeImage,
+    migrated
+  };
 }
 
 /**
@@ -317,24 +393,32 @@ export async function loadProvidersState() {
  * so older readers / status badges stay consistent.
  * @param {PageWandProvider[]} providers
  * @param {string|null} [activeProviderId]
+ * @param {string|null} [activeImageProviderId]
  */
-export async function saveProvidersState(providers, activeProviderId) {
+export async function saveProvidersState(providers, activeProviderId, activeImageProviderId) {
   const list = (Array.isArray(providers) ? providers : []).map(normalizeProvider).filter(Boolean);
+  const prev = await storageGet([ACTIVE_PROVIDER_ID_KEY, ACTIVE_IMAGE_PROVIDER_ID_KEY]);
+  const chatList = listChatProviders(list);
   let activeId =
-    activeProviderId !== undefined
-      ? activeProviderId
-      : (await storageGet([ACTIVE_PROVIDER_ID_KEY]))[ACTIVE_PROVIDER_ID_KEY] || null;
+    activeProviderId !== undefined ? activeProviderId : prev[ACTIVE_PROVIDER_ID_KEY] || null;
 
-  if (activeId && !list.some((p) => p.id === activeId)) {
-    activeId = list[0]?.id || null;
+  if (activeId && !chatList.some((p) => p.id === activeId)) {
+    activeId = chatList[0]?.id || null;
   }
-  if (!activeId && list.length > 0) activeId = list[0].id;
+  if (!activeId && chatList.length > 0) activeId = chatList[0].id;
+
+  const imageWant =
+    activeImageProviderId !== undefined
+      ? activeImageProviderId
+      : prev[ACTIVE_IMAGE_PROVIDER_ID_KEY] || null;
+  const imageResolved = resolveActiveImageProvider(list, imageWant);
 
   const active = list.find((p) => p.id === activeId) || null;
   /** @type {Record<string, unknown>} */
   const toStore = {
     [PROVIDERS_STORAGE_KEY]: list,
-    [ACTIVE_PROVIDER_ID_KEY]: activeId
+    [ACTIVE_PROVIDER_ID_KEY]: activeId,
+    [ACTIVE_IMAGE_PROVIDER_ID_KEY]: imageResolved.activeImageProviderId
   };
 
   // Mirror active provider → legacy keys (backward compatible)
@@ -352,7 +436,13 @@ export async function saveProvidersState(providers, activeProviderId) {
   }
 
   await storageSet(toStore);
-  return { providers: list, activeProviderId: activeId, active };
+  return {
+    providers: list,
+    activeProviderId: activeId,
+    active,
+    activeImageProviderId: imageResolved.activeImageProviderId,
+    activeImage: imageResolved.activeImage
+  };
 }
 
 /**
@@ -361,10 +451,18 @@ export async function saveProvidersState(providers, activeProviderId) {
  */
 export async function setActiveProviderId(providerId) {
   const { providers } = await loadProvidersState();
-  if (!providers.some((p) => p.id === providerId)) {
+  if (!listChatProviders(providers).some((p) => p.id === providerId)) {
     throw new Error('PROVIDER_NOT_FOUND');
   }
   return saveProvidersState(providers, providerId);
+}
+
+export async function setActiveImageProviderId(providerId) {
+  const { providers, activeProviderId } = await loadProvidersState();
+  if (!listImageProviders(providers).some((p) => p.id === providerId)) {
+    throw new Error('PROVIDER_NOT_FOUND');
+  }
+  return saveProvidersState(providers, activeProviderId, providerId);
 }
 
 /**
@@ -414,14 +512,14 @@ export function applyProviderImageModel(provider, modelId) {
 export async function setActiveProviderImageModel(modelId, opts = {}) {
   const id = String(modelId || '').trim();
   if (!id) throw new Error('MODEL_REQUIRED');
-  const { providers, activeProviderId } = await loadProvidersState();
-  const targetId = String(opts.providerId || activeProviderId || '').trim();
+  const { providers, activeProviderId, activeImageProviderId } = await loadProvidersState();
+  const targetId = String(opts.providerId || activeImageProviderId || '').trim();
   const idx = providers.findIndex((p) => p.id === targetId);
   if (idx < 0) throw new Error('PROVIDER_NOT_FOUND');
   const next = applyProviderImageModel(providers[idx], id);
   if (!next) throw new Error('INVALID_PROVIDER');
   providers[idx] = next;
-  return saveProvidersState(providers, targetId);
+  return saveProvidersState(providers, activeProviderId, targetId);
 }
 
 /**
@@ -453,9 +551,12 @@ export async function upsertProvider(provider, opts = {}) {
   } else {
     providers.push(next);
   }
-  const makeActive = opts.makeActive !== false;
+  const makeActive = opts.makeActive !== false && !isImageOnlyProvider(next);
   const newActive = makeActive ? next.id : activeProviderId;
-  return saveProvidersState(providers, newActive);
+  const imageId = isImageProvider(next)
+    ? (opts.makeImageActive === false ? undefined : next.id)
+    : undefined;
+  return saveProvidersState(providers, newActive, imageId);
 }
 
 /**
@@ -463,13 +564,14 @@ export async function upsertProvider(provider, opts = {}) {
  * @param {string} providerId
  */
 export async function deleteProvider(providerId) {
-  const { providers, activeProviderId } = await loadProvidersState();
+  const { providers, activeProviderId, activeImageProviderId } = await loadProvidersState();
   const list = providers.filter((p) => p.id !== providerId);
   let newActive = activeProviderId;
   if (activeProviderId === providerId) {
-    newActive = list[0]?.id || null;
+    newActive = listChatProviders(list)[0]?.id || null;
   }
-  return saveProvidersState(list, newActive);
+  const imageId = activeImageProviderId === providerId ? null : activeImageProviderId;
+  return saveProvidersState(list, newActive, imageId);
 }
 
 /**
@@ -485,7 +587,8 @@ export async function deleteProvider(providerId) {
  * }>}
  */
 export async function loadLlmSettings() {
-  const { providers, activeProviderId, active } = await loadProvidersState();
+  const { providers, activeProviderId, active, activeImageProviderId, activeImage } =
+    await loadProvidersState();
 
   if (active) {
     return {
@@ -496,8 +599,10 @@ export async function loadLlmSettings() {
       providerName: active.name || 'Provider',
       providers,
       activeProviderId,
-      /** Optional image-gen config (chat baseURL stays separate). */
-      image: active.image || undefined
+      activeImageProviderId,
+      image: activeImage?.image || undefined,
+      imageProviderId: activeImage?.id || null,
+      imageProviderName: activeImage ? imageVendorLabel(activeImage) : ''
     };
   }
 
@@ -516,6 +621,9 @@ export async function loadLlmSettings() {
     providerName: '',
     providers: [],
     activeProviderId: null,
-    image: undefined
+    activeImageProviderId: null,
+    image: undefined,
+    imageProviderId: null,
+    imageProviderName: ''
   };
 }

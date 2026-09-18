@@ -281,6 +281,7 @@ select:focus-visible {
   .task-card,
   .clip-export-menu.is-open,
   .clip-export-menu[popover]:popover-open,
+  .context-usage-popover.is-open,
   .sheet-backdrop,
   .more-sheet {
     animation: none !important;
@@ -306,11 +307,24 @@ select:focus-visible {
   .think-block.is-live .think-dot,
   .think-block.is-live .think-summary,
   .think-block.is-live.is-expanded .think-body-wrap,
-  .turn-disclosure.is-pulse {
+  .turn-disclosure.is-live .turn-disclosure-current,
+  .turn-disclosure.is-live .turn-disclosure-current-text,
+  .turn-disclosure.is-pulse,
+  .turn-disclosure.is-pulse .turn-disclosure-current,
+  .turn-disclosure.is-pulse .turn-disclosure-current-text {
     animation: none !important;
+  }
+  .turn-disclosure.is-live .turn-disclosure-current,
+  .turn-disclosure.is-live .turn-disclosure-current-text,
+  .turn-disclosure.is-pulse .turn-disclosure-current,
+  .turn-disclosure.is-pulse .turn-disclosure-current-text {
+    background-image: none;
+    color: var(--text-muted);
+    -webkit-text-fill-color: var(--text-muted);
   }
   .turn-disclosure,
   .turn-disclosure-current,
+  .turn-disclosure-current-text,
   .turn-disclosure-line {
     transition: none !important;
   }

@@ -14,7 +14,7 @@ export const SYSTEM_PROMPT_VERSION = 'v14-general-agent';
 export const OPEN_TAB_DOMAIN_CAP = 10;
 
 const OVERVIEW_CHAR_CAP = 1200;
-const WORLD_BLOCK_CHAR_CAP = 4000;
+export const WORLD_BLOCK_CHAR_CAP = 4000;
 const TRUNC_MARK = '…[truncated]';
 
 /**
@@ -54,8 +54,8 @@ export function buildSessionAgentInstructions(ctx = {}) {
  *   artifactCount?: number,
  *   focusedMentions?: Array<{kind:string,id:string,groupId?:string,label?:string,handle?:string,url?:string}>,
  *   activeWorkbook?: { artifactId?: string, overview?: object }|null,
- *   activeTab?: { url?: string, title?: string, origin?: string }|null,
- *   focusPage?: { url?: string, title?: string, origin?: string }|null,
+ *   activeTab?: { url?: string, title?: string, origin?: string, tabId?: number }|null,
+ *   focusPage?: { url?: string, title?: string, origin?: string, tabId?: number }|null,
  *   userRequestedPlan?: boolean,
  *   tabOverview?: { tabCount?: number, domains?: string[] }|null
  * }} ctx
@@ -202,7 +202,7 @@ export function buildWorldStateBlock(ctx = {}) {
       key: 'activeTab',
       lines: [
         `activeTab=${JSON.stringify(activeTab)}`,
-        'activeTab is the live browser tab (document identity, not a SelectionGroup).'
+        'activeTab is the live browser tab (document identity, not a SelectionGroup). Pass action.tabId from activeTab.tabId when present; the host does not switch Chrome focus.'
       ]
     });
   }
@@ -305,9 +305,13 @@ function compactWorldPage(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const url = String(raw.url || '').trim().slice(0, 2000);
   if (!url) return null;
-  return {
+  const tabId = Number(raw.tabId ?? raw.id);
+  /** @type {{ url: string, title: string, origin: string, tabId?: number }} */
+  const page = {
     url,
     title: String(raw.title || '').slice(0, 120),
     origin: String(raw.origin || '').slice(0, 200)
   };
+  if (Number.isInteger(tabId) && tabId > 0) page.tabId = tabId;
+  return page;
 }

@@ -56,6 +56,7 @@ src/sidepanel/
   executionStatus.js # host-fact current / next=task.nextAction only; approval/journal phases; disclosureMode
   botStatusUi.js     # hidden announcer; nextStatusCopy meta only when no nextAction
   turnDisclosureUi.js # per-turn instrument under think; fold / hydrate / exclusive open
+  contextUsageUi.js  # composer Context ring + hover usage popover (estimate vs api)
   accessPolicyUi.js  # Guarded / Full Access chip + one-time risk dialog
   approvalUi.js      # host delete/ambiguous approval; payment wait has no approve button
   tabLeaseUi.js      # TAB_LEASED / NEED_EXPLICIT_TAB human copy (no new-profile flow)
@@ -102,7 +103,7 @@ Durable task cards（`taskStatus.js`）≠ 对话流里的 live `.task-card`（�
 
 对话流里右对齐的粉胶囊是 **用户气泡**（`.msg.user`）。文案刚好是「继续」时也不是控件：durable `resume` 只出现在 `paused` 任务卡上；clarify 的「继续」只在多问题澄清条里。思考条复用逻辑在 `thinkUi.js`（一轮一条，禁止再叠一条「思考中」）。有真实 provider thought 时块必须在：流式与封条后都可展开，默认折叠，`aria-expanded` 与 Enter/Space。行动摘要不能顶替它。`#turnJumpRail` 走右槽，不盖思考条展开箭头。
 
-`#botStatus` 已降级为隐藏 polite announcer（另有 `#botStatusLive` / `#botStatusAssertive`）。完成后不再在会话顶画完成/目标页/瞄准/任务大卡。运行中的 current、真实 next、最多 8 条行动摘要挂在该轮 `.agent-turn` 的思考块下方（`.turn-disclosure`）；无 provider thought 时披露仍占同一位置，不造假思考块。成功完成压成该回合一行 `完成 · {duration} · {n} 个交付物`（默认折叠，按需 hydrate）。Stop 直接折成 `已停止`。只有等待用户、宿主审批、租约冲突、失败、durable 暂停保持展开。`#accessPolicyChip` 在 composer 浮层常驻，不跟大卡隐藏。审批/付款卡在披露下方，折叠完成墙不得盖住它们。next 仍只来自 `task.nextAction`。历史摘要按 `executionId` 展开时才 hydrate，同时只开一张，内存完整投影只留 8 轮。思考块合同不变，状态不从 thought 推断。Stop 走 `abortCurrentExecution({sessionId})`。选区是可选瞄准，不是权限门。
+`#botStatus` 已降级为隐藏 polite announcer（另有 `#botStatusLive` / `#botStatusAssertive`）。完成后不再在会话顶画完成/目标页/瞄准/任务大卡。运行中的 `.turn-disclosure` 只画一行宿主 current 动作（`liveActionBrief`）：灰字 + 直播 流光只扫字形；工具间隙保持上一句，不卸挂；不画 next、租约占用、政策 chip、页面 snapshot「读取当前标签」、也不画「成功 页面·…」行。无 provider thought 时披露仍占思考块下方同一位置，不造假思考块。成功完成压成该回合一行 `完成 · {duration} · {n} 个交付物`（默认折叠，按需 hydrate）。Stop 直接折成 `已停止`。只有等待用户、宿主审批、租约冲突、失败、durable 暂停保持展开。`#accessPolicyChip` 在 composer 浮层常驻，不跟大卡隐藏。审批/付款卡在披露下方，折叠完成墙不得盖住它们。next 仍只来自 `task.nextAction`，且不画进直播摘要。历史摘要按 `executionId` 展开时才 hydrate，同时只开一张，内存完整投影只留 8 轮。思考块合同不变（卡片 chrome），状态不从 thought 推断。Stop 走 `abortCurrentExecution({sessionId})`。选区是可选瞄准，不是权限门。
 
 交付物轨主 chip 是五家族（`docs` / `data` / `web` / `media` / `files`）。`design`/`slides` 不是主 chip，legacy 数据折进其它。打开面与徽标由 `artifactCapability.js` 单一映射驱动；未知文件进检查器，text-like 安全只读，未知 HTML/JS 不在 extension origin 执行。
 

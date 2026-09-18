@@ -3,11 +3,17 @@ import assert from 'node:assert/strict';
 
 import {
   applyExecutionStatus,
+  collapseConsecutiveSummary,
   createExecutionStatus,
+  currentFromToolCall,
   disclosureMode,
   foldStubFromState,
   formatFoldLine,
+  formatSummaryRowText,
   hydrateStatusFromEvents,
+  isPageReadStatus,
+  liveActionBrief,
+  persistLiveActionBrief,
   projectGlobalPhase,
   rememberEndedProjection,
   shouldKeepApprovalVisible,
@@ -19,8 +25,13 @@ import { createBotStatusUi } from '../src/sidepanel/botStatusUi.js';
 import {
   exclusiveHistoricalOpen,
   insertTurnDisclosure,
+  LIVE_ACTION_SHINE,
+  planLiveDisclosurePaint,
   prefersReducedMotion
 } from '../src/sidepanel/turnDisclosureUi.js';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   bindThinkToggle,
   resolveLiveDisclosureHost,
@@ -290,7 +301,8 @@ test('hydrate replays tool events and drops thought text', () => {
   );
   assert.equal(state.summary.some((row) => /提交/.test(row.label)), true);
   assert.equal(JSON.stringify(state.summary).includes('编一个下一步'), false);
-  assert.equal(state.current, null);
+  assert.match(state.current?.text || '', /已点击|提交/);
+  assert.equal(state.current?.status, 'success');
 });
 
 test('memory LRU evicts the 9th ended execution to a stub', () => {
@@ -404,10 +416,245 @@ test('reduced-motion helper reads matchMedia', () => {
   assert.equal(prefersReducedMotion(() => ({ matches: false })), false);
 });
 
+test('live action brief is the current host action only', () => {
+  let state = createExecutionStatus({ sessionId: 's' });
+  state = applyExecutionStatus(state, { type: 'execution-start', executionId: 'e1' });
+  assert.equal(liveActionBrief(state), '');
+  state = applyExecutionStatus(state, {
+    type: 'tool-call',
+    toolCallId: 'snap',
+    name: 'action',
+    args: { op: 'snapshot' }
+  });
+  assert.equal(isPageReadStatus(state.current), true);
+  assert.equal(liveActionBrief(state), '');
+  state = applyExecutionStatus(state, {
+    type: 'tool-call',
+    toolCallId: 'c2',
+    name: 'action',
+    args: { op: 'click', name: '提交' }
+  });
+  assert.match(liveActionBrief(state), /正在点击|Clicking/);
+  state = applyExecutionStatus(state, {
+    type: 'tool-result',
+    toolCallId: 'c2',
+    name: 'action',
+    ok: true,
+    result: { ok: true }
+  });
+  assert.equal(disclosureMode(state), 'live');
+  assert.match(liveActionBrief(state), /正在点击|Clicking/);
+  assert.doesNotMatch(liveActionBrief(state), /已点击|Clicked|成功 页面|Success/);
+  assert.equal(planLiveDisclosurePaint(state).hidden, false);
+  assert.equal(state.next, null);
+  assert.equal(nextStatusCopy(state, zh).text, '下一步：等待模型决定');
+});
+
+test('page-read and inspect html never become the live brief', () => {
+  assert.equal(isPageReadStatus(currentFromToolCall('action', { op: 'snapshot' }, 'zh')), true);
+  assert.equal(isPageReadStatus(currentFromToolCall('inspect', { view: 'html' }, 'zh')), true);
+  assert.equal(isPageReadStatus(currentFromToolCall('action', { op: 'click', name: '提交' }, 'zh')), false);
+  let sticky = createExecutionStatus({ sessionId: 's' });
+  sticky = applyExecutionStatus(sticky, { type: 'execution-start', executionId: 'e2' });
+  sticky = applyExecutionStatus(sticky, {
+    type: 'approval-required',
+    risk: 'delete',
+    summary: '确认删除',
+    approvalId: 'a1'
+  });
+  assert.equal(disclosureMode(sticky), 'sticky');
+  assert.match(liveActionBrief(sticky), /确认删除|等待你确认|Waiting for your confirmation/);
+});
+
 test('active unknown next stays meta waiting for the model', () => {
   let state = createExecutionStatus({ sessionId: 's' });
   state = applyExecutionStatus(state, { type: 'execution-start', executionId: 'e1' });
   assert.equal(state.next, null);
   assert.equal(disclosureMode(state), 'live');
   assert.equal(nextStatusCopy(state, zh).text, '下一步：等待模型决定');
+});
+
+test('current brief updates from latest host write, not the first generic label', () => {
+  let state = createExecutionStatus({ sessionId: 's' });
+  state = applyExecutionStatus(state, { type: 'execution-start', executionId: 'e1' });
+  state = applyExecutionStatus(state, {
+    type: 'tool-call',
+    toolCallId: 'c1',
+    name: 'run',
+    args: { code: 'await fs.writeFile("/artifacts/a.html", "x")' }
+  });
+  assert.match(state.current.text, /运行访客代码|Running guest code/);
+  assert.equal(state.current.status, 'running');
+  state = applyExecutionStatus(state, {
+    type: 'tool-result',
+    toolCallId: 'c1',
+    name: 'run',
+    ok: true,
+    result: { ok: true, artifacts: [{ name: 'a.html', path: '/artifacts/a.html' }] }
+  });
+  assert.match(state.current.text, /已写 a\.html|Wrote a\.html/);
+  assert.equal(state.current.status, 'success');
+  state = applyExecutionStatus(state, {
+    type: 'tool-call',
+    toolCallId: 'c2',
+    name: 'run',
+    args: { op: 'write_artifact', path: '/artifacts/b.css' }
+  });
+  assert.match(state.current.text, /正在写 b\.css|Writing b\.css/);
+  assert.equal(state.next, null);
+  assert.equal(nextStatusCopy(state, zh).text, '下一步：等待模型决定');
+});
+
+test('consecutive identical writes collapse to a count', () => {
+  let state = createExecutionStatus({ sessionId: 's' });
+  state = applyExecutionStatus(state, { type: 'execution-start', executionId: 'e1' });
+  for (let i = 1; i <= 6; i += 1) {
+    state = applyExecutionStatus(state, {
+      type: 'tool-call',
+      toolCallId: `w${i}`,
+      name: 'run',
+      args: { op: 'write_artifact' }
+    });
+    state = applyExecutionStatus(state, {
+      type: 'tool-result',
+      toolCallId: `w${i}`,
+      name: 'run',
+      ok: true,
+      result: { ok: true }
+    });
+  }
+  const collapsed = collapseConsecutiveSummary(state.summary);
+  assert.equal(collapsed.length, 1);
+  assert.equal(collapsed[0].count, 6);
+  assert.match(collapsed[0].label, /写入交付物|Write deliverable/);
+  assert.equal(formatSummaryRowText(collapsed[0], zh), '写入×6');
+  assert.equal(formatSummaryRowText(collapsed[0], en), 'Write×6');
+  const visible = visibleSummaryRows(state.summary, 8);
+  assert.equal(visible.length, 1);
+  assert.equal(state.current?.status, 'success');
+  assert.match(state.current.text, /已写入交付物|Wrote a deliverable/);
+});
+
+test('completed folds while approval and payment stay sticky', () => {
+  let state = createExecutionStatus({ sessionId: 's' });
+  state = applyExecutionStatus(state, { type: 'execution-start', executionId: 'e1' });
+  state = applyExecutionStatus(state, {
+    type: 'tool-call',
+    toolCallId: 'c1',
+    name: 'run',
+    args: { code: '1' }
+  });
+  state = applyExecutionStatus(state, {
+    type: 'tool-result',
+    toolCallId: 'c1',
+    name: 'run',
+    ok: true,
+    result: { ok: true }
+  });
+  state = applyExecutionStatus(state, { type: 'execution-end', status: 'completed', endedAt: 8_000 });
+  assert.equal(disclosureMode(state), 'folded');
+  assert.equal(shouldKeepApprovalVisible(state, 'execution-end'), false);
+
+  let sticky = createExecutionStatus({ sessionId: 's' });
+  sticky = applyExecutionStatus(sticky, { type: 'execution-start', executionId: 'e2' });
+  sticky = applyExecutionStatus(sticky, {
+    type: 'approval-required',
+    risk: 'delete',
+    summary: '确认删除',
+    approvalId: 'a1'
+  });
+  sticky = applyExecutionStatus(sticky, { type: 'assistant-final', status: 'completed' });
+  assert.equal(disclosureMode(sticky), 'sticky');
+  assert.equal(shouldKeepApprovalVisible(sticky, 'assistant-final'), true);
+});
+
+test('live brief persists through page-read hops and settled success', () => {
+  let state = createExecutionStatus({ sessionId: 's' });
+  state = applyExecutionStatus(state, { type: 'execution-start', executionId: 'e1' });
+  state = applyExecutionStatus(state, {
+    type: 'tool-call',
+    toolCallId: 'c1',
+    name: 'action',
+    args: { op: 'click', name: '提交' }
+  });
+  const running = liveActionBrief(state);
+  assert.match(running, /正在点击|Clicking/);
+  state = applyExecutionStatus(state, {
+    type: 'tool-result',
+    toolCallId: 'c1',
+    name: 'action',
+    ok: true,
+    result: { ok: true }
+  });
+  assert.equal(liveActionBrief(state), running);
+  assert.equal(planLiveDisclosurePaint(state).hidden, false);
+  state = applyExecutionStatus(state, {
+    type: 'tool-call',
+    toolCallId: 'snap',
+    name: 'action',
+    args: { op: 'snapshot' }
+  });
+  assert.equal(isPageReadStatus(state.current), true);
+  assert.equal(liveActionBrief(state), running);
+  assert.doesNotMatch(liveActionBrief(state), /读取当前标签|Reading the current tab/);
+  state = applyExecutionStatus(state, {
+    type: 'tool-result',
+    toolCallId: 'snap',
+    name: 'action',
+    ok: true,
+    result: { ok: true }
+  });
+  assert.equal(liveActionBrief(state), running);
+  const empty = createExecutionStatus({ sessionId: 's' });
+  assert.equal(persistLiveActionBrief(empty, running), running);
+  assert.equal(planLiveDisclosurePaint(empty, running).hidden, false);
+  assert.equal(planLiveDisclosurePaint(empty).hidden, true);
+});
+
+test('live brief stays after settle until product folds', () => {
+  let state = createExecutionStatus({ sessionId: 's' });
+  state = applyExecutionStatus(state, { type: 'execution-start', executionId: 'e1', startedAt: 1_000 });
+  state = applyExecutionStatus(state, {
+    type: 'tool-call',
+    toolCallId: 'c1',
+    name: 'action',
+    args: { op: 'click', name: '提交' }
+  });
+  const running = liveActionBrief(state);
+  state = applyExecutionStatus(state, {
+    type: 'tool-result',
+    toolCallId: 'c1',
+    name: 'action',
+    ok: true,
+    result: { ok: true }
+  });
+  state = applyExecutionStatus(state, { type: 'execution-end', status: 'completed', endedAt: 8_000 });
+  assert.equal(disclosureMode(state), 'folded');
+  assert.equal(liveActionBrief(state), running);
+  state = applyExecutionStatus(state, { type: 'execution-start', executionId: 'e2' });
+  assert.equal(liveActionBrief(state), '');
+});
+
+test('live shine targets glyphs, not the row chrome', () => {
+  assert.equal(LIVE_ACTION_SHINE.glyphClass, 'turn-disclosure-current-text');
+  assert.equal(LIVE_ACTION_SHINE.rowClass, 'turn-disclosure-current');
+  assert.equal(LIVE_ACTION_SHINE.clip, 'text');
+  const plan = planLiveDisclosurePaint({
+    phase: 'running',
+    current: { text: '正在点击 提交', status: 'running', source: 'tool-call' },
+    lastLiveAction: '正在点击 提交'
+  });
+  assert.equal(plan.shineTarget, 'turn-disclosure-current-text');
+  assert.equal(plan.shineClip, 'text');
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const css = readFileSync(join(root, 'src/sidepanel.css'), 'utf8');
+  const motion = readFileSync(join(root, 'src/sidepanel/css/motion.css'), 'utf8');
+  const shineAt = css.indexOf('Live 摘要');
+  assert.ok(shineAt >= 0);
+  const shineBlock = css.slice(shineAt, shineAt + 1200);
+  assert.match(shineBlock, /\.turn-disclosure-current-text/);
+  assert.match(shineBlock, /background-clip:\s*text/);
+  assert.equal(/\.turn-disclosure\.is-live \.turn-disclosure-current,/.test(shineBlock), false);
+  assert.match(motion, /\.turn-disclosure-current-text/);
+  assert.match(motion, /-webkit-text-fill-color:\s*var\(--text-muted\)/);
 });

@@ -8,6 +8,12 @@ import {
   upsertProvider,
   deleteProvider,
   generateProviderId,
+  isChatProvider,
+  isImageOnlyProvider,
+  listChatProviders,
+  listImageProviders,
+  imageVendorLabel,
+  setActiveImageProviderId,
   PROVIDER_PRESETS,
   DEFAULT_BASE,
   OPENROUTER_API_BASE,
@@ -18,7 +24,14 @@ import {
 } from './agent/llm.js';
 import {
   loadWebAcquireSettings,
-  saveWebAcquireSettings
+  saveWebAcquireSettings,
+  firecrawlCreditUsageUrls,
+  firecrawlAuthHeaders,
+  summarizeFirecrawlCreditUsage,
+  tavilySearchProbeUrl,
+  tavilySearchProbeBody,
+  braveSearchProbeUrl,
+  braveSearchProbeHeaders
 } from './agent/webAcquireSettings.js';
 // Product Session Workspace Runtime lives in the offscreen document.
 import { workspaceRpc } from './agent/vnext/host/workspaceClient.js';
@@ -84,6 +97,7 @@ import {
 } from './sidepanel/executionStatus.js';
 import { createBotStatusUi } from './sidepanel/botStatusUi.js';
 import { createTurnDisclosureUi } from './sidepanel/turnDisclosureUi.js';
+import { createContextUsageUi, projectContextUsage } from './sidepanel/contextUsageUi.js';
 import { createAccessPolicyUi } from './sidepanel/accessPolicyUi.js';
 import { createApprovalUi } from './sidepanel/approvalUi.js';
 import { approvalBelongsToSession } from './sidepanel/sessionIsolation.js';
@@ -518,6 +532,8 @@ let clipSelectedIds = new Set();
 /** Popover controller for clipboard export — must be top-level before boot (avoid TDZ). */
 /** @type {{ close: () => void, isOpen: () => boolean, usesNative: boolean } | null} */
 let clipExportPopover = null;
+/** @type {ReturnType<typeof createContextUsageUi>|null} */
+let contextUsageUi = null;
 let toastTimer = null;
 let autoPinnedTextKeys = new Set();
 
@@ -645,6 +661,7 @@ function initSidePanel() {
   refreshAgentStatusBadge();
   void refreshImageGenChip();
   applyI18n();
+  safe('wireContextUsage', wireContextUsage);
   renderSelectionUI();
   void refreshWorkspaceGroupState();
   renderClipboardUI();
@@ -972,6 +989,7 @@ function applyI18n() {
   restartComposerTypewriter();
   taskStatusUi.render();
   refreshBotChrome();
+  applyContextUsage(sessions.find((s) => s.id === activeSessionId)?.contextUsage || {});
 }
 
 let composerTypewriterTimer = 0;
@@ -6164,41 +6182,56 @@ function streamEventText(value) {
   return '';
 }
 
-function applyContextUsage(ev = {}) {
-  const ring = $('contextRing');
-  if (!ring) return;
+function gatherContextUsageInput(lastUsage = {}) {
+  const sid = getWorkspaceSessionId();
+  const sess = sessions.find((s) => s.id === sid) || sessions.find((s) => s.id === activeSessionId);
+  const merged = { ...(sess?.contextUsage || {}), ...lastUsage };
   const hit = findCatalogModel(catalogModels, selectedModel);
   const windowN =
-    Number(ev.contextWindow) > 2048
-      ? Math.round(Number(ev.contextWindow))
+    Number(merged.contextWindow) > 2048
+      ? Math.round(Number(merged.contextWindow))
       : resolveContextWindow(selectedModel, hit);
-  const tokens = Math.max(0, Number(ev.promptTokens) || 0);
-  const ratioRaw =
-    ev.ratio != null && Number.isFinite(Number(ev.ratio))
-      ? Number(ev.ratio)
-      : tokens / windowN;
-  const ratio = Math.max(0, Math.min(1, ratioRaw));
-  const pct = Math.round(ratio * 100);
-  const compacting = ev.compacting === true || ev.type === 'compacting';
-  ring.style.setProperty('--context-ratio', String(ratio));
-  ring.dataset.ratio = String(pct);
-  ring.setAttribute('aria-valuenow', String(pct));
-  ring.classList.toggle('is-compacting', compacting);
-  ring.classList.toggle('is-warm', !compacting && ratio >= 0.8);
-  document.querySelector('footer.composer')?.classList.toggle('is-compacting-context', compacting);
-  const label = $('contextRingLabel');
-  if (label) {
-    label.hidden = !compacting;
-    label.textContent = t('compacting');
+  return {
+    lastUsage: merged,
+    contextWindow: windowN,
+    messages: sess?.messages || [],
+    skills: skillPickerCatalog || [],
+    artifacts: sessionArtifacts || [],
+    tabCount: mentionPageCandidates()?.length || 0,
+    aimedCount: currentAimedCount(),
+    groupCount: (workspaceGroupState.groups || []).length
+  };
+}
+
+function wireContextUsage() {
+  if (contextUsageUi) return contextUsageUi;
+  if (!$('contextUsageBtn') || !$('contextUsagePopover')) return null;
+  contextUsageUi = createContextUsageUi({
+    t,
+    getButton: () => $('contextUsageBtn'),
+    getPopover: () => $('contextUsagePopover'),
+    gather: () => gatherContextUsageInput(),
+    prefersReducedMotion: () => {
+      try {
+        return matchMedia('(prefers-reduced-motion: reduce)').matches === true;
+      } catch {
+        return false;
+      }
+    }
+  });
+  return contextUsageUi;
+}
+
+function applyContextUsage(ev = {}) {
+  const sid = getWorkspaceSessionId();
+  const sess = sessions.find((s) => s.id === sid);
+  if (sess && (ev.promptTokens != null || ev.source || ev.type === 'context-usage' || ev.type === 'compacting')) {
+    sess.contextUsage = { ...sess.contextUsage, ...ev };
   }
-  const tip = compacting
-    ? t('compacting')
-    : t('contextUsageDetail')
-        .replace('{used}', tokens.toLocaleString())
-        .replace('{window}', windowN.toLocaleString())
-        .replace('{pct}', String(pct));
-  ring.title = tip;
-  ring.setAttribute('aria-label', tip);
+  const extras = { compacting: ev.compacting === true || ev.type === 'compacting' };
+  const projection = projectContextUsage(gatherContextUsageInput(ev));
+  const ui = wireContextUsage();
+  if (ui) ui.render(projection, extras);
 }
 
 /** Live clarify overlay — ephemeral chrome, never persisted in the bubble. */
@@ -6744,11 +6777,7 @@ function handleSessionWorkspaceEvent(request) {
   }
   if (ev?.type === 'compact-done') {
     if (sid && sid !== foreground) return true;
-    const ring = $('contextRing');
-    ring?.classList.remove('is-compacting');
-    const label = $('contextRingLabel');
-    if (label) label.hidden = true;
-    document.querySelector('footer.composer')?.classList.remove('is-compacting-context');
+    applyContextUsage({ compacting: false, type: 'context-usage' });
     return true;
   }
   if (!sid) return true;
@@ -11416,14 +11445,7 @@ async function pickComposerImageModel(modelId, providerId) {
   const id = String(modelId || '').trim();
   if (!id) return;
   await persistComposerImageModel(id, providerId);
-  let activeId = null;
-  try {
-    const state = await loadProvidersState();
-    activeId = state.activeProviderId || null;
-  } catch (_) {}
-  if (!providerId || providerId === activeId) {
-    selectedImageModel = id;
-  }
+  selectedImageModel = id;
   renderModelSelectMenu();
   refreshAgentStatusBadge();
   setModelSubmenuOpen(false);
@@ -11457,6 +11479,8 @@ async function modelsForProvider(provider) {
 
 /** Accordion: which inference API is expanded in the composer picker. null = active provider. */
 let modelPickerOpenId = null;
+/** Independent 生图 accordion. */
+let modelPickerImageOpenId = null;
 /** In-memory 推理 / 生图 collapse. Default expand when that list exists. */
 const modelPickerPaneOpen = { chat: true, image: true };
 /** Per-list search. Chat query never filters 生图, and vice versa. */
@@ -11486,19 +11510,22 @@ async function renderModelPickerList() {
   list.innerHTML = '';
   let providers = [];
   let activeProviderId = null;
+  let activeImageProviderId = null;
   try {
     const state = await loadProvidersState();
     providers = Array.isArray(state.providers) ? state.providers : [];
     activeProviderId = state.activeProviderId || null;
+    activeImageProviderId = state.activeImageProviderId || null;
   } catch (_) {}
   const addItem = (host, id, label, providerId, kind) => {
     const mid = String(id || '').trim();
     if (!mid) return;
     const isImage = kind === 'image';
-    const sameProvider = !providerId || providerId === activeProviderId;
+    const sameChat = !providerId || providerId === activeProviderId;
+    const sameImage = !providerId || providerId === activeImageProviderId;
     const isActive = isImage
-      ? sameProvider && mid === selectedImageModel
-      : sameProvider && mid === (select?.value || selectedModel);
+      ? sameImage && mid === selectedImageModel
+      : sameChat && mid === (select?.value || selectedModel);
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'model-select-item' + (isActive ? ' is-active' : '');
@@ -11618,109 +11645,151 @@ async function renderModelPickerList() {
     pane.append(head, body);
     host.appendChild(pane);
   };
-  let any = false;
-  const rows = providers.length ? providers : [{ id: '', name: '', model: select?.value || selectedModel }];
-  const accordion = rows.length > 1;
-  const openId =
-    modelPickerOpenId === null ? activeProviderId || rows[0]?.id || '' : modelPickerOpenId;
-  for (const p of rows) {
-    const pack = await modelsForProvider(p);
-    const expanded = accordion ? p.id === openId : true;
-    const n = (pack.chatTotal || pack.chat.length) + (pack.image.length ? pack.imageTotal : 0);
-    const wrap = document.createElement('div');
-    wrap.className = 'model-select-provider';
-    wrap.dataset.providerId = p.id || '';
-
-    const row = document.createElement('div');
-    row.className = 'model-select-group-row';
-
-    if (p.id && accordion) {
-      const groupBtn = document.createElement('button');
-      groupBtn.type = 'button';
-      groupBtn.className =
-        'model-select-group' +
-        (expanded ? ' is-open' : '') +
-        (p.id === activeProviderId ? ' is-active' : '');
-      const caret = document.createElement('span');
-      caret.className = 'model-select-group-caret';
-      caret.textContent = expanded ? '▾' : '▸';
-      const lab = document.createElement('span');
-      lab.className = 'model-select-group-label';
-      lab.textContent = `${p.name || p.id || 'API'} · ${n}`;
-      groupBtn.append(caret, lab);
-      groupBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        modelPickerOpenId = p.id === openId ? '' : p.id;
-        void renderModelPickerList();
-      });
-      row.appendChild(groupBtn);
-    } else if (p.id) {
-      const lab = document.createElement('div');
-      lab.className = 'model-select-group is-static' + (p.id === activeProviderId ? ' is-active' : '');
-      const name = document.createElement('span');
-      name.className = 'model-select-group-label';
-      name.textContent = `${p.name || p.id || 'API'} · ${n}`;
-      lab.appendChild(name);
-      row.appendChild(lab);
+  const appendModality = async (kind, title, rows, openId, setOpenId, activeId) => {
+    const section = document.createElement('section');
+    section.className = 'model-select-modality';
+    section.dataset.kind = kind;
+    const heading = document.createElement('div');
+    heading.className = 'model-select-modality-title';
+    heading.textContent = title;
+    section.appendChild(heading);
+    const accordion = rows.length > 1;
+    let anyRow = false;
+    for (const p of rows) {
+      const pack = await modelsForProvider(p);
+      const items = kind === 'image' ? pack.image : pack.chat;
+      const n = kind === 'image' ? pack.imageTotal || items.length : pack.chatTotal || items.length;
+      const expanded = accordion ? p.id === openId : true;
+      const wrap = document.createElement('div');
+      wrap.className = 'model-select-provider';
+      wrap.dataset.providerId = p.id || '';
+      wrap.dataset.kind = kind;
+      const row = document.createElement('div');
+      row.className = 'model-select-group-row';
+      const vendorName = kind === 'image' ? imageVendorLabel(p) : p.name || p.id || 'API';
+      if (p.id && accordion) {
+        const groupBtn = document.createElement('button');
+        groupBtn.type = 'button';
+        groupBtn.className =
+          'model-select-group' +
+          (expanded ? ' is-open' : '') +
+          (p.id === activeId ? ' is-active' : '');
+        const caret = document.createElement('span');
+        caret.className = 'model-select-group-caret';
+        caret.textContent = expanded ? '▾' : '▸';
+        const lab = document.createElement('span');
+        lab.className = 'model-select-group-label';
+        lab.textContent = `${vendorName} · ${n}`;
+        groupBtn.append(caret, lab);
+        groupBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpenId(p.id === openId ? '' : p.id);
+          void renderModelPickerList();
+        });
+        row.appendChild(groupBtn);
+      } else if (p.id) {
+        const lab = document.createElement('div');
+        lab.className = 'model-select-group is-static' + (p.id === activeId ? ' is-active' : '');
+        const name = document.createElement('span');
+        name.className = 'model-select-group-label';
+        name.textContent = `${vendorName} · ${n}`;
+        lab.appendChild(name);
+        row.appendChild(lab);
+      }
+      if (p.id) {
+        const probeBtn = document.createElement('button');
+        probeBtn.type = 'button';
+        probeBtn.className = 'model-select-probe';
+        const probeKey = `${kind}:${p.id}`;
+        const probing = modelPickerProbe.busy && modelPickerProbe.id === probeKey;
+        probeBtn.disabled = probing;
+        probeBtn.setAttribute('aria-label', t('modelPickerProbe'));
+        probeBtn.title = t(kind === 'image' ? 'apiProbeImageBtn' : 'modelPickerProbeHint');
+        probeBtn.textContent = probing ? t('modelPickerProbing') : t('modelPickerProbe');
+        probeBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void onPickerProbeProvider(p, kind);
+        });
+        probeBtn.addEventListener('keydown', (e) => e.stopPropagation());
+        row.appendChild(probeBtn);
+      }
+      if (row.childElementCount) wrap.appendChild(row);
+      if (modelPickerProbe.error && modelPickerProbe.id === `${kind}:${p.id}` && !modelPickerProbe.busy) {
+        const err = document.createElement('p');
+        err.className = 'model-select-probe-err';
+        err.textContent = t('apiProbeFail').replace('{err}', modelPickerProbe.error);
+        wrap.appendChild(err);
+      }
+      if (expanded) {
+        const body = document.createElement('div');
+        body.className = 'model-select-group-body';
+        const current =
+          kind === 'image'
+            ? p.id === activeImageProviderId
+              ? selectedImageModel || p.image?.model
+              : p.image?.model
+            : p.id === activeProviderId
+              ? select?.value || selectedModel || p.model
+              : p.model;
+        addPane(body, kind, title, items, p.id, current);
+        if (body.childElementCount) wrap.appendChild(body);
+      }
+      section.appendChild(wrap);
+      anyRow = anyRow || items.length > 0;
     }
-
-    if (p.id) {
-      const probeBtn = document.createElement('button');
-      probeBtn.type = 'button';
-      probeBtn.className = 'model-select-probe';
-      const probing = modelPickerProbe.busy && modelPickerProbe.id === p.id;
-      probeBtn.disabled = probing;
-      probeBtn.setAttribute('aria-label', t('modelPickerProbe'));
-      probeBtn.title = t('modelPickerProbeHint');
-      probeBtn.textContent = probing ? t('modelPickerProbing') : t('modelPickerProbe');
-      probeBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        void onPickerProbeProvider(p);
-      });
-      probeBtn.addEventListener('keydown', (e) => e.stopPropagation());
-      row.appendChild(probeBtn);
+    if (!rows.length) {
+      const empty = document.createElement('div');
+      empty.className = 'model-select-empty';
+      empty.textContent = t('modelPickerEmpty');
+      section.appendChild(empty);
     }
-    if (row.childElementCount) wrap.appendChild(row);
+    list.appendChild(section);
+    return anyRow;
+  };
 
-    if (modelPickerProbe.error && modelPickerProbe.id === p.id && !modelPickerProbe.busy) {
-      const err = document.createElement('p');
-      err.className = 'model-select-probe-err';
-      err.textContent = t('apiProbeFail').replace('{err}', modelPickerProbe.error);
-      wrap.appendChild(err);
-    }
-
-    list.appendChild(wrap);
-    if (!expanded) continue;
-    const body = document.createElement('div');
-    body.className = 'model-select-group-body';
-    const sameProvider = !p.id || p.id === activeProviderId;
-    const chatCurrent = sameProvider ? select?.value || selectedModel || p.model : p.model;
-    const imageCurrent = sameProvider ? selectedImageModel || p.image?.model : p.image?.model;
-    addPane(body, 'chat', t('modelPickerChat'), pack.chat, p.id, chatCurrent);
-    addPane(body, 'image', t('modelPickerImage'), pack.image, p.id, imageCurrent);
-    if (body.childElementCount) wrap.appendChild(body);
-    any = any || pack.chat.length > 0 || pack.image.length > 0;
-  }
-  if (!any) {
+  const chatRows = listChatProviders(providers);
+  const imageRows = listImageProviders(providers);
+  const chatOpen =
+    modelPickerOpenId === null ? activeProviderId || chatRows[0]?.id || '' : modelPickerOpenId;
+  const imageOpen =
+    modelPickerImageOpenId === null
+      ? activeImageProviderId || imageRows[0]?.id || ''
+      : modelPickerImageOpenId;
+  const anyChat = await appendModality(
+    'chat',
+    t('modelPickerChat'),
+    chatRows.length ? chatRows : select?.value || selectedModel
+      ? [{ id: activeProviderId || '', name: '', model: select?.value || selectedModel }]
+      : [],
+    chatOpen,
+    (id) => {
+      modelPickerOpenId = id;
+    },
+    activeProviderId
+  );
+  await appendModality(
+    'image',
+    t('modelPickerImage'),
+    imageRows,
+    imageOpen,
+    (id) => {
+      modelPickerImageOpenId = id;
+    },
+    activeImageProviderId
+  );
+  if (!anyChat && !(select?.value || selectedModel) && !imageRows.length) {
     const empty = document.createElement('div');
     empty.className = 'model-select-empty';
     empty.textContent = t('modelPickerEmpty');
     list.appendChild(empty);
-    const fallback = select?.value || selectedModel;
-    if (fallback) {
-      const body = document.createElement('div');
-      body.className = 'model-select-group-body';
-      addPane(body, 'chat', t('modelPickerChat'), [{ id: fallback, name: fallback }], activeProviderId, fallback);
-      list.appendChild(body);
-    }
   }
 }
 
-function paintPickerProbeRow(providerId, { busy, error } = {}) {
+function paintPickerProbeRow(providerId, { busy, error, kind } = {}) {
   const wrap = document.querySelector(
-    `#modelSelectList .model-select-provider[data-provider-id="${CSS.escape(String(providerId || ''))}"]`
+    `#modelSelectList .model-select-provider[data-kind="${kind === 'image' ? 'image' : 'chat'}"][data-provider-id="${CSS.escape(String(providerId || ''))}"]`
   );
   if (!wrap) return;
   const btn = wrap.querySelector('.model-select-probe');
@@ -11742,34 +11811,50 @@ function paintPickerProbeRow(providerId, { busy, error } = {}) {
   }
 }
 
-async function onPickerProbeProvider(provider) {
+async function onPickerProbeProvider(provider, kind = 'chat') {
   const id = String(provider?.id || '').trim();
   if (!id || modelPickerProbe.busy) return;
-  modelPickerProbe.id = id;
+  const probeKey = `${kind}:${id}`;
+  modelPickerProbe.id = probeKey;
   modelPickerProbe.busy = true;
   modelPickerProbe.error = '';
-  modelPickerOpenId = id;
-  paintPickerProbeRow(id, { busy: true });
-  const result = await probeAndPersistProviderCatalog(provider);
+  if (kind === 'image') modelPickerImageOpenId = id;
+  else modelPickerOpenId = id;
+  paintPickerProbeRow(id, { busy: true, kind });
+  let result;
+  if (kind === 'image') {
+    const imageBase = String(provider?.image?.baseURL || provider?.baseURL || '').replace(/\/$/, '');
+    const imageKey = String(provider?.image?.apiKey || provider?.apiKey || '').trim();
+    result = await probeAndPersistProviderCatalog({
+      id,
+      baseURL: imageBase,
+      apiKey: imageKey,
+      image: provider?.image
+    });
+  } else {
+    result = await probeAndPersistProviderCatalog(provider);
+  }
   modelPickerProbe.busy = false;
   if (result.ok) {
     modelPickerProbe.error = '';
-    if (settingsConfigUi.providerId === id) {
+    if (kind !== 'image' && settingsConfigUi.providerId === id) {
       settingsProbedModels = result.chat;
       catalogModels = result.chat;
-      settingsProbedImageModels = result.image;
       fillModelDatalist(result.chat);
       renderSettingsModelCatalog();
-      renderSettingsImageCatalog();
       paintProbeResult({ ok: true, count: result.chat.length });
       syncReasoningSwitch();
+    }
+    if (kind === 'image' && settingsImageUi.providerId === id) {
+      settingsProbedImageModels = result.image;
+      renderSettingsImageCatalog();
     }
     await renderModelPickerList();
     return;
   }
   const err = String(result.error || 'error');
   modelPickerProbe.error = err;
-  paintPickerProbeRow(id, { error: err });
+  paintPickerProbeRow(id, { error: err, kind });
 }
 
 function setModelSubmenuOpen(open) {
@@ -11915,16 +12000,8 @@ function syncImageSectionVisibility() {
 function refreshImageGenStatusLine(imageCount = 0) {
   const line = document.getElementById('imageGenStatusLine');
   if (!line) return;
-  const en = currentLang === 'en';
-  if (!imageCount) {
-    line.textContent = en
-      ? 'No image API yet. Attach one to a chat vendor, or use a separate Base / Key.'
-      : '未添加生图 API。可挂在某个推理供应商上，或使用独立 Base / Key。';
-    return;
-  }
-  line.textContent = en
-    ? 'Tap a card to edit. Image gen follows the attached chat vendor.'
-    : '点卡片编辑。生图挂在对应推理供应商上。';
+  line.hidden = imageCount > 0;
+  line.textContent = settingsLangEn() ? 'No image API yet.' : '尚未添加生图 API。';
 }
 
 async function refreshImageGenChip() {
@@ -11969,7 +12046,6 @@ function applyImagePreset(presetId) {
   const path = document.getElementById('providerImagePathInput');
   const imgBase = document.getElementById('providerImageBaseInput');
   const imgKey = document.getElementById('providerImageKeyInput');
-  const chatBase = document.getElementById('apiBaseInput')?.value?.trim() || '';
 
   if (enabled) enabled.checked = true;
 
@@ -11977,25 +12053,24 @@ function applyImagePreset(presetId) {
     if (protocol) protocol.value = 'openrouter-image';
     if (model) model.value = 'google/gemini-2.5-flash-image';
     if (path) path.value = '/images';
-    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'inherit chat / 与推理相同';
+    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'sk-or-...';
     if (imgBase) imgBase.value = OPENROUTER_API_BASE || 'https://openrouter.ai/api/v1';
   } else if (presetId === 'openai') {
     if (protocol) protocol.value = 'openai-image';
     if (model) model.value = 'gpt-image-1';
     if (path) path.value = '/images/generations';
-    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'inherit chat / 与推理相同';
-    if (imgBase && !/api\.openai\.com/i.test(chatBase)) {
-      imgBase.value = 'https://api.openai.com/v1';
-    }
+    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'sk-...';
+    if (imgBase) imgBase.value = 'https://api.openai.com/v1';
   } else if (presetId === 'openai-compatible') {
     if (protocol) protocol.value = 'openai-image';
     if (path) path.value = '/images/generations';
-    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'inherit chat / 与推理相同';
+    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'sk-...';
   } else if (presetId === 'minimax') {
     if (protocol) protocol.value = 'minimax-image';
     if (model) model.value = DEFAULT_IMAGE_MODEL || 'image-01';
     if (path) path.value = DEFAULT_IMAGE_PATH || '/image_generation';
-    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'eyJ... / API key';
+    if (imgKey && !settingsImageUi.hasStoredKey) imgKey.placeholder = 'eyJ...';
+    if (imgBase && !imgBase.value.trim()) imgBase.value = 'https://api.minimaxi.com/v1';
   }
   document.querySelectorAll('#imagePresetRow [data-image-preset]').forEach((btn) => {
     btn.classList.toggle('active', btn.getAttribute('data-image-preset') === presetId);
@@ -12046,12 +12121,6 @@ function fillSettingsForm(provider, opts = {}) {
   const baseInput = document.getElementById('apiBaseInput');
   const keyInput = document.getElementById('apiKeyInput');
   const modelInput = document.getElementById('providerModelInput');
-  const imgEnabled = document.getElementById('providerImageEnabledCheck');
-  const imgBase = document.getElementById('providerImageBaseInput');
-  const imgKey = document.getElementById('providerImageKeyInput');
-  const imgModel = document.getElementById('providerImageModelInput');
-  const imgPath = document.getElementById('providerImagePathInput');
-  const imgProtocol = document.getElementById('providerImageProtocolInput');
   const hint = document.getElementById('settingsApiHint');
 
   const baseURL =
@@ -12078,62 +12147,11 @@ function fillSettingsForm(provider, opts = {}) {
       keyInput.placeholder = 'sk-...（尚未配置）';
     }
   }
-  // Image: empty baseURL / apiKey inherit chat; OpenRouter template prefills the known origin
-  const img =
-    provider?.image && typeof provider.image === 'object'
-      ? provider.image
-      : typeof defaultImageConfig === 'function'
-        ? defaultImageConfig()
-        : {
-            enabled: false,
-            protocol: DEFAULT_IMAGE_PROTOCOL || 'minimax-image',
-            path: DEFAULT_IMAGE_PATH || '/image_generation',
-            model: DEFAULT_IMAGE_MODEL || 'image-01'
-          };
-
-  const imageBaseStored =
-    typeof img.baseURL === 'string' && img.baseURL.trim() ? img.baseURL.trim().replace(/\/$/, '') : '';
-
-  settingsImageUi.hasStoredKey = !!(img.apiKey);
-  settingsImageUi.keyTail = img.apiKey ? String(img.apiKey).slice(-4) : '';
-
-  if (imgEnabled) imgEnabled.checked = !!img.enabled;
-  const looksOr =
-    /openrouter/i.test(String(img.protocol || '')) ||
-    /openrouter\.ai/i.test(imageBaseStored) ||
-    /openrouter\.ai/i.test(String(provider?.baseURL || ''));
-  if (imgBase) {
-    imgBase.value =
-      imageBaseStored ||
-      (looksOr ? OPENROUTER_API_BASE || 'https://openrouter.ai/api/v1' : '');
-    imgBase.placeholder = 'inherit chat / 与推理相同';
-  }
-  if (imgKey) {
-    imgKey.value = '';
-    imgKey.placeholder = settingsImageUi.hasStoredKey
-      ? `已配置 (…${settingsImageUi.keyTail}) — 留空则保持不变`
-      : 'inherit chat / 与推理相同';
-  }
-  if (imgProtocol) {
-    imgProtocol.value = img.protocol || (looksOr ? 'openrouter-image' : DEFAULT_IMAGE_PROTOCOL || 'openrouter-image');
-  }
-  if (imgModel) {
-    imgModel.value =
-      img.model || (looksOr ? 'google/gemini-2.5-flash-image' : DEFAULT_IMAGE_MODEL || 'image-01');
-    imgModel.placeholder = looksOr ? 'google/gemini-2.5-flash-image' : DEFAULT_IMAGE_MODEL || 'image-01';
-  }
-  if (imgPath) {
-    imgPath.value = img.path || (looksOr ? '/images' : DEFAULT_IMAGE_PATH || '/image_generation');
-    imgPath.placeholder = looksOr ? '/images' : DEFAULT_IMAGE_PATH || '/image_generation';
-  }
-
-  syncImageSectionVisibility();
   setActivePresetChip(guessPresetId(provider || { baseURL: baseInput?.value, model: modelInput?.value }));
 
   if (hint) {
-    hint.textContent = settingsLangEn()
-      ? 'Key stays on this device. Probe the API to list models; switching models does not re-bind Base / Key.'
-      : 'Key 仅存本机。探测 API 可列出模型；同一 Key 下切换模型不必重填 Base / Key。';
+    hint.hidden = true;
+    hint.textContent = '';
   }
   void hydrateSettingsModelCatalog(provider);
 }
@@ -12323,20 +12341,11 @@ async function hydrateSettingsModelCatalog(provider) {
       catalogModels = settingsProbedModels;
       fillModelDatalist(settingsProbedModels);
       renderSettingsModelCatalog();
-      settingsProbedImageModels = imageModelsFromList(cached.models);
-      renderSettingsImageCatalog();
       paintProbeResult({
         ok: true,
         count: settingsProbedModels.length,
         fromCache: true
       });
-      if (settingsProbedImageModels.length) {
-        paintImageProbeResult({
-          ok: true,
-          count: settingsProbedImageModels.length,
-          fromCache: true
-        });
-      }
       return;
     }
   } catch (_) {}
@@ -12436,7 +12445,10 @@ async function onRefreshChatModelsClick() {
   const btn = document.getElementById('providerModelRefreshBtn');
   if (!baseURL) {
     paintProbeResult({ ok: false, error: settingsLangEn() ? 'Enter Base URL first.' : '请先填写 Base URL。' });
-    if (hintEl) hintEl.textContent = settingsLangEn() ? 'Enter Base URL, then probe.' : '请先填写 Base URL，再探测 API。';
+    if (hintEl) {
+      hintEl.hidden = false;
+      hintEl.textContent = settingsLangEn() ? 'Enter Base URL, then probe.' : '请先填写 Base URL，再探测 API。';
+    }
     document.getElementById('apiBaseInput')?.focus();
     return;
   }
@@ -12463,7 +12475,10 @@ async function onRefreshChatModelsClick() {
       ok: false,
       error: settingsLangEn() ? 'API key required.' : '需要 API Key。'
     });
-    if (hintEl) hintEl.textContent = settingsLangEn() ? 'Need an API key to probe /models.' : '需要 API Key 才能探测 /models。';
+    if (hintEl) {
+    hintEl.hidden = false;
+    hintEl.textContent = settingsLangEn() ? 'Need an API key to probe /models.' : '需要 API Key 才能探测 /models。';
+  }
     document.getElementById('apiKeyInput')?.focus();
     return;
   }
@@ -12473,7 +12488,10 @@ async function onRefreshChatModelsClick() {
     btn.textContent = settingsLangEn() ? 'Probing…' : '探测中…';
   }
   paintProbeResult(null);
-  if (hintEl) hintEl.textContent = 'GET /models …';
+  if (hintEl) {
+    hintEl.hidden = false;
+    hintEl.textContent = 'GET /models …';
+  }
 
   let image = undefined;
   try {
@@ -12502,16 +12520,15 @@ async function onRefreshChatModelsClick() {
       }
       syncReasoningSwitch();
       await refreshVendorBoards();
-      if (hintEl) {
-        hintEl.textContent = settingsLangEn()
-          ? 'Same key: switch model id above or in the composer. No need to re-enter Base / Key.'
-          : '同一 Key 下在上方或聊天框切换模型即可，不必重填 Base / Key。';
-      }
+      if (hintEl) hintEl.hidden = true;
     } else {
       settingsProbedModels = [];
       renderSettingsModelCatalog();
       paintProbeResult(probe);
-      if (hintEl) hintEl.textContent = probe.error || 'probe failed';
+      if (hintEl) {
+        hintEl.hidden = false;
+        hintEl.textContent = probe.error || 'probe failed';
+      }
     }
   } finally {
     if (btn) {
@@ -12586,25 +12603,14 @@ function renderSettingsImageCatalog() {
 async function resolveImageProbeCreds() {
   let baseURL = document.getElementById('providerImageBaseInput')?.value?.trim() || '';
   let apiKey = document.getElementById('providerImageKeyInput')?.value?.trim() || '';
-  const hostId =
-    settingsImageUi.providerId || settingsConfigUi.providerId;
+  const hostId = settingsImageUi.providerId;
   if ((!baseURL || !apiKey) && hostId) {
     try {
       const state = await loadProvidersState();
       const p = (state.providers || []).find((x) => x.id === hostId);
-      if (!baseURL) {
-        baseURL = String(p?.image?.baseURL || p?.baseURL || '');
-      }
-      if (!apiKey) {
-        apiKey = String(p?.image?.apiKey || p?.apiKey || '');
-      }
+      if (!baseURL) baseURL = String(p?.image?.baseURL || '');
+      if (!apiKey) apiKey = String(p?.image?.apiKey || '');
     } catch (_) {}
-  }
-  if (!baseURL) {
-    baseURL = document.getElementById('apiBaseInput')?.value?.trim() || '';
-  }
-  if (!apiKey) {
-    apiKey = resolveEditorApiKey();
   }
   return { baseURL: String(baseURL || '').replace(/\/$/, ''), apiKey };
 }
@@ -12648,7 +12654,7 @@ async function onProbeImageModelsClick() {
   if (!baseURL) {
     paintImageProbeResult({
       ok: false,
-      error: settingsLangEn() ? 'Need a Base URL (same as chat, or custom).' : '请填写 Base URL（可与推理相同）。'
+      error: settingsLangEn() ? 'Enter image Base URL.' : '请填写生图 Base URL。'
     });
     return;
   }
@@ -12806,17 +12812,9 @@ function renderInferenceVendorList(state) {
   const hint = document.getElementById('inferenceEmptyHint');
   if (!list) return;
   list.innerHTML = '';
-  const providers = Array.isArray(state?.providers) ? state.providers : [];
+  const providers = listChatProviders(state?.providers);
   const activeId = state?.activeProviderId || null;
-  if (hint) {
-    hint.textContent = providers.length
-      ? settingsLangEn()
-        ? 'Tap a card to use and edit it.'
-        : '点卡片设为当前使用并编辑。'
-      : settingsLangEn()
-        ? 'No chat API yet. Add a vendor below.'
-        : '尚未添加推理 API。';
-  }
+  if (hint) hint.hidden = providers.length > 0;
   for (const p of providers) {
     const host = vendorHostFromUrl(p.baseURL);
     const key = maskKeyTail(p.apiKey);
@@ -12856,35 +12854,29 @@ function renderImageVendorList(state) {
   const list = document.getElementById('imageVendorList');
   if (!list) return;
   list.innerHTML = '';
-  const providers = Array.isArray(state?.providers) ? state.providers : [];
-  const activeId = state?.activeProviderId || null;
-  const images = providers.filter((p) => p?.image?.enabled);
+  const images = listImageProviders(state?.providers);
+  const activeImageId = state?.activeImageProviderId || null;
   refreshImageGenStatusLine(images.length);
   for (const p of images) {
     const model = p.image?.model || '';
     const host = vendorHostFromUrl(p.image?.baseURL || p.baseURL);
-    const imageBase = String(p.image?.baseURL || '').replace(/\/$/, '');
-    const chatBase = String(p.baseURL || '').replace(/\/$/, '');
-    const same = !imageBase || imageBase === chatBase;
-    const bits = [
-      model,
-      host,
-      same
-        ? settingsLangEn()
-          ? `via ${p.name || 'chat'}`
-          : `随 ${p.name || '推理'}`
-        : settingsLangEn()
-          ? 'separate API'
-          : '独立 API'
-    ].filter(Boolean);
+    const bits = [model, host].filter(Boolean);
     list.appendChild(
       renderVendorCard({
-        name: imageVendorName(p),
+        name: imageVendorLabel(p),
         meta: bits.join(' · '),
-        active: p.id === activeId,
-        onSelect: () => openImageEditor(p),
+        active: p.id === activeImageId,
+        onSelect: () => {
+          void (async () => {
+            try {
+              await setActiveImageProviderId(p.id);
+            } catch (_) {}
+            openImageEditor(p);
+            renderImageVendorList(await loadProvidersState());
+          })();
+        },
         onDelete: () =>
-          confirmDeleteVendor(imageVendorName(p), () => deleteImageVendor(p.id))
+          confirmDeleteVendor(imageVendorLabel(p), () => deleteImageVendor(p.id))
       })
     );
   }
@@ -12923,14 +12915,9 @@ async function renderWebVendorList() {
     });
   }
   if (line) {
+    line.hidden = vendors.length > 0;
     if (!vendors.length) {
-      line.textContent = en
-        ? 'No search key · public-web search is off. Bound page still works.'
-        : '未添加搜索 Key · 模型不能公开网搜索。绑定页仍然可用。';
-    } else {
-      line.textContent = en
-        ? 'Tap a search card to use it. Firecrawl only upgrades fetch scrape.'
-        : '点搜索卡片设为当前使用。Firecrawl 只增强 fetch 抽取。';
+      line.textContent = en ? 'No search key yet.' : '尚未添加搜索 Key。';
     }
   }
   for (const v of vendors) {
@@ -12987,21 +12974,64 @@ function openInferenceEditor(provider) {
   document.getElementById('apiKeyInput')?.focus();
 }
 
+function fillImageForm(provider) {
+  const imgEnabled = document.getElementById('providerImageEnabledCheck');
+  const imgBase = document.getElementById('providerImageBaseInput');
+  const imgKey = document.getElementById('providerImageKeyInput');
+  const imgModel = document.getElementById('providerImageModelInput');
+  const imgPath = document.getElementById('providerImagePathInput');
+  const imgProtocol = document.getElementById('providerImageProtocolInput');
+  const img = provider?.image && typeof provider.image === 'object' ? provider.image : {};
+  const imageBaseStored =
+    typeof img.baseURL === 'string' && img.baseURL.trim() ? img.baseURL.trim().replace(/\/$/, '') : '';
+  const looksOr =
+    /openrouter/i.test(String(img.protocol || '')) ||
+    /openrouter\.ai/i.test(imageBaseStored || provider?.baseURL || '');
+  settingsImageUi.hasStoredKey = !!(img.apiKey);
+  settingsImageUi.keyTail = img.apiKey ? String(img.apiKey).slice(-4) : '';
+  if (imgEnabled) imgEnabled.checked = true;
+  if (imgBase) {
+    imgBase.value = imageBaseStored || (looksOr ? OPENROUTER_API_BASE : '');
+    imgBase.placeholder = 'https://openrouter.ai/api/v1';
+  }
+  if (imgKey) {
+    imgKey.value = '';
+    imgKey.placeholder = settingsImageUi.hasStoredKey
+      ? `已配置 (…${settingsImageUi.keyTail})`
+      : 'sk-or-...';
+  }
+  if (imgProtocol) {
+    imgProtocol.value = img.protocol || (looksOr ? 'openrouter-image' : DEFAULT_IMAGE_PROTOCOL || 'openrouter-image');
+  }
+  if (imgModel) {
+    imgModel.value = img.model || (looksOr ? 'google/gemini-2.5-flash-image' : DEFAULT_IMAGE_MODEL || 'image-01');
+  }
+  if (imgPath) {
+    imgPath.value = img.path || (looksOr ? '/images' : DEFAULT_IMAGE_PATH || '/image_generation');
+  }
+  syncImageSectionVisibility();
+}
+
 function openImageEditor(provider) {
-  if (!provider) return;
   setInferenceEditorOpen(false);
   setWebEditorOpen(false);
-  settingsImageUi.providerId = provider.id || null;
-  fillSettingsForm(provider);
-  const enabled = document.getElementById('providerImageEnabledCheck');
-  if (enabled) enabled.checked = true;
-  if (!provider.image?.enabled && !provider.image?.model) {
-    applyImagePreset('openrouter');
+  settingsImageUi.providerId = provider?.id || null;
+  if (provider?.image?.enabled || provider?.image?.model) {
+    fillImageForm(provider);
   } else {
-    syncImageSectionVisibility();
+    fillImageForm({
+      image: defaultImageConfig({
+        enabled: true,
+        protocol: 'openrouter-image',
+        path: '/images',
+        model: 'google/gemini-2.5-flash-image',
+        baseURL: OPENROUTER_API_BASE
+      })
+    });
+    applyImagePreset('openrouter');
   }
   setImageEditorOpen(true);
-  void hydrateSettingsImageCatalog(provider);
+  if (provider) void hydrateSettingsImageCatalog(provider);
 }
 
 function setWebEditorKind(kind) {
@@ -13038,14 +13068,21 @@ async function saveInferenceEditor(opts = {}) {
   const form = readSettingsForm();
   const hint = document.getElementById('settingsApiHint');
   if (!form.baseURL) {
-    if (hint) hint.textContent = '请填写推理模型 Base URL（如 https://api.deepseek.com/v1）。';
+    if (hint) {
+      hint.hidden = false;
+      hint.textContent = settingsLangEn()
+        ? 'Enter inference Base URL.'
+        : '请填写推理 Base URL。';
+    }
     document.getElementById('apiBaseInput')?.focus();
     return false;
   }
   if (/image_generation/i.test(form.baseURL)) {
     if (hint) {
-      hint.textContent =
-        '推理 Base URL 不应包含 image_generation。请使用 Chat Completions 根路径。';
+      hint.hidden = false;
+      hint.textContent = settingsLangEn()
+        ? 'Inference Base URL cannot include image_generation.'
+        : '推理 Base URL 不能包含 image_generation。';
     }
     document.getElementById('apiBaseInput')?.focus();
     return false;
@@ -13076,10 +13113,16 @@ async function saveInferenceEditor(opts = {}) {
     await syncToolbarFromActiveProvider();
     if (!opts.keepOpen) setInferenceEditorOpen(false);
     await refreshVendorBoards();
-    if (hint) hint.textContent = settingsLangEn() ? 'Saved.' : '✓ 已保存';
+    if (hint) {
+      hint.hidden = false;
+      hint.textContent = settingsLangEn() ? 'Saved.' : '✓ 已保存';
+    }
     return true;
   } catch (e) {
-    if (hint) hint.textContent = (settingsLangEn() ? 'Save failed: ' : '保存失败: ') + (e?.message || e);
+    if (hint) {
+      hint.hidden = false;
+      hint.textContent = (settingsLangEn() ? 'Save failed: ' : '保存失败: ') + (e?.message || e);
+    }
     return false;
   }
 }
@@ -13088,40 +13131,48 @@ async function saveImageEditor(opts = {}) {
   const enabled = document.getElementById('providerImageEnabledCheck');
   if (enabled) enabled.checked = true;
   const form = readSettingsForm();
-  const state = await loadProvidersState();
-  const hostId =
-    settingsImageUi.providerId || settingsConfigUi.providerId || state.activeProviderId;
-  const host = (state.providers || []).find((p) => p.id === hostId) || state.active;
-  if (!host) {
-    showSidepanelToast(
-      settingsLangEn() ? 'Add a chat API first.' : '请先添加推理 API。',
-      { error: true }
-    );
+  const nextImage = { ...(form.image || {}), enabled: true };
+  if (!nextImage.baseURL) {
+    showSidepanelToast(settingsLangEn() ? 'Enter image Base URL.' : '请填写生图 Base URL。', { error: true });
+    document.getElementById('providerImageBaseInput')?.focus();
     return false;
   }
-  const nextImage = { ...(form.image || {}), enabled: true };
-  const prevKey = host.image && typeof host.image.apiKey === 'string' ? host.image.apiKey.trim() : '';
+  const state = await loadProvidersState();
+  const host = (state.providers || []).find((p) => p.id === settingsImageUi.providerId) || null;
+  const prevKey = host?.image && typeof host.image.apiKey === 'string' ? host.image.apiKey.trim() : '';
   if (!nextImage.apiKey && prevKey) nextImage.apiKey = prevKey;
-  if (!nextImage.apiKey && !host.apiKey) {
-    showSidepanelToast(
-      settingsLangEn()
-        ? 'Enter an image API key, or add a chat key to inherit.'
-        : '请填写图像 API Key，或先保存推理 Key 以便继承。',
-      { error: true }
-    );
+  if (!nextImage.apiKey) {
+    showSidepanelToast(settingsLangEn() ? 'Enter an image API key.' : '请填写生图 API Key。', { error: true });
     document.getElementById('providerImageKeyInput')?.focus();
     return false;
   }
   try {
-    await upsertProvider(
-      {
-        ...host,
-        image: nextImage
-      },
-      { makeActive: false }
-    );
+    if (host && !isImageOnlyProvider(host) && isChatProvider(host)) {
+      await upsertProvider({ ...host, image: nextImage }, { makeActive: false });
+      settingsImageUi.providerId = host.id;
+    } else {
+      const id = host?.id || generateProviderId();
+      await upsertProvider(
+        {
+          id,
+          purpose: 'image',
+          name:
+            host && isImageOnlyProvider(host) && host.name
+              ? host.name
+              : imageVendorLabel({ image: nextImage, purpose: 'image' }),
+          baseURL: nextImage.baseURL || '',
+          apiKey: '',
+          model: '',
+          createdAt: host?.createdAt || Date.now(),
+          image: nextImage
+        },
+        { makeActive: false }
+      );
+      settingsImageUi.providerId = id;
+    }
     if (!opts.keepOpen) setImageEditorOpen(false);
     await refreshVendorBoards();
+    await syncToolbarFromActiveProvider();
     return true;
   } catch (e) {
     showSidepanelToast(
@@ -13158,10 +13209,15 @@ async function deleteImageVendor(providerId) {
     const state = await loadProvidersState();
     const host = (state.providers || []).find((p) => p.id === providerId);
     if (!host) return;
-    const image = host.image && typeof host.image === 'object' ? { ...host.image, enabled: false } : { enabled: false };
-    await upsertProvider({ ...host, image }, { makeActive: false });
+    if (isImageOnlyProvider(host) || !isChatProvider(host)) {
+      await deleteProvider(providerId);
+    } else {
+      const image = host.image && typeof host.image === 'object' ? { ...host.image, enabled: false } : { enabled: false };
+      await upsertProvider({ ...host, image }, { makeActive: false });
+    }
     if (settingsImageUi.providerId === providerId) setImageEditorOpen(false);
     await refreshVendorBoards();
+    await syncToolbarFromActiveProvider();
   } catch (e) {
     showSidepanelToast(
       (settingsLangEn() ? 'Delete failed: ' : '删除失败: ') + (e?.message || e),
@@ -13293,6 +13349,140 @@ async function fillWebAcquireForm() {
     fire.value = '';
     fire.placeholder = maskKeyPlaceholder(cfg.firecrawlKey, 'fc-...');
   }
+  paintWebProbeResult('');
+}
+
+function paintWebProbeResult(text, { error = false } = {}) {
+  const el = document.getElementById('webAcquireProbeResult');
+  if (!el) return;
+  if (!text) {
+    el.hidden = true;
+    el.textContent = '';
+    el.classList.remove('is-err', 'is-ok');
+    return;
+  }
+  el.hidden = false;
+  el.textContent = text;
+  el.classList.toggle('is-err', !!error);
+  el.classList.toggle('is-ok', !error);
+}
+
+async function proxyJsonRequest({ url, method = 'GET', headers, body }) {
+  if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+    const res = await chrome.runtime.sendMessage({
+      action: 'llm_proxy_fetch',
+      url,
+      method,
+      headers: headers || {},
+      body: body != null ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined
+    });
+    if (res && res.ok === false && res.error && res.status == null) {
+      throw new Error(res.error);
+    }
+    return res || { ok: false, error: 'empty proxy response' };
+  }
+  const init = { method, headers: headers || {} };
+  if (body != null && method !== 'GET' && method !== 'HEAD') {
+    init.body = typeof body === 'string' ? body : JSON.stringify(body);
+  }
+  const r = await fetch(url, init);
+  const text = await r.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    /* non-json */
+  }
+  return { ok: r.ok, status: r.status, text, json };
+}
+
+function webEditorTypedKey(kind, cfg) {
+  const id =
+    kind === 'brave' ? 'braveKeyInput' : kind === 'firecrawl' ? 'firecrawlKeyInput' : 'tavilyKeyInput';
+  const typed = document.getElementById(id)?.value?.trim() || '';
+  if (typed) return typed;
+  if (kind === 'brave') return String(cfg?.braveKey || '');
+  if (kind === 'firecrawl') return String(cfg?.firecrawlKey || '');
+  return String(cfg?.tavilyKey || '');
+}
+
+function webProbeErrorMessage(res) {
+  const json = res?.json;
+  const msg =
+    (typeof json?.error === 'string' && json.error) ||
+    (typeof json?.message === 'string' && json.message) ||
+    (typeof json?.detail === 'string' && json.detail) ||
+    (typeof res?.text === 'string' && res.text.slice(0, 180)) ||
+    (res?.status ? `HTTP ${res.status}` : 'probe failed');
+  return String(msg);
+}
+
+async function onWebAcquireProbeClick() {
+  const btn = document.getElementById('webAcquireProbeBtn');
+  const kind = settingsWebUi.kind || 'tavily';
+  const cfg = await loadWebAcquireSettings();
+  const key = webEditorTypedKey(kind, cfg);
+  if (!key) {
+    paintWebProbeResult(settingsLangEn() ? 'Enter an API key first.' : '请先填写 API Key。', {
+      error: true
+    });
+    return;
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = t('modelPickerProbing');
+  }
+  paintWebProbeResult(settingsLangEn() ? 'Probing…' : '探测中…');
+  try {
+    if (kind === 'firecrawl') {
+      let lastErr = 'Firecrawl probe failed';
+      for (const url of firecrawlCreditUsageUrls(cfg.firecrawlBaseURL)) {
+        const res = await proxyJsonRequest({
+          url,
+          method: 'GET',
+          headers: firecrawlAuthHeaders(key)
+        });
+        if (res.status === 404) {
+          lastErr = `HTTP 404 ${url}`;
+          continue;
+        }
+        if (!res.ok) throw new Error(webProbeErrorMessage(res));
+        const usage = summarizeFirecrawlCreditUsage(res.json);
+        if (!usage.ok) {
+          lastErr = 'credit-usage parse failed';
+          continue;
+        }
+        paintWebProbeResult(t('webAcquireProbeCredits').replace('{n}', String(usage.remaining)));
+        return;
+      }
+      throw new Error(lastErr);
+    }
+    if (kind === 'brave') {
+      const res = await proxyJsonRequest({
+        url: braveSearchProbeUrl(),
+        method: 'GET',
+        headers: braveSearchProbeHeaders(key)
+      });
+      if (!res.ok) throw new Error(webProbeErrorMessage(res));
+      paintWebProbeResult(t('webAcquireProbeOk').replace('{name}', 'Brave'));
+      return;
+    }
+    const res = await proxyJsonRequest({
+      url: tavilySearchProbeUrl(cfg.tavilyBaseURL),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: tavilySearchProbeBody(key)
+    });
+    if (!res.ok) throw new Error(webProbeErrorMessage(res));
+    paintWebProbeResult(t('webAcquireProbeOk').replace('{name}', 'Tavily'));
+  } catch (e) {
+    paintWebProbeResult(t('apiProbeFail').replace('{err}', e?.message || e), { error: true });
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = t('webAcquireProbeBtn');
+    }
+  }
 }
 
 async function saveWebAcquireFromForm() {
@@ -13390,7 +13580,10 @@ async function saveAllSettings() {
     return true;
   } catch (e) {
     const hint = document.getElementById('settingsApiHint');
-    if (hint) hint.textContent = (settingsLangEn() ? 'Save failed: ' : '保存失败: ') + (e?.message || e);
+    if (hint) {
+      hint.hidden = false;
+      hint.textContent = (settingsLangEn() ? 'Save failed: ' : '保存失败: ') + (e?.message || e);
+    }
     return false;
   }
 }
@@ -13442,19 +13635,7 @@ function setupAgentSettingsModal() {
   });
 
   document.getElementById('addImageBtn')?.addEventListener('click', () => {
-    void (async () => {
-      const state = await loadProvidersState();
-      const host = state.active || (state.providers || [])[0] || null;
-      if (!host) {
-        showSidepanelToast(
-          settingsLangEn() ? 'Add a chat API first.' : '请先添加推理 API。',
-          { error: true }
-        );
-        openInferenceEditor(null);
-        return;
-      }
-      openImageEditor(host);
-    })();
+    openImageEditor(null);
   });
   document.getElementById('cancelImageEditorBtn')?.addEventListener('click', () => {
     setImageEditorOpen(false);
@@ -13474,6 +13655,9 @@ function setupAgentSettingsModal() {
       const ok = await saveWebAcquireFromForm();
       if (ok) setWebEditorOpen(false);
     })();
+  });
+  document.getElementById('webAcquireProbeBtn')?.addEventListener('click', () => {
+    void onWebAcquireProbeClick();
   });
 
   const presetRow = document.getElementById('inferencePresetRow');

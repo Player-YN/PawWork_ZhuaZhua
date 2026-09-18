@@ -18,15 +18,56 @@ import {
   takeUploadStage,
   uploadOwnerKey
 } from './uploadChannel.js';
+import { captureVisibleJpeg } from './pageScreenshot.js';
+import {
+  shouldAttachPageScreenshot,
+  screenshotToModelParts,
+  observeDocumentKey
+} from '../sessionWorkspace/actionObserve.js';
 
 const snapshots = createPageSnapshotRegistry();
 const lastControls = new Map();
+const lastPageByTab = new Map();
+/** executionId → Set<observeDocumentKey> — dual-observed documents this turn. */
+const observedByExecution = new Map();
 const actionQueues = new Map();
+
+function forgetObservedForTab(tabId) {
+  const prefix = `${Number(tabId)}:`;
+  for (const set of observedByExecution.values()) {
+    for (const key of [...set]) {
+      if (key.startsWith(prefix)) set.delete(key);
+    }
+  }
+}
+
+function hasObservedDocument(executionId, tabId, page) {
+  const key = observeDocumentKey(tabId, page);
+  if (!key) return false;
+  const set = observedByExecution.get(String(executionId || ''));
+  return Boolean(set && set.has(key));
+}
+
+function markObservedDocument(executionId, tabId, page) {
+  const key = observeDocumentKey(tabId, page);
+  if (!key) return;
+  const exec = String(executionId || '');
+  let set = observedByExecution.get(exec);
+  if (!set) {
+    set = new Set();
+    observedByExecution.set(exec, set);
+  }
+  set.add(key);
+}
+
 export function invalidatePageActionTarget(tabId) {
   snapshots.invalidate(tabId);
   lastControls.delete(Number(tabId));
+  lastPageByTab.delete(Number(tabId));
+  forgetObservedForTab(tabId);
 }
-const MUTATIONS = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll', 'upload']);
+
+const MUTATIONS = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll', 'upload', 'pointer']);
 
 function rememberControls(tabId, controls) {
   lastControls.set(Number(tabId), Array.isArray(controls) ? controls : []);
@@ -64,8 +105,10 @@ export function actionHashInput(op, request, control, extra = {}) {
     bytesHash: extra.bytesHash || request.bytesHash || '',
     itemId: extra.itemId || request.itemId || '',
     artifactId: extra.artifactId || request.artifactId || '',
-    method: op === 'upload' ? '' : extra.method,
-    uploadMethod: op === 'upload' ? (extra.uploadMethod || request.method || 'auto') : undefined
+    method: op === 'upload' ? '' : (extra.method || request.method || ''),
+    uploadMethod: op === 'upload' ? (extra.uploadMethod || request.method || 'auto') : undefined,
+    x: extra.x ?? request.x,
+    y: extra.y ?? request.y
   };
 }
 
@@ -111,7 +154,9 @@ function classifyInputFromControl(op, request, control, extra = {}) {
     itemId: extra.itemId || request.itemId,
     artifactId: extra.artifactId || request.artifactId,
     uploadMethod: extra.uploadMethod || request.method,
-    method: extra.method || request.method
+    method: extra.method || request.method,
+    x: extra.x ?? request.x,
+    y: extra.y ?? request.y
   };
 }
 
@@ -428,7 +473,12 @@ async function resolveMutationIntent(request, tabId, snapshot) {
   } else if (request.name || request.label) {
     hit = await resolveNameAcrossFrames(tabId, request.name || request.label, snapshot);
     if (hit.code) return { ok: false, error: hit.error, code: hit.code };
-  } else if (op === 'press' || op === 'upload' || (op === 'wait' && request.ms != null && !request.text)) {
+  } else if (
+    op === 'press' ||
+    op === 'upload' ||
+    op === 'pointer' ||
+    (op === 'wait' && request.ms != null && !request.text)
+  ) {
     hit = { frameId: 0, local: '', frameUrl: '', documentId: '' };
   } else {
     return { ok: false, error: 'need ref or name', code: 'NO_TARGET' };
@@ -460,7 +510,10 @@ async function resolveMutationIntent(request, tabId, snapshot) {
     bytesHash: request.bytesHash,
     itemId: request.itemId,
     artifactId: request.artifactId,
-    uploadMethod: request.method
+    uploadMethod: request.method,
+    method: request.method,
+    x: request.x,
+    y: request.y
   };
   const classifyInput = classifyInputFromControl(op, request, control, extra);
   const classified = { ...classifyRisk(classifyInput), source: CLASSIFIED_SOURCE_SW };
@@ -495,12 +548,27 @@ function prefixFrameRefs(controls, frameId, frameMeta = {}) {
   });
 }
 
-async function snapshotAllPageActionFrames(tabId) {
+async function readLivePage(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  let documentId = '';
+  try {
+    const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
+    documentId = frame?.documentId || '';
+  } catch {
+    /* frame may be gone */
+  }
+  return { url: tab.url || '', title: String(tab.title || ''), documentId };
+}
+
+async function snapshotPageActionFrames(tabId, { scope = 'all' } = {}) {
   const root = await readDocumentTarget(chrome, tabId, 0);
   await ensurePageActionScripts(tabId);
-  const frames = await listPageActionFrames(tabId);
+  const listed = await listPageActionFrames(tabId);
+  const frames = scope === 'top' ? listed.filter((fr) => Number(fr.frameId) === 0) : listed;
+  if (scope === 'top' && !frames.some((fr) => Number(fr.frameId) === 0)) frames.unshift({ frameId: 0 });
   const controls = [];
   const framesOut = [];
+  let canvasCount = 0;
   for (const fr of frames) {
     try {
       const target = await readDocumentTarget(chrome, tabId, fr.frameId, fr);
@@ -511,7 +579,8 @@ async function snapshotAllPageActionFrames(tabId) {
         documentId: target.documentId
       });
       controls.push(...list);
-      framesOut.push({ ...target, title: raw.title || '', count: list.length });
+      canvasCount += Number(raw.canvasCount) || 0;
+      framesOut.push({ ...target, title: raw.title || '', count: list.length, canvasCount: Number(raw.canvasCount) || 0 });
     } catch (error) {
       if (error?.code === 'TARGET_CHANGED') throw error;
       // Unreachable subframes are omitted, never assigned usable references.
@@ -523,30 +592,171 @@ async function snapshotAllPageActionFrames(tabId) {
   const { rev } = snapshots.capture(tabId, framesOut);
   const capped = controls.slice(0, 80);
   rememberControls(tabId, capped);
-  return { ok: true, op: 'snapshot', rev, documentId: root.documentId,
-    count: capped.length, controls: capped, frames: framesOut,
-    after: { url: root.url, documentId: root.documentId, count: capped.length } };
+  const page = { url: root.url, title: framesOut.find((f) => f.frameId === 0)?.title || '', documentId: root.documentId };
+  return {
+    ok: true,
+    op: 'snapshot',
+    rev,
+    documentId: root.documentId,
+    count: capped.length,
+    controls: capped,
+    frames: framesOut,
+    canvasCount,
+    page,
+    after: { url: root.url, documentId: root.documentId, count: capped.length }
+  };
+}
+
+async function snapshotAllPageActionFrames(tabId) {
+  return snapshotPageActionFrames(tabId, { scope: 'all' });
 }
 
 async function observeAfterAction(tabId) {
-  try { return await snapshotAllPageActionFrames(tabId); }
-  catch (error) {
+  try {
+    return await snapshotPageActionFrames(tabId, { scope: 'top' });
+  } catch (error) {
     snapshots.invalidate(tabId);
-    return { observationError: { code: error?.code || 'NEED_PAGE', error: error?.message || String(error) } };
+    let page = null;
+    try { page = await readLivePage(tabId); } catch { /* tab may be gone */ }
+    return {
+      observationError: { code: error?.code || 'NEED_PAGE', error: error?.message || String(error) },
+      page
+    };
   }
 }
 
 function attachFreshSnapshot(result, snap) {
   if (!result || typeof result !== 'object' || !snap) return result;
-  if (snap.observationError) return { ...result, observationError: snap.observationError };
+  const page = snap.page || result.page;
+  if (snap.observationError) {
+    return page
+      ? { ...result, observationError: snap.observationError, page }
+      : { ...result, observationError: snap.observationError };
+  }
   return {
     ...result,
     documentId: snap.documentId,
     rev: snap.rev,
     controls: snap.controls,
     count: snap.count,
-    frames: snap.frames
+    frames: snap.frames,
+    canvasCount: snap.canvasCount,
+    page: page || result.page,
+    after: result.after || snap.after
   };
+}
+
+async function maybeAttachScreenshot(result, request, tabId) {
+  if (!result || typeof result !== 'object') return result;
+  const previous = lastPageByTab.get(Number(tabId)) || null;
+  const page = result.page;
+  if (page) lastPageByTab.set(Number(tabId), page);
+  if (result.ok === false && !result.observationError && !request?.observe) return result;
+  const observed = hasObservedDocument(request?.executionId, tabId, page);
+  const attach = shouldAttachPageScreenshot({
+    observe: request?.observe,
+    page,
+    previousPage: previous,
+    controlCount: result.count ?? (Array.isArray(result.controls) ? result.controls.length : undefined),
+    canvasCount: result.canvasCount,
+    unobservedThisExecution: Boolean(page) && !observed
+  });
+  if (!attach) return result;
+  const shot = await captureVisibleJpeg(chrome, tabId);
+  if (!shot.ok) {
+    return { ...result, screenshotError: { code: shot.code || 'NEED_PAGE', error: shot.error || '' } };
+  }
+  markObservedDocument(request?.executionId, tabId, page);
+  return {
+    ...result,
+    screenshot: { attached: true, mediaType: shot.mediaType || 'image/jpeg' },
+    modelParts: screenshotToModelParts({ ...shot, label: 'Page screenshot' })
+  };
+}
+
+/**
+ * Classify a mutation using a cached snapshot (rev + controls) without a SW RPC.
+ * Name-only targets that are not in the cache return null so the caller can RPC.
+ */
+export async function classifyCachedMutation(request, snapshot) {
+  if (!request || !snapshot || !Array.isArray(snapshot.controls)) return null;
+  const op = String(request.op || request.targetOp || '').toLowerCase();
+  if (!MUTATIONS.has(op)) return { ok: true, skipped: true, op };
+  const patched = { ...request, targetOp: op };
+  if (op === 'fill_form') {
+    const fields = Array.isArray(request.fields) ? request.fields : [];
+    if (!fields.length) return null;
+    if (fields.some((field) => !field?.ref)) return null;
+  } else if (!request.ref && (request.name || request.label) && op !== 'press' && op !== 'upload' && op !== 'pointer') {
+    const hits = snapshot.controls.filter((row) => String(row.name || '') === String(request.name || request.label));
+    if (hits.length !== 1) return null;
+    patched.ref = hits[0].ref;
+  }
+  try {
+    return await resolveMutationIntent(patched, Number(request.tabId), {
+      frames: snapshot.frames || [],
+      controls: snapshot.controls
+    });
+  } catch {
+    return null;
+  }
+}
+
+function parsePointerPoint(request) {
+  const x = Number(request?.x);
+  const y = Number(request?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > 1 || y > 1) {
+    return { ok: false, code: 'BAD_INPUT', error: 'pointer requires x and y in 0–1 viewport units' };
+  }
+  return { ok: true, x, y };
+}
+
+async function executePointerCdp(tabId, x, y) {
+  if (typeof chrome.debugger?.attach !== 'function' || typeof chrome.debugger?.sendCommand !== 'function') {
+    return { ok: false, code: 'SYS_DENIED', error: 'debugger API unavailable' };
+  }
+  const debuggee = { tabId };
+  try {
+    await chrome.debugger.attach(debuggee, '1.3');
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (/Another debugger|already attached|attached/i.test(msg)) {
+      return { ok: false, code: 'CDP_BUSY', error: msg };
+    }
+    return { ok: false, code: 'SYS_DENIED', error: msg };
+  }
+  try {
+    let w = 1;
+    let h = 1;
+    try {
+      const metrics = await chrome.debugger.sendCommand(debuggee, 'Page.getLayoutMetrics', {});
+      const css = metrics?.cssLayoutViewport || metrics?.layoutViewport || {};
+      w = Number(css.clientWidth) || 1;
+      h = Number(css.clientHeight) || 1;
+    } catch {
+      /* fall back to unit square */
+    }
+    const px = x * w;
+    const py = y * h;
+    await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: px, y: py
+    });
+    await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: px, y: py, button: 'left', clickCount: 1
+    });
+    await chrome.debugger.sendCommand(debuggee, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: px, y: py, button: 'left', clickCount: 1
+    });
+    return { ok: true, op: 'pointer', methodUsed: 'cdp', x, y, trusted: false };
+  } catch (error) {
+    return {
+      ok: false,
+      code: error?.code || 'SYS_FAILED',
+      error: error instanceof Error ? error.message : String(error)
+    };
+  } finally {
+    try { await chrome.debugger.detach(debuggee); } catch { /* already gone */ }
+  }
 }
 
 async function resolveNameAcrossFrames(tabId, name, snapshot) {
@@ -608,10 +818,20 @@ async function waitTextAnyFrame(tabId, request) {
     }
   });
   const snap = await observeAfterAction(tabId);
-  if (hit) return attachFreshSnapshot({ ...hit, waited: hit.waited ?? Date.now() - started }, snap);
-  return attachFreshSnapshot(
-    { ok: false, error: 'wait timed out', code: 'NO_TARGET', waited: Date.now() - started },
-    snap
+  if (hit) {
+    return maybeAttachScreenshot(
+      attachFreshSnapshot({ ...hit, waited: hit.waited ?? Date.now() - started }, snap),
+      request,
+      tabId
+    );
+  }
+  return maybeAttachScreenshot(
+    attachFreshSnapshot(
+      { ok: false, error: 'wait timed out', code: 'NO_TARGET', waited: Date.now() - started },
+      snap
+    ),
+    request,
+    tabId
   );
 }
 
@@ -745,7 +965,10 @@ async function executeWorkspacePageAction(request) {
   }
 
   if (op === 'snapshot') {
-    return snapshotAllPageActionFrames(tabId);
+    const snap = await snapshotPageActionFrames(tabId, {
+      scope: String(request.observe || '').toLowerCase() === 'top' ? 'top' : 'all'
+    });
+    return maybeAttachScreenshot(snap, request, tabId);
   }
 
   if (op === 'resolve_intent') {
@@ -816,9 +1039,49 @@ async function executeWorkspacePageAction(request) {
     }
     const snap = await observeAfterAction(tabId);
     const failure = results.find(row => row?.ok === false);
-    return attachFreshSnapshot({ ok: allOk, op: 'fill_form', results,
+    return maybeAttachScreenshot(attachFreshSnapshot({ ok: allOk, op: 'fill_form', results,
       ...(!allOk ? { partial: true, code: failure?.code || 'FORM_PARTIAL',
-        ...(failure?.outcome ? { outcome: failure.outcome } : {}) } : {}) }, snap);
+        ...(failure?.outcome ? { outcome: failure.outcome } : {}) } : {}) }, snap), request, tabId);
+  }
+
+  if (op === 'pointer') {
+    const point = parsePointerPoint(request);
+    if (!point.ok) return point;
+    const method = String(request.method || '').toLowerCase();
+    if (method !== 'point' && method !== 'cdp') {
+      return { ok: false, code: 'BAD_INPUT', error: 'pointer method must be point or cdp' };
+    }
+    const expectedTop = snapshot?.frames.find((f) => f.frameId === 0);
+    const gate = await authorizePageActionDispatch(request, {
+      op,
+      tabId,
+      frameId: 0,
+      documentId: expectedTop?.documentId || request.documentId,
+      frameUrl: expectedTop?.url || '',
+      method,
+      x: point.x,
+      y: point.y,
+      control: {
+        name: request.name || '',
+        frameUrl: expectedTop?.url || '',
+        documentId: expectedTop?.documentId || request.documentId || '',
+        frameId: 0
+      }
+    });
+    if (!gate.ok) return gate;
+    let raw;
+    try {
+      await assertTabLeaseOwnerActive(request.sessionId, request.executionId);
+      if (method === 'cdp') raw = await executePointerCdp(tabId, point.x, point.y);
+      else raw = await sendPageActionToFrame(tabId, 0, { op: 'pointer', x: point.x, y: point.y }, expectedTop);
+    } catch (error) {
+      return { ok: false, error: error?.message || String(error), code: error?.code || 'NEED_PAGE', ...(error?.outcome ? { outcome: error.outcome } : {}) };
+    }
+    if (!raw || typeof raw !== 'object' || typeof raw.ok !== 'boolean') {
+      return { ok: false, error: 'Empty page action result; inspect before retrying.', code: 'ACTION_OUTCOME_UNKNOWN', outcome: 'unknown' };
+    }
+    const snap = await observeAfterAction(tabId);
+    return maybeAttachScreenshot(attachFreshSnapshot(raw, snap), request, tabId);
   }
 
   let frameId = null;
@@ -877,7 +1140,7 @@ async function executeWorkspacePageAction(request) {
   if (op === 'upload') {
     const raw = await executePageUpload(request, tabId, frameId, expectedFrame, localRef);
     const snap = await observeAfterAction(tabId);
-    return attachFreshSnapshot(raw, snap);
+    return maybeAttachScreenshot(attachFreshSnapshot(raw, snap), request, tabId);
   }
   let raw;
   try {
@@ -896,6 +1159,6 @@ async function executeWorkspacePageAction(request) {
     };
   }
   const snap = await observeAfterAction(tabId);
-  return attachFreshSnapshot(raw, snap);
+  return maybeAttachScreenshot(attachFreshSnapshot(raw, snap), request, tabId);
 }
 
