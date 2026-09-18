@@ -36,8 +36,11 @@ export function createPageSnapshotRegistry({ token = () => crypto.randomUUID() }
     invalidate(tabId) { snapshots.delete(Number(tabId)); },
     require(tabId, rev) {
       const snapshot = snapshots.get(Number(tabId));
-      if (!snapshot || !rev || snapshot.rev !== String(rev)) {
-        throw targetError('STALE_REF', 'Snapshot first; use the latest rev for every page mutation.');
+      if (rev == null || String(rev).trim() === '') {
+        throw targetError('BAD_INPUT', 'rev is required for click, fill, select, press, scroll, fill_form, upload, pointer.');
+      }
+      if (!snapshot || snapshot.rev !== String(rev)) {
+        throw targetError('STALE_REF', 'rev does not match the latest snapshot');
       }
       return structuredClone(snapshot);
     }

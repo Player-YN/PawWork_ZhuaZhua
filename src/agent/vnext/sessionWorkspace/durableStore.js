@@ -1,9 +1,6 @@
 /**
  * Durable Session Workspace store — IndexedDB metadata (+ OPFS blobs when available).
  *
- * Product path MUST use this (or an equivalent durable backend). Pure in-memory
- * SessionWorkspaceStore is for unit tests only.
- *
  * Node / environments without IndexedDB use a process-wide memory backend keyed
  * by dbName so a NEW store instance still recovers prior flushes (restart sim).
  */

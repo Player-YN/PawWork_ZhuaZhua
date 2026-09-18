@@ -59,7 +59,7 @@ src/sidepanel/
   contextUsageUi.js  # composer Context ring + hover usage popover (estimate vs api)
   accessPolicyUi.js  # Guarded / Full Access chip + one-time risk dialog
   approvalUi.js      # host delete/ambiguous approval; payment wait has no approve button
-  tabLeaseUi.js      # TAB_LEASED / NEED_EXPLICIT_TAB human copy (no new-profile flow)
+  tabLeaseUi.js      # TAB_LEASED / NEED_EXPLICIT_TAB human copy
   README.md
 ```
 
@@ -81,7 +81,7 @@ Source of truth: **`css/layout.css`**.
 | `#taskStream` | document flow only (not a scrollport) |
 | History | lives **inside** `.thread-workspace` with the live task |
 | Durable task cards | `taskStatus.js`：仅 `ready` / `running` / `waiting` / `paused` 显著；终态（completed/failed/cancelled）折进 `<details>`。无 live task 时不画空「进行中」区 |
-| Tab lease copy | `TAB_LEASED` / `NEED_EXPLICIT_TAB` 走 `tabLeaseUi.js` + `i18n.tabLeased` / `needExplicitTab`；文案是停对方或换标签，不引导新 Chrome profile |
+| Tab lease copy | `TAB_LEASED` / `NEED_EXPLICIT_TAB` 走 `tabLeaseUi.js` + `i18n.tabLeased` / `needExplicitTab`；文案是停对方或换标签 |
 
 `scroll.js` scrolls `#panelScroll` and applies edge fades to it.
 
@@ -94,7 +94,7 @@ Trajectory controls live in **`trajectoryUi.js`** (`createTrajectoryUi({ t, getL
 ## Rules
 
 1. Prefer new UI helpers here; keep agent imports in `sidepanel.js` until a full domain split.
-2. Target: no single new file > ~400 LOC; orchestrator shrinks over time.
+2. Target: no single new file > ~400 LOC.
 3. Theme storage: `pagewand_theme_mode` (+ legacy `pagewand_theme`). Resolved theme also sets `color-scheme` on `html`/`body`.
 4. React scaffold is archived under `archive/ui-react-scaffold/`.
 5. i18n: edit strings in `i18n.js`; orchestrator keeps `currentLang` + `applyI18n()`.
@@ -103,14 +103,6 @@ Durable task cards（`taskStatus.js`）≠ 对话流里的 live `.task-card`（�
 
 对话流里右对齐的粉胶囊是 **用户气泡**（`.msg.user`）。文案刚好是「继续」时也不是控件：durable `resume` 只出现在 `paused` 任务卡上；clarify 的「继续」只在多问题澄清条里。思考条复用逻辑在 `thinkUi.js`（一轮一条，禁止再叠一条「思考中」）。有真实 provider thought 时块必须在：流式与封条后都可展开，默认折叠，`aria-expanded` 与 Enter/Space。行动摘要不能顶替它。`#turnJumpRail` 走右槽，不盖思考条展开箭头。
 
-`#botStatus` 已降级为隐藏 polite announcer（另有 `#botStatusLive` / `#botStatusAssertive`）。完成后不再在会话顶画完成/目标页/瞄准/任务大卡。运行中的 `.turn-disclosure` 只画一行宿主 current 动作（`liveActionBrief`）：灰字 + 直播 流光只扫字形；工具间隙保持上一句，不卸挂；不画 next、租约占用、政策 chip、页面 snapshot「读取当前标签」、也不画「成功 页面·…」行。无 provider thought 时披露仍占思考块下方同一位置，不造假思考块。成功完成压成该回合一行 `完成 · {duration} · {n} 个交付物`（默认折叠，按需 hydrate）。Stop 直接折成 `已停止`。只有等待用户、宿主审批、租约冲突、失败、durable 暂停保持展开。`#accessPolicyChip` 在 composer 浮层常驻，不跟大卡隐藏。审批/付款卡在披露下方，折叠完成墙不得盖住它们。next 仍只来自 `task.nextAction`，且不画进直播摘要。历史摘要按 `executionId` 展开时才 hydrate，同时只开一张，内存完整投影只留 8 轮。思考块合同不变（卡片 chrome），状态不从 thought 推断。Stop 走 `abortCurrentExecution({sessionId})`。选区是可选瞄准，不是权限门。
+`#botStatus` 已降级为隐藏 polite announcer（另有 `#botStatusLive` / `#botStatusAssertive`）。完成后不再在会话顶画完成/目标页/瞄准/任务大卡。运行中的 `.turn-disclosure` 只画一行宿主 current 动作（`liveActionBrief`）：灰字始终上色，直播时字形亮度扫过，不把 fill 设成 transparent；工具间隙保持上一句，不卸挂；不画 next、租约占用、政策 chip、页面 snapshot「读取当前标签」、也不画「成功 页面·…」行。无 provider thought 时披露仍占思考块下方同一位置，不造假思考块。成功完成压成该回合一行 `完成 · {duration} · {n} 个交付物`（默认折叠，按需 hydrate）。Stop 直接折成 `已停止`。只有等待用户、宿主审批、租约冲突、失败、durable 暂停保持展开。`#accessPolicyChip` 在 composer 浮层常驻，不跟大卡隐藏。审批/付款卡在披露下方，折叠完成墙不得盖住它们。next 仍只来自 `task.nextAction`，且不画进直播摘要。历史摘要按 `executionId` 展开时才 hydrate，同时只开一张，内存完整投影只留 8 轮。思考块合同不变（卡片 chrome），状态不从 thought 推断。Stop 走 `abortCurrentExecution({sessionId})`。
 
-交付物轨主 chip 是五家族（`docs` / `data` / `web` / `media` / `files`）。`design`/`slides` 不是主 chip，legacy 数据折进其它。打开面与徽标由 `artifactCapability.js` 单一映射驱动；未知文件进检查器，text-like 安全只读，未知 HTML/JS 不在 extension origin 执行。
-
-## Next extractions candidates
-
-- `taskCard.js` (createTaskCard, makeCollapsibleThinking) — conversation turn card, not durable task
-- `selection.js` (renderSelectionUI, picker state)
-- `task/events.js` (agent stream → DOM)
-- `drafts/card.js`
-- Optional `a11y.css` if focus/dialog rules grow further
+交付物轨主 chip 是五家族（`docs` / `data` / `web` / `media` / `files`）。打开面与徽标由 `artifactCapability.js` 单一映射驱动；未知文件进检查器，text-like 安全只读，未知 HTML/JS 不在 extension origin 执行。

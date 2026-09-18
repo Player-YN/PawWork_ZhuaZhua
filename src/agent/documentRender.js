@@ -1,6 +1,5 @@
 /**
  * PageWand document compiler — single atomic renderer used by render_document.
- * Product profile **A′**: extension-only; no end-user Pandoc/npm.
  * PDF = print-ready HTML → system print → Save as PDF.
  */
 
@@ -29,7 +28,7 @@ export {
   getRenderCapabilities
 };
 
-/** @deprecated A′ does not use pandoc in product path */
+/** Pandoc is not shipped. */
 export function isPandocReady() {
   return false;
 }
@@ -40,7 +39,7 @@ export async function ensurePandoc() {
   return {
     ok: false,
     code: 'ENGINE_NOT_IN_PRODUCT',
-    message: 'Pandoc is not shipped in extension-only product A′'
+    message: 'Pandoc is not shipped'
   };
 }
 export function getPandocLoadState() {
@@ -416,8 +415,8 @@ img{max-width:100%;border-radius:8px}
 }
 
 /**
- * Compile draft to an in-memory artifact (A′ extension-only).
- * Single tool surface: format enum → builtin or builtin_print (pdf). Never new tool names.
+ * Compile draft to an in-memory artifact.
+ * Single tool surface: format enum → builtin or builtin_print (pdf).
  *
  * @param {PageWandDraft|object} draft
  * @param {{
@@ -437,7 +436,7 @@ export async function renderDocumentFromDraft(draft, opts = {}) {
     return {
       status: 'error',
       code: 'UNSUPPORTED_FORMAT',
-      message: `Unsupported format: ${format}. Product A′ formats: ${RENDER_FORMATS.join(', ')}`
+      message: `Unsupported format: ${format}. Formats: ${RENDER_FORMATS.join(', ')}`
     };
   }
 
@@ -471,7 +470,7 @@ export async function renderDocumentFromDraft(draft, opts = {}) {
     };
   }
 
-  // A′ PDF: print-ready HTML (browser print → Save as PDF)
+  // PDF: print-ready HTML (browser print → Save as PDF)
   if (route.engine === 'builtin_print' || format === 'pdf') {
     const printHtml = draftToPrintHtml({ ...draft, title, blocks });
     const ref = createTextArtifact({
@@ -481,7 +480,7 @@ export async function renderDocumentFromDraft(draft, opts = {}) {
       mime: 'text/html'
     });
     warnings.push(
-      'PDF (A′): open print HTML → system print dialog → Save as PDF. Extension-only, no extra install.'
+      'PDF: open print HTML → system print dialog → Save as PDF.'
     );
     return {
       status: 'ok',
@@ -587,7 +586,7 @@ export function draftToPrintHtml(draft) {
 }
 
 /**
- * Builtin format backends (extension-only A′).
+ * Builtin format backends.
  * @param {{
  *   format: string,
  *   draft: object,
@@ -606,7 +605,7 @@ async function renderWithBuiltin(ctx) {
       status: 'error',
       code: 'ENGINE_NOT_IN_PRODUCT',
       message:
-        'DOCX is not in product profile A′ (extension-only). Use md/html or pdf via print.',
+        'DOCX is not available. Use md/html or pdf via print.',
       format,
       warnings
     };
@@ -679,7 +678,7 @@ async function renderWithBuiltin(ctx) {
       delivery: 'browser_print',
       printHtml,
       ...ref,
-      warnings: [...warnings, 'PDF via print HTML (A′)']
+      warnings: [...warnings, 'PDF via print HTML']
     };
   }
 

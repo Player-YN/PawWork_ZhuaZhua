@@ -55,7 +55,10 @@ import {
 } from '../sessionWorkspace/skillStore.js';
 import { getSkill, listPackagedSkillCatalog } from '../skills/registry.js';
 import { answerClarify, abortSessionClarifies } from '../sessionWorkspace/clarifyGate.js';
-import { abortExecutionApprovals } from '../sessionWorkspace/approvalGate.js';
+import { abortExecutionApprovals, createApprovalRecord, waitForApproval } from '../sessionWorkspace/approvalGate.js';
+import { createTabListenRuntime, resolveListenStreamId } from '../host/tabListen.js';
+import { loadWebAcquireSettings } from '../../webAcquireSettings.js';
+import { transcribeAudioFile } from '../primitives/transcribe.js';
 import { callBrowserSys } from '../host/sysClient.js';
 import { gatedDispatch, hostAnswerApproval, hostGetPendingApproval } from '../host/operationGate.js';
 import { createCallJournal, createMemoryCallJournal, createUnavailableCallJournal, openCallJournal, slimJournalAudit } from '../host/callJournal.js';
@@ -130,6 +133,7 @@ export class SessionWorkspaceService {
     this._releaseTabLeasesFn = typeof opts.releaseTabLeases === 'function' ? opts.releaseTabLeases : null;
     this._journal = opts.journal
       || (opts.memoryJournal === true ? createCallJournal(createMemoryCallJournal()) : createUnavailableCallJournal());
+    this._tabListen = opts.tabListen || null;
     this._ensurePolicyAdapters();
     const recovered = recoverInterruptedTasks(store);
     this._startupPersist = recovered.length ? this._persist() : Promise.resolve();
@@ -476,9 +480,21 @@ export class SessionWorkspaceService {
     }
   }
 
+  _listenRuntime() {
+    if (!this._tabListen) {
+      this._tabListen = createTabListenRuntime({
+        getFs: (sessionId, executionId) => createSessionGuestFs(this.runtime.store, { sessionId, executionId }),
+        loadStt: () => loadWebAcquireSettings(),
+        transcribeFile: (input) => transcribeAudioFile(input)
+      });
+    }
+    return this._tabListen;
+  }
+
   async _cleanupExecutionPolicy(sessionId, executionId) {
     const sid = String(sessionId || '');
     const eid = String(executionId || '');
+    try { await this._listenRuntime().stopExecution(sid, eid); } catch { /* capture must not block abort */ }
     abortExecutionApprovals(sid, eid);
     await this._dropTickets(sid, eid);
     if (!this._journal || this._journal.kind === 'unavailable') return;
@@ -679,7 +695,134 @@ export class SessionWorkspaceService {
     };
   }
 
+  async _waitListenGrant(req, denied, signal) {
+    const approval = createApprovalRecord({
+      sessionId: req.sessionId,
+      executionId: req.executionId,
+      tabId: req.tabId ?? denied?.tabId,
+      url: req.url || denied?.url || '',
+      risk: 'tab-capture',
+      confidence: 'known',
+      summary: '批准后开始听当前标签',
+      detail: denied?.title || req.name || '',
+      now: Date.now()
+    });
+    approval.kind = 'tab-capture';
+    if (this._journal && this._journal.kind !== 'unavailable') {
+      try { await this._journal.putApproval(approval); } catch { /* waiter still works in memory */ }
+    }
+    this._broadcastUiEvent({
+      type: 'approval-required',
+      kind: 'tab-capture',
+      sessionId: req.sessionId,
+      executionId: req.executionId,
+      approvalId: approval.approvalId,
+      operationId: approval.operationId,
+      risk: 'tab-capture',
+      summary: approval.summary,
+      detail: approval.detail,
+      expiresAt: approval.expiresAt,
+      tabId: approval.tabId,
+      url: approval.url,
+      decisionRequired: true
+    });
+    let answer;
+    try {
+      answer = await waitForApproval({
+        approvalId: approval.approvalId,
+        sessionId: req.sessionId,
+        executionId: req.executionId,
+        signal
+      });
+    } catch (error) {
+      this._broadcastUiEvent({
+        type: 'approval-done',
+        sessionId: req.sessionId,
+        approvalId: approval.approvalId,
+        decision: 'expired',
+        code: error?.code || 'APPROVAL_EXPIRED'
+      });
+      return { ok: false, code: error?.code || 'APPROVAL_EXPIRED', error: 'Listen grant expired.' };
+    }
+    this._broadcastUiEvent({
+      type: 'approval-done',
+      sessionId: req.sessionId,
+      approvalId: approval.approvalId,
+      decision: answer?.decision === 'approve' ? 'approve' : 'deny'
+    });
+    if (!answer || answer.decision !== 'approve') {
+      return { ok: false, code: 'APPROVAL_DENIED', error: 'Listen grant denied.' };
+    }
+    return {
+      ok: true,
+      streamId: answer.streamId ? String(answer.streamId) : '',
+      tabId: approval.tabId,
+      title: denied?.title || ''
+    };
+  }
+
+  async _dispatchListen(req, signal) {
+    const listen = String(req.listen || '').trim().toLowerCase();
+    const runtime = this._listenRuntime();
+    if (listen === 'start') {
+      const prepared = await resolveListenStreamId(
+        () => this._pageAction({ ...req, op: 'listen', listen: 'start' }, signal),
+        (denied) => this._waitListenGrant(req, denied, signal)
+      );
+      if (!prepared?.ok) return prepared;
+      return runtime.start({
+        streamId: prepared.streamId,
+        tabId: prepared.tabId ?? req.tabId,
+        sessionId: req.sessionId,
+        executionId: req.executionId,
+        title: prepared.title || ''
+      });
+    }
+    const sw = await this._pageAction({ ...req, op: 'listen', listen }, signal);
+    if (!sw?.ok) return sw;
+    if (listen === 'clip') {
+      return runtime.clip({ seconds: req.seconds, transcribe: req.transcribe === true });
+    }
+    if (listen === 'wait') {
+      return runtime.wait({
+        text: req.text,
+        ms: req.ms,
+        seconds: req.seconds,
+        transcribe: req.transcribe === true,
+        signal
+      });
+    }
+    if (listen === 'stop') return runtime.stop();
+    return { ok: false, code: 'BAD_INPUT', error: 'listen must be start, clip, stop, or wait' };
+  }
+
+  async _gatedListenAction(payload, sessionId, signal) {
+    const executionId = payload?.executionId || this._activeBySession.get(sessionId)?.executionId;
+    return gatedDispatch(
+      {
+        channel: 'action',
+        ...payload,
+        sessionId,
+        executionId,
+        op: 'listen'
+      },
+      {
+        journal: this._journal,
+        signal,
+        broadcast: (ev) => this._broadcastUiEvent(ev),
+        putTicket: (ticket) => this._putTicket(ticket),
+        dropTicket: (operationId) => this._dropTicket(operationId),
+        readPolicy: () => this._readPolicy(),
+        verifyFacts: () => ({}),
+        send: (req) => this._dispatchListen(req, signal)
+      }
+    );
+  }
+
   async _gatedPageAction(payload, sessionId, signal) {
+    if (payload?.op === 'listen') {
+      return this._gatedListenAction(payload, sessionId, signal);
+    }
     if (payload?.op === 'upload') {
       const prepared = await this._prepareUploadParams(payload, sessionId, signal);
       if (!prepared.ok) return prepared;

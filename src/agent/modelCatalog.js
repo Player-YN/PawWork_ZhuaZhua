@@ -1,3 +1,5 @@
+import { assertSafeByokEndpointUrl, redactSecretsInText } from './safeEndpointUrl.js';
+
 /**
  * PageWand model catalog (IG-6) — OpenAI-compatible GET /models + shrink UI helpers.
  *
@@ -212,7 +214,7 @@ function hasExplicitVisionHint(id) {
 
 /**
  * Known text-only chat families (leaf id). Vision exceptions (`vl` / `vision`) win.
- * Unknown ids are NOT listed — BYOK defaults permissive.
+ * Unknown ids are not listed.
  */
 const TEXT_ONLY_CHAT_PATTERNS = [
   /^deepseek(?:[-_.]|$)/,
@@ -272,7 +274,7 @@ export function isKnownVisionChatModel(modelId) {
 
 /**
  * `'vision' | 'text-only' | 'unknown'`
- * Empty / unset id is `unknown` (BYOK: do not block).
+ * Empty / unset id is `unknown`.
  * @param {string} [modelId]
  * @returns {'vision'|'text-only'|'unknown'}
  */
@@ -286,8 +288,7 @@ export function classifyChatVisionCapability(modelId) {
 
 /**
  * Whether the host should treat this chat model as able to receive image parts.
- * Known text-only families → false. Known vision *and unknown* → true (permissive).
- * A stale allow-list must not block a BYOK send; provider errors surface at runtime.
+ * Known text-only → false; known vision and unknown → true. Provider errors surface at runtime.
  * @param {string} [modelId]
  * @returns {boolean}
  */
@@ -730,7 +731,7 @@ export function applyProviderProbeResult(provider, probe, now = Date.now()) {
     at: Number.isFinite(now) ? now : Date.now(),
     count: Number(probe?.count) || (probe?.ok ? catalog.chat.length : 0)
   };
-  if (!lastProbe.ok) lastProbe.error = String(probe?.error || 'error');
+  if (!lastProbe.ok) lastProbe.error = redactSecretsInText(String(probe?.error || 'error')).slice(0, 240);
   return {
     provider: provider && typeof provider === 'object' ? { ...provider, lastProbe } : { lastProbe },
     catalog,
@@ -873,7 +874,7 @@ export async function probeOpenAICompatibleApi(baseURL, apiKey, opts = {}) {
       endpoint,
       count: 0,
       models: [],
-      error: e instanceof Error ? e.message : String(e)
+      error: redactSecretsInText(e instanceof Error ? e.message : String(e), [apiKey])
     };
   }
 }
@@ -890,6 +891,7 @@ export async function probeOpenAICompatibleApi(baseURL, apiKey, opts = {}) {
 export async function fetchImageGenModels(baseURL, apiKey, opts = {}) {
   const base = normalizeModelsBaseURL(baseURL);
   if (!base) throw new Error('baseURL required');
+  assertSafeByokEndpointUrl(base, 'Image Base URL');
   const key = typeof apiKey === 'string' ? apiKey.trim() : '';
   if (!key) throw new Error('API Key required to refresh models');
 
@@ -933,6 +935,7 @@ export async function fetchImageGenModels(baseURL, apiKey, opts = {}) {
 export async function fetchOpenAICompatibleModels(baseURL, apiKey, opts = {}) {
   const base = normalizeModelsBaseURL(baseURL);
   if (!base) throw new Error('baseURL required');
+  assertSafeByokEndpointUrl(base, 'Provider Base URL');
   const key = typeof apiKey === 'string' ? apiKey.trim() : '';
   if (!key) throw new Error('API Key required to refresh models');
 

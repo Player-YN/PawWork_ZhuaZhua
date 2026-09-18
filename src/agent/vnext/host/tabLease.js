@@ -1,6 +1,6 @@
 /**
  * Live-page tab leases. Pure registry for tests; serialized storage.session adapter
- * for the SW. Survives worker suspension, NOT browser restart. Not a call journal.
+ * for the SW. Survives worker suspension; cleared on browser restart.
  */
 
 /** @type {Map<number, { sessionId: string, executionId: string, acquiredAt: number, kinds: string[] }>} */
@@ -227,7 +227,7 @@ export function revokeTabLeaseOwner(sessionId, executionId) {
   return withPersistentLeases(() => {
     if (!sessionId || !executionId) return false;
     revokedOwners.set(ownerKey(sessionId, executionId), Date.now());
-    // Execution IDs are unique; this is a bounded late-delivery fence, not a journal.
+    // Execution IDs are unique; cap late-delivery fence at 2048.
     while (revokedOwners.size > 2048) revokedOwners.delete(revokedOwners.keys().next().value);
     return true;
   });

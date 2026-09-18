@@ -22,6 +22,7 @@ import {
   DEFAULT_IMAGE_MODEL,
   defaultImageConfig
 } from './agent/llm.js';
+import { assertSafeByokEndpointUrl, redactSecretsInText } from './agent/safeEndpointUrl.js';
 import {
   loadWebAcquireSettings,
   saveWebAcquireSettings,
@@ -31,8 +32,13 @@ import {
   tavilySearchProbeUrl,
   tavilySearchProbeBody,
   braveSearchProbeUrl,
-  braveSearchProbeHeaders
+  braveSearchProbeHeaders,
+  DEFAULT_STT_BASE_URL,
+  DEFAULT_STT_MODEL,
+  findSttProvider,
+  sttAuthHeaders
 } from './agent/webAcquireSettings.js';
+import { buildSttProbeRequest, iflytekProbeSucceeded } from './agent/vnext/primitives/transcribe.js';
 // Product Session Workspace Runtime lives in the offscreen document.
 import { workspaceRpc } from './agent/vnext/host/workspaceClient.js';
 import {
@@ -482,6 +488,8 @@ let settingsConfigUi = {
 let settingsImageUi = { providerId: null, hasStoredKey: false, keyTail: '' };
 /** Web-acquire editor vendor: tavily | brave | firecrawl */
 let settingsWebUi = { kind: 'tavily' };
+/** STT editor preset: groq | openai-compatible */
+let settingsSttUi = { preset: 'groq', hasStoredKey: false, keyTail: '' };
 
 /** @deprecated legacy name kept as alias so old partial code paths never TDZ */
 const settingsProviderUi = settingsConfigUi;
@@ -2056,8 +2064,8 @@ function refreshBotChrome() {
     const n = currentAimedCount();
     el.textContent = formatAimingText(n, currentLang);
     el.title = currentLang === 'en'
-      ? 'Full page is reachable. Aimed items are priority context, not a permission gate.'
-      : '整页可访问。瞄准项是优先上下文，不是权限门。';
+      ? 'Aimed items are added to context first.'
+      : '瞄准项会优先进入上下文。';
   }
   botStatusUi.apply({ type: 'aiming', count: currentAimedCount() }, botStatusContext());
   accessPolicyUi.renderChip?.();
@@ -2636,7 +2644,7 @@ function updateMultimodalBadgeState() {
 }
 
 async function checkBackendHealth() {
-  // No local Python/daemon — product is extension-only + BYOK cloud LLM
+  // No local Python/daemon.
   isBackendOnline = false;
   refreshAgentStatusBadge();
 }
@@ -2648,12 +2656,12 @@ async function refreshAgentStatusBadge() {
     const settings = await loadLlmSettings();
     if (!settings.apiKey) {
       statusEl.textContent = currentLang === 'en' ? 'Need API Key' : '需配置 Key';
-      statusEl.title = 'Open ⚙️ Settings to add provider + API key (BYOK · cloud API)';
+      statusEl.title = 'Open ⚙️ Settings to add provider + API key';
     } else {
       statusEl.textContent = t('statusReady');
       statusEl.title = settings.providerName
         ? `${settings.providerName} · ${settings.model || ''}`
-        : 'Paw Work vNext ready (extension runtime · cloud LLM)';
+        : 'Paw Work vNext ready';
     }
   } catch {
     statusEl.textContent = t('statusReady');
@@ -12373,7 +12381,7 @@ async function persistProbeOnProvider(probe, providerId = settingsConfigUi.provi
 }
 
 /**
- * Shared BYOK GET /models probe. Settings and composer picker both call this.
+ * Shared GET /models probe. Settings and composer picker both call this.
  * Writes catalog cache + lastProbe. Does not change current model ids.
  *
  * @param {{ id?: string, baseURL?: string, apiKey?: string, image?: object }} provider
@@ -12395,6 +12403,16 @@ async function probeAndPersistProviderCatalog(provider) {
       error: settingsLangEn()
         ? 'Base URL cannot be an image_generation path.'
         : 'Base URL 不能是 image_generation 路径。'
+    };
+  }
+  try {
+    assertSafeByokEndpointUrl(baseURL, 'Provider Base URL');
+  } catch {
+    return {
+      ...empty,
+      error: settingsLangEn()
+        ? 'Base URL must be HTTPS (http only for localhost / 127.0.0.1 / ::1).'
+        : 'Base URL 必须是 HTTPS（仅 localhost / 127.0.0.1 / ::1 可用 http）。'
     };
   }
   if (!apiKey) {
@@ -12761,6 +12779,10 @@ function setWebEditorOpen(open) {
   setEditorOpen('webAcquireEditor', 'addWebAcquireBtn', open);
 }
 
+function setSttEditorOpen(open) {
+  setEditorOpen('sttEditor', 'addSttBtn', open);
+}
+
 function renderVendorCard({ name, meta, active, onSelect, onDelete }) {
   const card = document.createElement('div');
   card.className = 'api-vendor-card' + (active ? ' is-active' : '');
@@ -12941,12 +12963,44 @@ async function renderWebVendorList() {
   }
 }
 
+async function renderSttVendorList() {
+  const list = document.getElementById('sttVendorList');
+  if (!list) return;
+  list.innerHTML = '';
+  const cfg = await loadWebAcquireSettings();
+  const en = settingsLangEn();
+  const line = document.getElementById('sttStatusLine');
+  const hasKey = Boolean(cfg.sttKey);
+  if (line) {
+    line.hidden = hasKey;
+    if (!hasKey) line.textContent = en ? 'No transcription API yet.' : '尚未添加转写 API。';
+  }
+  if (!hasKey) return;
+  const preset = findSttProvider(cfg.sttProvider);
+  const name = preset?.id === 'openai-compatible' ? (en ? 'Custom' : '自定义') : (preset?.name || 'Groq');
+  list.appendChild(
+    renderVendorCard({
+      name,
+      meta: `${maskKeyTail(cfg.sttKey)} · ${cfg.sttModel || DEFAULT_STT_MODEL}`,
+      active: true,
+      onSelect: () => {
+        void (async () => {
+          openSttEditor(cfg.sttProvider || 'groq');
+        })();
+      },
+      onDelete: () => confirmDeleteVendor(name, () => deleteSttVendor())
+    })
+  );
+}
+
 async function refreshVendorBoards() {
   const state = await loadProvidersState();
   renderInferenceVendorList(state);
   renderImageVendorList(state);
   await fillWebAcquireForm();
   await renderWebVendorList();
+  await fillSttForm();
+  await renderSttVendorList();
   refreshAgentStatusBadge();
   void refreshImageGenChip();
   void refreshSkillSettingsList();
@@ -12955,6 +13009,7 @@ async function refreshVendorBoards() {
 function openInferenceEditor(provider) {
   setImageEditorOpen(false);
   setWebEditorOpen(false);
+  setSttEditorOpen(false);
   if (provider) {
     fillSettingsForm(provider);
   } else {
@@ -13015,6 +13070,7 @@ function fillImageForm(provider) {
 function openImageEditor(provider) {
   setInferenceEditorOpen(false);
   setWebEditorOpen(false);
+  setSttEditorOpen(false);
   settingsImageUi.providerId = provider?.id || null;
   if (provider?.image?.enabled || provider?.image?.model) {
     fillImageForm(provider);
@@ -13053,6 +13109,7 @@ function setWebEditorKind(kind) {
 function openWebEditor(kind) {
   setInferenceEditorOpen(false);
   setImageEditorOpen(false);
+  setSttEditorOpen(false);
   setWebEditorKind(kind || 'tavily');
   setWebEditorOpen(true);
   const focusId =
@@ -13083,6 +13140,18 @@ async function saveInferenceEditor(opts = {}) {
       hint.textContent = settingsLangEn()
         ? 'Inference Base URL cannot include image_generation.'
         : '推理 Base URL 不能包含 image_generation。';
+    }
+    document.getElementById('apiBaseInput')?.focus();
+    return false;
+  }
+  try {
+    assertSafeByokEndpointUrl(form.baseURL, 'Provider Base URL');
+  } catch {
+    if (hint) {
+      hint.hidden = false;
+      hint.textContent = settingsLangEn()
+        ? 'Base URL must be HTTPS (http only for localhost / 127.0.0.1 / ::1).'
+        : 'Base URL 必须是 HTTPS（仅 localhost / 127.0.0.1 / ::1 可用 http）。';
     }
     document.getElementById('apiBaseInput')?.focus();
     return false;
@@ -13134,6 +13203,18 @@ async function saveImageEditor(opts = {}) {
   const nextImage = { ...(form.image || {}), enabled: true };
   if (!nextImage.baseURL) {
     showSidepanelToast(settingsLangEn() ? 'Enter image Base URL.' : '请填写生图 Base URL。', { error: true });
+    document.getElementById('providerImageBaseInput')?.focus();
+    return false;
+  }
+  try {
+    assertSafeByokEndpointUrl(nextImage.baseURL, 'Image Base URL');
+  } catch {
+    showSidepanelToast(
+      settingsLangEn()
+        ? 'Image Base URL must be HTTPS (http only for localhost / 127.0.0.1 / ::1).'
+        : '生图 Base URL 必须是 HTTPS（仅 localhost / 127.0.0.1 / ::1 可用 http）。',
+      { error: true }
+    );
     document.getElementById('providerImageBaseInput')?.focus();
     return false;
   }
@@ -13256,6 +13337,7 @@ async function refreshSettingsForm() {
   setInferenceEditorOpen(false);
   setImageEditorOpen(false);
   setWebEditorOpen(false);
+  setSttEditorOpen(false);
   setSkillEditorOpen(false);
   await refreshVendorBoards();
   const state = await loadProvidersState();
@@ -13330,6 +13412,193 @@ function maskKeyPlaceholder(key, emptyPh) {
   return emptyPh;
 }
 
+function setSttEditorPreset(preset) {
+  const row = findSttProvider(preset) || findSttProvider('groq');
+  const next = row.id;
+  settingsSttUi.preset = next;
+  document.querySelectorAll('#sttPresetRow [data-stt-preset]').forEach((btn) => {
+    btn.classList.toggle('active', btn.getAttribute('data-stt-preset') === next);
+  });
+  const base = document.getElementById('sttBaseInput');
+  const model = document.getElementById('sttModelInput');
+  const key = document.getElementById('sttKeyInput');
+  if (base && !base.value.trim()) base.value = row.baseURL;
+  if (model && !model.value.trim()) model.value = row.model;
+  if (key && !settingsSttUi.hasStoredKey) key.placeholder = row.keyPlaceholder || 'sk-...';
+}
+
+function applySttPreset(preset) {
+  const row = findSttProvider(preset) || findSttProvider('groq');
+  const base = document.getElementById('sttBaseInput');
+  const model = document.getElementById('sttModelInput');
+  const key = document.getElementById('sttKeyInput');
+  if (base) base.value = row.baseURL;
+  if (model) model.value = row.model;
+  if (key && !settingsSttUi.hasStoredKey) key.placeholder = row.keyPlaceholder || 'sk-...';
+  setSttEditorPreset(row.id);
+}
+
+function openSttEditor(preset) {
+  setInferenceEditorOpen(false);
+  setImageEditorOpen(false);
+  setWebEditorOpen(false);
+  setSttEditorPreset(preset || settingsSttUi.preset || 'groq');
+  setSttEditorOpen(true);
+  document.getElementById('sttKeyInput')?.focus();
+}
+
+async function fillSttForm() {
+  const cfg = await loadWebAcquireSettings();
+  settingsSttUi.hasStoredKey = Boolean(cfg.sttKey);
+  settingsSttUi.keyTail = cfg.sttKey ? String(cfg.sttKey).slice(-4) : '';
+  const base = document.getElementById('sttBaseInput');
+  const key = document.getElementById('sttKeyInput');
+  const model = document.getElementById('sttModelInput');
+  if (base) {
+    base.value = cfg.sttBaseURL || DEFAULT_STT_BASE_URL;
+    base.placeholder = DEFAULT_STT_BASE_URL;
+  }
+  if (model) model.value = cfg.sttModel || DEFAULT_STT_MODEL;
+  if (key) {
+    key.value = '';
+    key.placeholder = maskKeyPlaceholder(cfg.sttKey, findSttProvider(cfg.sttProvider)?.keyPlaceholder || 'sk-...');
+  }
+  setSttEditorPreset(cfg.sttProvider || 'groq');
+  paintSttProbeResult('');
+}
+
+function paintSttProbeResult(text, { error = false } = {}) {
+  const el = document.getElementById('sttProbeResult');
+  if (!el) return;
+  if (!text) {
+    el.hidden = true;
+    el.textContent = '';
+    el.classList.remove('is-err', 'is-ok');
+    return;
+  }
+  el.hidden = false;
+  el.textContent = text;
+  el.classList.toggle('is-err', !!error);
+  el.classList.toggle('is-ok', !error);
+}
+
+function sttEditorTypedKey(cfg) {
+  const typed = document.getElementById('sttKeyInput')?.value?.trim() || '';
+  if (typed) return typed;
+  return String(cfg?.sttKey || '');
+}
+
+async function onSttProbeClick() {
+  const btn = document.getElementById('sttProbeBtn');
+  const cfg = await loadWebAcquireSettings();
+  const key = sttEditorTypedKey(cfg);
+  const baseRaw = document.getElementById('sttBaseInput')?.value?.trim() || cfg.sttBaseURL || DEFAULT_STT_BASE_URL;
+  if (!key) {
+    paintSttProbeResult(settingsLangEn() ? 'Enter an API key first.' : '请先填写 API Key。', { error: true });
+    return;
+  }
+  try {
+    assertSafeByokEndpointUrl(baseRaw, 'STT Base URL');
+  } catch {
+    paintSttProbeResult(
+      settingsLangEn()
+        ? 'Base URL must be HTTPS (http only for localhost / 127.0.0.1 / ::1).'
+        : 'Base URL 必须是 HTTPS（仅 localhost / 127.0.0.1 / ::1 可用 http）。',
+      { error: true }
+    );
+    return;
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = t('modelPickerProbing');
+  }
+  paintSttProbeResult(settingsLangEn() ? 'Probing…' : '探测中…');
+  try {
+    const spec = await buildSttProbeRequest({
+      apiKey: key,
+      baseURL: baseRaw,
+      providerId: settingsSttUi.preset
+    });
+    const res = await proxyJsonRequest({
+      url: spec.url,
+      method: spec.method || 'GET',
+      headers: spec.headers || sttAuthHeaders(key)
+    });
+    const preset = findSttProvider(settingsSttUi.preset);
+    if (preset?.id === 'iflytek') {
+      const raw = typeof res.text === 'string'
+        ? res.text
+        : res.json != null
+          ? JSON.stringify(res.json)
+          : String(res.error || '');
+      if (!iflytekProbeSucceeded(res.status || (res.ok ? 200 : 400), raw)) {
+        throw new Error(webProbeErrorMessage(res));
+      }
+    } else if (!res.ok) {
+      throw new Error(webProbeErrorMessage(res));
+    }
+    const name = preset?.id === 'openai-compatible' ? (settingsLangEn() ? 'Custom' : '自定义') : (preset?.name || 'Groq');
+    paintSttProbeResult(t('sttProbeOk').replace('{name}', name));
+  } catch (e) {
+    paintSttProbeResult(t('apiProbeFail').replace('{err}', e?.message || e), { error: true });
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = t('sttProbeBtn');
+    }
+  }
+}
+
+async function saveSttFromForm() {
+  const cfg = await loadWebAcquireSettings();
+  const typedKey = document.getElementById('sttKeyInput')?.value?.trim() || '';
+  const baseRaw = document.getElementById('sttBaseInput')?.value?.trim() || '';
+  const modelRaw = document.getElementById('sttModelInput')?.value?.trim() || '';
+  const base = baseRaw || cfg.sttBaseURL || DEFAULT_STT_BASE_URL;
+  try {
+    assertSafeByokEndpointUrl(base, 'STT Base URL');
+  } catch {
+    showSidepanelToast(
+      settingsLangEn()
+        ? 'STT Base URL must be HTTPS (http only for localhost / 127.0.0.1 / ::1).'
+        : '转写 Base URL 必须是 HTTPS（仅 localhost / 127.0.0.1 / ::1 可用 http）。',
+      { error: true }
+    );
+    document.getElementById('sttBaseInput')?.focus();
+    return false;
+  }
+  if (!typedKey && !cfg.sttKey) {
+    showSidepanelToast(settingsLangEn() ? 'Enter a transcription API key.' : '请填写转写 API Key。', {
+      error: true
+    });
+    document.getElementById('sttKeyInput')?.focus();
+    return false;
+  }
+  const patch = {
+    sttProvider: findSttProvider(settingsSttUi.preset)?.id || 'groq',
+    sttBaseURL: base,
+    sttModel: modelRaw || DEFAULT_STT_MODEL
+  };
+  if (typedKey) patch.sttKey = typedKey;
+  await saveWebAcquireSettings(patch);
+  await fillSttForm();
+  await renderSttVendorList();
+  return true;
+}
+
+async function deleteSttVendor() {
+  try {
+    await saveWebAcquireSettings({ sttKey: '' });
+    setSttEditorOpen(false);
+    await refreshVendorBoards();
+  } catch (e) {
+    showSidepanelToast(
+      (settingsLangEn() ? 'Delete failed: ' : '删除失败: ') + (e?.message || e),
+      { error: true }
+    );
+  }
+}
+
 async function fillWebAcquireForm() {
   const cfg = await loadWebAcquireSettings();
   const sel = document.getElementById('webSearchProviderSelect');
@@ -13368,6 +13637,7 @@ function paintWebProbeResult(text, { error = false } = {}) {
 }
 
 async function proxyJsonRequest({ url, method = 'GET', headers, body }) {
+  assertSafeByokEndpointUrl(url, 'Acquire endpoint');
   if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
     const res = await chrome.runtime.sendMessage({
       action: 'llm_proxy_fetch',
@@ -13414,7 +13684,7 @@ function webProbeErrorMessage(res) {
     (typeof json?.detail === 'string' && json.detail) ||
     (typeof res?.text === 'string' && res.text.slice(0, 180)) ||
     (res?.status ? `HTTP ${res.status}` : 'probe failed');
-  return String(msg);
+  return redactSecretsInText(String(msg));
 }
 
 async function onWebAcquireProbeClick() {
@@ -13562,6 +13832,7 @@ async function saveAllSettings() {
   const infEd = document.getElementById('inferenceEditor');
   const imgEd = document.getElementById('imageEditor');
   const webEd = document.getElementById('webAcquireEditor');
+  const sttEd = document.getElementById('sttEditor');
   try {
     if (infEd && !infEd.hidden) {
       const ok = await saveInferenceEditor({ keepOpen: true });
@@ -13573,6 +13844,10 @@ async function saveAllSettings() {
     }
     if (webEd && !webEd.hidden) {
       const ok = await saveWebAcquireFromForm();
+      if (!ok) return false;
+    }
+    if (sttEd && !sttEd.hidden) {
+      const ok = await saveSttFromForm();
       if (!ok) return false;
     }
     await saveDebugSettings();
@@ -13659,6 +13934,32 @@ function setupAgentSettingsModal() {
   document.getElementById('webAcquireProbeBtn')?.addEventListener('click', () => {
     void onWebAcquireProbeClick();
   });
+
+  document.getElementById('addSttBtn')?.addEventListener('click', () => {
+    openSttEditor('groq');
+    applySttPreset('groq');
+  });
+  document.getElementById('cancelSttEditorBtn')?.addEventListener('click', () => {
+    setSttEditorOpen(false);
+  });
+  document.getElementById('saveSttBtn')?.addEventListener('click', () => {
+    void (async () => {
+      const ok = await saveSttFromForm();
+      if (ok) setSttEditorOpen(false);
+    })();
+  });
+  document.getElementById('sttProbeBtn')?.addEventListener('click', () => {
+    void onSttProbeClick();
+  });
+  const sttPresetRow = document.getElementById('sttPresetRow');
+  if (sttPresetRow) {
+    sttPresetRow.addEventListener('click', (ev) => {
+      const btn = ev.target?.closest?.('[data-stt-preset]');
+      if (!btn || !sttPresetRow.contains(btn)) return;
+      const id = btn.getAttribute('data-stt-preset');
+      if (id) applySttPreset(id);
+    });
+  }
 
   const presetRow = document.getElementById('inferencePresetRow');
   if (presetRow) {
@@ -14716,7 +15017,7 @@ async function triggerPackageZip() {
     title: 'Unavailable',
     placeholder: '',
     initialValue:
-      '本地 Python 打包已移除。产品为 Chrome 扩展 only + 云端 BYOK LLM，无需 :8000 服务。',
+      '本地 Python 打包已移除。',
     onConfirm: () => {}
   });
 }

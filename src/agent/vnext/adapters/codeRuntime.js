@@ -1447,8 +1447,7 @@ function unique(arr) {
 }
 
 /**
- * Honest failure log when QuickJS cannot load/run.
- * Does not soft-sandbox; surfaces MV3/CWS/path blocks for Criterion 5.
+ * Failure log when QuickJS cannot load/run.
  * @param {unknown} err
  */
 async function writeBlockLog(err) {

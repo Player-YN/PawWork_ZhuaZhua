@@ -2,15 +2,18 @@
  * Session-agent system prompt — static identity / operating prefix.
  *
  * Not here (trust the other layers):
- *   tool schema / SYS_MODEL_HINT  — how to call a tool or sys
+ *   tool schema / inspect view=sys  — how to call a tool or sys
  *   skill catalog description     — when to load which playbook
  *   skill body                    — recipes
  *
  * World index is a per-turn user-suffix (buildWorldStateBlock), not this prefix.
+ *
+ * Prefix also states login consent (clarify, then the user signs in on the live tab)
+ * and autonomous path planning (tabs / in-page tools / public acquire).
  */
 
 /** Bump when the system prefix text changes (trajectory / cache label). */
-export const SYSTEM_PROMPT_VERSION = 'v14-general-agent';
+export const SYSTEM_PROMPT_VERSION = 'v15-general-agent';
 export const OPEN_TAB_DOMAIN_CAP = 10;
 
 const OVERVIEW_CHAR_CAP = 1200;
@@ -28,7 +31,11 @@ export function buildSessionAgentInstructions(ctx = {}) {
     '',
     '以用户目标和约束为依据决定行动。用户要求执行时，直接推进；用户要求分析或建议时，提供相应结果。对于目标明确、范围内的常规步骤，自行判断并完成；只有缺少无法从环境中获得、且会实质影响结果的决定时，才向用户提问。',
     '',
+    '站点需要登录时，先用 clarify 询问用户是否要协助登录，并让用户选择。优先由用户用自己的账号在已打开的登录页上完成登录；对该页调用 action，不要用 acquire。',
+    '',
     '把浏览器和互联网视为可以探索和组合的工作环境。你可以发现、学习和使用现成网站的功能，也可以编写代码或组合多种能力。依据结果质量、可靠性和必要成本选择方法，不预设某种工具或路径总是更好。',
+    '',
+    '按持久的浏览器内任务自主规划路径：打开窗口或标签，用 action 点击页面上已有的站内工具，并用 acquire 在公开网上检索所需站点或工具。通道都在，由宿主门禁决定派发。',
     '',
     '用观察和小规模尝试减少不确定性。区分已知事实、推测和待验证事项。陌生界面、缺少现成流程或一次失败，都只是需要进一步判断的信息。根据新证据调整方法；连续尝试没有带来进展时，改变策略。',
     '',
@@ -134,7 +141,7 @@ export function buildWorldStateBlock(ctx = {}) {
 
   const core = [
     '[Session world — current snapshot, not a user message]',
-    'Optional aiming (user may say 选中/这些). Not a permission gate; the live page stays reachable without 伸爪:',
+    'Optional aiming (user may say 选中/这些):',
     `boundGroups=${JSON.stringify(compact)}`,
     `boundItemCount=${n}`,
     `artifactCount=${Number(ctx.artifactCount) || 0}`,
@@ -241,11 +248,11 @@ export function buildWorldStateBlock(ctx = {}) {
         'activeHtml is the open website page (data-paw-kind=site). selections are pinned DOM clicks (nodeId).'
       );
       htmlLines.push(
-        'Website motion is the packaged data-paw-* DSL (web act=read .motion). Guest scripts do not run; do not claim WebGL/auth/app JS.'
+        'Website motion is the packaged data-paw-* DSL (web act=read .motion).'
       );
     } else {
       htmlLines.push(
-        'activeHtml is an open HTML artifact. If it is not a website (data-paw-kind=site), treat it as a document page — not a Design/Slides canvas.'
+        'activeHtml is an open HTML artifact. If it is not a website (data-paw-kind=site), treat it as a document page.'
       );
     }
     optional.push({ key: 'activeHtml', lines: htmlLines });

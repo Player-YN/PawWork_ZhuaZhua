@@ -64,7 +64,9 @@ test('snapshot revisions never repeat across independent registries and invalida
 test('all page mutations, including name and bare press, require a snapshot revision', async () => {
   const state = fixture();
   for (const input of [{ op: 'click', name: 'Save' }, { op: 'press', key: 'Enter' }, { op: 'click', ref: 'f0.a1' }]) {
-    assert.equal((await handleWorkspacePageAction(request(input))).code, 'STALE_REF');
+    const out = await handleWorkspacePageAction(request(input));
+    assert.equal(out.code, 'BAD_INPUT');
+    assert.match(String(out.error || ''), /rev is required/);
   }
   assert.equal(state.clicks, 0);
 });

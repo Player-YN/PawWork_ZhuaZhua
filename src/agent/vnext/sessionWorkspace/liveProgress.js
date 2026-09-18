@@ -111,6 +111,7 @@ function applyHostLamp(next, ev, isZh) {
       else if (action === 'search') next.label = isZh ? '正在检索公开网' : 'Searching the public web';
       else if (action === 'map') next.label = isZh ? '正在列出站点页面' : 'Listing site URLs';
       else if (action === 'crawl') next.label = isZh ? '正在抓取站点页面' : 'Crawling a few site pages';
+      else if (action === 'transcribe') next.label = isZh ? '正在转写音频' : 'Transcribing audio';
       else next.label = isZh ? '正在获取内容' : 'Acquiring content';
       next.visible = false;
       return next;
@@ -141,6 +142,7 @@ function applyHostLamp(next, ev, isZh) {
       else if (op === 'snapshot') next.label = isZh ? '正在读取当前标签' : 'Reading the current tab';
       else if (op === 'wait') next.label = isZh ? '正在等待页面' : 'Waiting on the page';
       else if (op === 'upload') next.label = isZh ? '正在上传文件' : 'Uploading a file';
+      else if (op === 'listen') next.label = isZh ? '正在听当前标签' : 'Listening to the tab';
       else next.label = isZh ? '正在操作页面' : 'Acting on the page';
       next.visible = false;
       return next;

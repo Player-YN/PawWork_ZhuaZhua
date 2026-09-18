@@ -1,6 +1,6 @@
 /**
  * Pure mapper: common source patterns → additive data-paw-* DSL.
- * Clone pipeline / web act=clone call this. Never copies JS. Never claims WebGL/auth.
+ * Clone pipeline / web act=clone call this. Maps source patterns to data-paw-* attributes.
  */
 
 import { SITE_MOTION_ATTRS as A, SITE_MOTION_UNSUPPORTED } from './siteMotionSchema.js';
@@ -178,7 +178,7 @@ export function detectUnsupported(html) {
     add('UNSUPPORTED_CANVAS_FX', 'Canvas particle / 2d app effects are not packaged motion.');
   }
   if (/webgl|three(?:\.js|\/)|react-three|@react-three|spline-viewer|canvas[\s\S]{0,80}getContext\s*\(\s*['"]webgl/i.test(s)) {
-    add('UNSUPPORTED_WEBGL', 'WebGL / Three / Spline scenes are not packaged motion. Not claimed.');
+    add('UNSUPPORTED_WEBGL', 'WebGL / Three / Spline scenes are not packaged motion.');
   }
   if (/lottie-player|dotlottie|@lottiefiles/i.test(s)) {
     add('UNSUPPORTED_LOTTIE', 'Interactive Lottie players are not in the DSL. CSS/static fallback only.');

@@ -3106,29 +3106,23 @@ body[data-theme='light'] .topbar {
   background: none;
 }
 .turn-disclosure-current-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: inherit;
+  -webkit-text-fill-color: currentColor;
 }
 .turn-disclosure.is-sticky .turn-disclosure-current {
   color: var(--text-muted);
 }
-/* Live 摘要: muted gray glyphs + L→R 流光. Row chrome stays still. */
+/* Live 摘要: glyphs stay muted and painted. Shine is a color sweep — never transparent fill. */
 .turn-disclosure.is-live .turn-disclosure-current-text,
 .turn-disclosure.is-pulse .turn-disclosure-current-text {
-  background-image: linear-gradient(
-    90deg,
-    var(--text-muted) 0%,
-    var(--text-muted) 36%,
-    color-mix(in srgb, var(--text) 72%, var(--text-muted)) 50%,
-    var(--text-muted) 64%,
-    var(--text-muted) 100%
-  );
-  background-size: 220% 100%;
-  background-repeat: no-repeat;
-  background-position: 100% 0;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
+  color: var(--text-muted);
+  -webkit-text-fill-color: var(--text-muted);
+  background-image: none;
   animation: turnDisclosureShine 1.6s var(--ease-in-out, ease-in-out) infinite;
 }
 .turn-disclosure.is-pulse .turn-disclosure-current-text {
@@ -3256,8 +3250,15 @@ body[data-theme='light'] .topbar {
   background: transparent;
 }
 @keyframes turnDisclosureShine {
-  0% { background-position: 100% 0; }
-  100% { background-position: -120% 0; }
+  0%,
+  100% {
+    color: var(--text-muted);
+    -webkit-text-fill-color: var(--text-muted);
+  }
+  42% {
+    color: color-mix(in srgb, var(--text) 58%, var(--text-muted));
+    -webkit-text-fill-color: color-mix(in srgb, var(--text) 58%, var(--text-muted));
+  }
 }
 
 /* Messages */
@@ -7386,18 +7387,22 @@ body[data-theme="light"] .provider-preset-chip.active {
 #imageProbeResult.is-ok {
   color: var(--accent);
 }
-#webAcquireProbeResult {
+#webAcquireProbeResult,
+#sttProbeResult {
   margin: 6px 0 0;
   font-weight: 650;
 }
-#webAcquireProbeResult.is-ok {
+#webAcquireProbeResult.is-ok,
+#sttProbeResult.is-ok {
   color: var(--accent);
 }
-#webAcquireProbeResult.is-err {
+#webAcquireProbeResult.is-err,
+#sttProbeResult.is-err {
   color: var(--danger, #c45c6a);
 }
 #imageProbeResult[hidden],
 #webAcquireProbeResult[hidden],
+#sttProbeResult[hidden],
 #providerImageModelFilter[hidden] {
   display: none !important;
 }

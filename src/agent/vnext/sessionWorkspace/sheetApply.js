@@ -503,7 +503,7 @@ export function missingSheetOpError(op = '') {
     ok: false,
     code: 'BAD_INPUT',
     error: op ? `unknown sheet op "${op}"` : 'sheet command is missing op',
-    hint: 'each commands[] item needs op (setRange / setFormula / setValues2d / applyGrid / …)'
+    hint: `legal op: ${SHEET_OPS.join(' | ')}`
   };
 }
 

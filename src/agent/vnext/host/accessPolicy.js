@@ -1,5 +1,5 @@
 /**
- * Guarded / Full Access. Host-enforced, not a prompt preference.
+ * Guarded / Full Access.
  * Profile: chrome.storage.local pagewand_access_policy
  * Session override: chrome.storage.session pagewand_access_policy_session
  * Precedence: session > profile > guarded

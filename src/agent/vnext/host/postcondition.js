@@ -1,6 +1,5 @@
 /**
- * Minimal postcondition verifier.
- * Model natural-language evidence is never sufficient for verified.
+ * Postcondition verifier.
  * Known payment never reaches dispatched, so never reaches this module.
  */
 

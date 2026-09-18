@@ -1,0 +1,39 @@
+---
+description: Session Workspace tool schemas are short contracts; failure codes live only in receipts
+globs: src/agent/vnext/sessionWorkspace/tools.js,src/agent/vnext/sessionWorkspace/officeTools.js,src/agent/vnext/sessionWorkspace/taskTool.js,src/agent/vnext/primitives/run.js,src/agent/vnext/sessionWorkspace/browserSys.js
+alwaysApply: false
+---
+
+# Tool schema style
+
+Nine model tools stay named as they are. Schema text is the per-turn contract, not a handbook.
+
+## Tool description (2–5 sentences)
+
+1. What this capability is.
+2. When to use it / when to call another tool (one sentence).
+3. Call invariants (mutate needs the latest `rev`; public web uses `acquire`; an already-open tab uses `action`).
+
+Optional last sentence: `Failed calls return {ok:false, code, error, hint}.`
+
+Do not put in schema: error-code lists, retry essays, long `observationError` glosses, the full `sys` ISA, or command encyclopedias (`setRange` / `insertRow` and the like).
+
+## Field descriptions
+
+One line each. Cross-verb fields use a prefix: `click/fill:`, `upload:`, `listen:`.
+
+## `required`
+
+Match host rejection. Without JSON Schema `oneOf` (DeepSeek / most OpenAI-compatible ignore it): top-level `required` stays `['op']` (or `['action']` / `['code']` as today). Mutate `rev` field text: `Required for click, fill, select, press, scroll, fill_form, upload, pointer.` Missing `rev` on those ops is `BAD_INPUT`; a wrong `rev` is `STALE_REF`.
+
+## Errors
+
+Only in the receipt `{ ok: false, code, error, hint }`. `code` is stable `SCREAMING_SNAKE`. `error` is one sentence of what happened. `hint` is the next call. Success is `{ ok: true, ...facts }`. `observationError` is not `ok: false`.
+
+Do not list `TAB_LEASED` / `NEED_PAGE` / `FILE_CHOOSER` (or any code table) in a description.
+
+## Language
+
+Tool schema stays English. User-visible i18n is unchanged.
+
+`sheet` command names and the `sys` ABI live in `inspect view=sys` and failure `hint`, not in every-turn schema.

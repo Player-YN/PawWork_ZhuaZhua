@@ -5,6 +5,7 @@
  */
 
 import { loadLlmSettings } from '../../llm.js';
+import { assertSafeByokEndpointUrl, redactSecretsInText } from '../../safeEndpointUrl.js';
 import { createArtifact, listArtifacts, safeArtifactFileName } from './artifacts.js';
 import { assertItemReadable, isItemBoundToSession } from './auth.js';
 import { ensureItemPixels, looksLikeImageItem } from './itemPixels.js';
@@ -106,6 +107,11 @@ export async function generateSessionImage(env) {
   }
   if (!cfg.apiKey) return fail('NO_API_KEY: 生图需要 API Key。', 'NO_API_KEY');
   if (!cfg.baseURL) return fail('生图 Base URL 未配置', 'NO_IMAGE_BASE');
+  try {
+    assertSafeByokEndpointUrl(cfg.baseURL, 'Image Base URL');
+  } catch (e) {
+    return fail(e?.message || 'Image Base URL must use HTTPS', e?.code || 'INSECURE_ENDPOINT');
+  }
 
   const sources = await collectBoundImageSources(store, sessionId, env.itemIds, {
     fetchImpl: env.fetchImpl,
@@ -473,14 +479,17 @@ function isOpenAiImageProtocol(cfg) {
   return cfg.protocol === 'openai-image' || /\/images\/generations$/i.test(String(cfg.path || ''));
 }
 
-function providerHttpError(res, json, text) {
+function providerHttpError(res, json, text, apiKey) {
   const raw =
     json?.error?.message ||
     json?.error ||
     json?.message ||
     text.slice(0, 240) ||
     `HTTP ${res.status}`;
-  const msg = typeof raw === 'string' ? raw : JSON.stringify(raw).slice(0, 240);
+  const msg = redactSecretsInText(
+    typeof raw === 'string' ? raw : JSON.stringify(raw).slice(0, 240),
+    [apiKey]
+  );
   const err = new Error(msg);
   err.status = res.status;
   err.code = 'IMAGE_HTTP';
@@ -556,7 +565,7 @@ async function callImageEndpoint(cfg, { prompt, aspectRatio, references, fetchIm
     delete retry.output_format;
     ({ res, text, json } = await postJson(fetchImpl, url, headers, retry, signal));
   }
-  if (!res.ok) throw providerHttpError(res, json, text);
+  if (!res.ok) throw providerHttpError(res, json, text, cfg.apiKey);
   return materializeExtracted(extractImageBytes(json), fetchImpl, signal);
 }
 
@@ -595,11 +604,11 @@ async function callOpenRouterImage(cfg, { prompt, aspectRatio, references, fetch
         status: chat.res.status
       };
     }
-    if (!res.ok) throw providerHttpError(res, json, text);
-    throw providerHttpError(chat.res, chat.json, chat.text);
+    if (!res.ok) throw providerHttpError(res, json, text, cfg.apiKey);
+    throw providerHttpError(chat.res, chat.json, chat.text, cfg.apiKey);
   }
 
-  if (!res.ok) throw providerHttpError(res, json, text);
+  if (!res.ok) throw providerHttpError(res, json, text, cfg.apiKey);
   return extractImageBytes(json);
 }
 

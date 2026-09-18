@@ -1,5 +1,5 @@
 /**
- * Session-scoped append-only audit ring. Not a call journal, not exactly-once.
+ * Session-scoped append-only audit ring.
  * Host facts only: task / lease / abort / deadline / STALE / action outcome.
  * Never stores guest sys code or large bodies.
  */

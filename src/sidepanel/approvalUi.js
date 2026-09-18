@@ -9,6 +9,7 @@ export function approvalBannerText(rec, t) {
   if (rec.kind === 'payment-handoff' || rec.type === 'policy-blocked' || rec.risk === 'payment') {
     return t('approvalPaymentWait');
   }
+  if (rec.risk === 'tab-capture' || rec.kind === 'tab-capture') return t('approvalBannerListen');
   if (rec.risk === 'delete') return t('approvalBannerDelete');
   return t('approvalBannerAmbiguous');
 }
@@ -22,7 +23,8 @@ export function renderApprovalCard(host, rec, deps) {
   host.dataset.sessionId = String(rec.sessionId || '');
   host.dataset.risk = String(rec.risk || '');
   const payment = rec.kind === 'payment-handoff' || rec.type === 'policy-blocked' || rec.risk === 'payment' || rec.decisionRequired === false;
-  const riskClass = rec.risk === 'delete' ? 'is-delete' : payment ? 'is-payment' : 'is-ambiguous';
+  const capture = rec.risk === 'tab-capture' || rec.kind === 'tab-capture';
+  const riskClass = rec.risk === 'delete' ? 'is-delete' : payment ? 'is-payment' : capture ? 'is-ambiguous' : 'is-ambiguous';
   const banner = document.createElement('div');
   banner.className = 'clarify-live-banner approval-live-banner';
   banner.innerHTML = `<span class="clarify-live-orb" aria-hidden="true"></span><span class="clarify-live-banner-text">${escape(approvalBannerText(rec, t))}</span>`;
@@ -30,7 +32,13 @@ export function renderApprovalCard(host, rec, deps) {
   body.className = 'approval-live-body';
   const badge = document.createElement('div');
   badge.className = `approval-risk ${riskClass}`;
-  badge.textContent = rec.risk === 'delete' ? t('approvalRiskDelete') : payment ? t('approvalRiskPayment') : t('approvalRiskAmbiguous');
+  badge.textContent = rec.risk === 'delete'
+    ? t('approvalRiskDelete')
+    : payment
+      ? t('approvalRiskPayment')
+      : capture
+        ? t('approvalRiskListen')
+        : t('approvalRiskAmbiguous');
   const summary = document.createElement('p');
   summary.className = 'approval-summary';
   summary.textContent = String(rec.summary || '');
@@ -138,7 +146,22 @@ export function createApprovalUi(deps) {
     if (!host) return null;
     renderApprovalCard(host, rec, {
       t: deps.t,
-      onApprove: (row) => deps.answerApproval?.({ approvalId: row.approvalId, sessionId: row.sessionId, decision: 'approve' }),
+      onApprove: async (row) => {
+        const extra = {};
+        if ((row.risk === 'tab-capture' || row.kind === 'tab-capture') && row.tabId && chrome?.tabCapture?.getMediaStreamId) {
+          try {
+            extra.streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: Number(row.tabId) });
+          } catch {
+            /* SW retries getMediaStreamId after approve */
+          }
+        }
+        deps.answerApproval?.({
+          approvalId: row.approvalId,
+          sessionId: row.sessionId,
+          decision: 'approve',
+          ...extra
+        });
+      },
       onDeny: (row) => deps.answerApproval?.({ approvalId: row.approvalId, sessionId: row.sessionId, decision: 'deny' })
     });
     deps.getLiveTask?.(sid)?.el?.classList.add('is-clarifying');

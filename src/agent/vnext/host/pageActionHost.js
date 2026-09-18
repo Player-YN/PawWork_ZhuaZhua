@@ -24,9 +24,21 @@ import {
   screenshotToModelParts,
   observeDocumentKey
 } from '../sessionWorkspace/actionObserve.js';
+import { isCaptureGrantError, parseListenOp } from './tabListen.js';
 
 const snapshots = createPageSnapshotRegistry();
 const lastControls = new Map();
+
+function resolveActionMethod(request, extra = {}, op = '') {
+  const kind = String(op || extra.op || request?.op || '').toLowerCase();
+  if (kind === 'upload') {
+    return String(extra.uploadMethod || request.uploadMethod || extra.method || request.method || 'auto').toLowerCase();
+  }
+  if (kind === 'pointer') {
+    return String(extra.pointerMethod || request.pointerMethod || extra.method || request.method || '').toLowerCase();
+  }
+  return String(extra.method || request.method || extra.pointerMethod || extra.uploadMethod || '');
+}
 const lastPageByTab = new Map();
 /** executionId → Set<observeDocumentKey> — dual-observed documents this turn. */
 const observedByExecution = new Map();
@@ -105,8 +117,9 @@ export function actionHashInput(op, request, control, extra = {}) {
     bytesHash: extra.bytesHash || request.bytesHash || '',
     itemId: extra.itemId || request.itemId || '',
     artifactId: extra.artifactId || request.artifactId || '',
-    method: op === 'upload' ? '' : (extra.method || request.method || ''),
-    uploadMethod: op === 'upload' ? (extra.uploadMethod || request.method || 'auto') : undefined,
+    method: op === 'upload' ? '' : resolveActionMethod(request, extra, op),
+    uploadMethod: op === 'upload' ? resolveActionMethod(request, extra, 'upload') : undefined,
+    pointerMethod: op === 'pointer' ? resolveActionMethod(request, extra, 'pointer') : undefined,
     x: extra.x ?? request.x,
     y: extra.y ?? request.y
   };
@@ -153,8 +166,9 @@ function classifyInputFromControl(op, request, control, extra = {}) {
     bytesHash: extra.bytesHash || request.bytesHash,
     itemId: extra.itemId || request.itemId,
     artifactId: extra.artifactId || request.artifactId,
-    uploadMethod: extra.uploadMethod || request.method,
-    method: extra.method || request.method,
+    uploadMethod: extra.uploadMethod || request.uploadMethod || extra.method || request.method,
+    pointerMethod: extra.pointerMethod || request.pointerMethod || extra.method || request.method,
+    method: extra.method || extra.pointerMethod || extra.uploadMethod || request.pointerMethod || request.uploadMethod || request.method,
     x: extra.x ?? request.x,
     y: extra.y ?? request.y
   };
@@ -510,8 +524,9 @@ async function resolveMutationIntent(request, tabId, snapshot) {
     bytesHash: request.bytesHash,
     itemId: request.itemId,
     artifactId: request.artifactId,
-    uploadMethod: request.method,
-    method: request.method,
+    uploadMethod: request.uploadMethod || request.method,
+    pointerMethod: request.pointerMethod || request.method,
+    method: request.pointerMethod || request.uploadMethod || request.method,
     x: request.x,
     y: request.y
   };
@@ -702,6 +717,64 @@ export async function classifyCachedMutation(request, snapshot) {
   }
 }
 
+export async function getTabMediaStreamId(chromeLike, tabId) {
+  const api = chromeLike?.tabCapture?.getMediaStreamId;
+  if (typeof api !== 'function') {
+    const err = new Error('tabCapture.getMediaStreamId unavailable');
+    err.code = 'NEED_CAPTURE_GRANT';
+    throw err;
+  }
+  return api.call(chromeLike.tabCapture, { targetTabId: Number(tabId) });
+}
+
+async function executeTabListen(request, tabId, resolved) {
+  const listen = parseListenOp(request.listen);
+  if (!listen) {
+    return {
+      ok: false,
+      code: 'BAD_INPUT',
+      error: 'listen must be start, clip, stop, or wait',
+      tabId,
+      title: resolved.title
+    };
+  }
+  if (listen !== 'start') {
+    return { ok: true, op: 'listen', listen, tabId, title: resolved.title, authorized: true };
+  }
+  if (request.streamId) {
+    return {
+      ok: true,
+      op: 'listen',
+      listen: 'start',
+      tabId,
+      title: resolved.title,
+      streamId: String(request.streamId)
+    };
+  }
+  try {
+    const streamId = await getTabMediaStreamId(chrome, tabId);
+    if (!streamId) {
+      return {
+        ok: false,
+        code: 'NEED_CAPTURE_GRANT',
+        error: 'tabCapture returned an empty stream id',
+        tabId,
+        title: resolved.title
+      };
+    }
+    return { ok: true, op: 'listen', listen: 'start', tabId, title: resolved.title, streamId: String(streamId) };
+  } catch (error) {
+    const grant = isCaptureGrantError(error) || error?.code === 'NEED_CAPTURE_GRANT';
+    return {
+      ok: false,
+      code: grant ? 'NEED_CAPTURE_GRANT' : (error?.code || 'NEED_PAGE'),
+      error: error?.message || String(error),
+      tabId,
+      title: resolved.title
+    };
+  }
+}
+
 function parsePointerPoint(request) {
   const x = Number(request?.x);
   const y = Number(request?.y);
@@ -870,13 +943,13 @@ async function executePageUpload(request, tabId, frameId, expectedFrame, localRe
     bytes,
     filename: request.filename,
     mimeType: request.mimeType,
-    method: request.method || 'auto',
+    method: resolveActionMethod(request, {}, 'upload') || 'auto',
     selector,
     accept: request.accept,
     name: request.name
   };
   let applied;
-  if (String(request.method || 'auto').toLowerCase() === 'cdp') {
+  if (resolveActionMethod(request, {}, 'upload') === 'cdp') {
     const debuggee = { tabId };
     applied = await applyUploadToTab(chrome, spec, {
       ensureAttached: async () => {
@@ -958,6 +1031,10 @@ async function executeWorkspacePageAction(request) {
     };
   }
   const op = String(request?.op || '').trim().toLowerCase();
+  if (op === 'listen') {
+    await assertTabLeaseOwnerActive(request.sessionId, request.executionId);
+    return executeTabListen(request, tabId, resolved);
+  }
   try {
     await ensurePageActionScripts(tabId);
   } catch (error) {
@@ -1047,7 +1124,7 @@ async function executeWorkspacePageAction(request) {
   if (op === 'pointer') {
     const point = parsePointerPoint(request);
     if (!point.ok) return point;
-    const method = String(request.method || '').toLowerCase();
+    const method = resolveActionMethod(request, {}, 'pointer');
     if (method !== 'point' && method !== 'cdp') {
       return { ok: false, code: 'BAD_INPUT', error: 'pointer method must be point or cdp' };
     }
@@ -1125,7 +1202,9 @@ async function executeWorkspacePageAction(request) {
       bytesHash: request.bytesHash,
       itemId: request.itemId,
       artifactId: request.artifactId,
-      uploadMethod: request.method,
+      uploadMethod: request.uploadMethod || request.method,
+      pointerMethod: request.pointerMethod || request.method,
+      method: request.pointerMethod || request.uploadMethod || request.method,
       control: {
         ...(found || {}),
         name: found?.name || request?.name || request?.label,

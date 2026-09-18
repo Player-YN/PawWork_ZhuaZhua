@@ -62,14 +62,18 @@ export function waitForApproval({ approvalId, sessionId, executionId, signal } =
   });
 }
 
-export function answerApprovalWaiter({ approvalId, sessionId, decision } = {}) {
+export function answerApprovalWaiter({ approvalId, sessionId, decision, streamId } = {}) {
   const id = String(approvalId || '').trim();
   const rec = pending.get(id);
   if (!rec) return { ok: false, error: 'no pending approval', code: 'NOT_PENDING' };
   if (sessionId && rec.sessionId && rec.sessionId !== String(sessionId)) {
     return { ok: false, error: 'approval session mismatch', code: 'APPROVAL_MISMATCH' };
   }
-  rec.resolve({ decision: decision === 'approve' ? 'approve' : 'deny', approvalId: id });
+  rec.resolve({
+    decision: decision === 'approve' ? 'approve' : 'deny',
+    approvalId: id,
+    streamId: streamId ? String(streamId) : ''
+  });
   return { ok: true };
 }
 

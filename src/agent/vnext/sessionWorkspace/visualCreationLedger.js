@@ -86,7 +86,7 @@ export function ledgerArtifactId(execution, kind, opts = {}) {
   }
   const want = normalizeCreationKind(kind);
   if (want) return String(ledger.byKind?.[want] || '').trim();
-  // Empty kind: infer only among Design/Slides so a workbook ledger entry
+  // Empty kind: infer only among deck/poster so a workbook ledger entry
   // cannot steal a createScene target.
   const keys = Object.keys(ledger.byKind || {}).filter(
     (k) => ledger.byKind[k] && (k === 'deck' || k === 'poster')

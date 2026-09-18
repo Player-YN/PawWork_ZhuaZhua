@@ -1,21 +1,15 @@
 /**
- * render_document engine routing — Product profile **A′** (2026-08-07)
+ * render_document engine routing.
  *
- * Install constraint: **extension only** — no npm, no desktop Pandoc for end users.
- * All product formats must work with files shipped inside the extension package.
- *
- * Public API: only `render_document({ draftId, format })`.
- * Never expose call_pandoc / md_to_* tools.
+ * Public API: `render_document({ draftId, format })`.
  *
  * | format | engine | delivery |
  * |--------|--------|----------|
  * | md, txt, csv, html, zip, pptx | builtin | download artifact |
  * | pdf | builtin_print | HTML print dialog → Save as PDF |
- *
- * docx / pandoc-wasm are **not** product formats under A′ (optional lab only, not default).
  */
 
-/** Formats shown in UI and accepted as product capabilities (extension-only). */
+/** Formats shown in UI and accepted by render_document. */
 export const PRODUCT_FORMATS = Object.freeze([
   'md',
   'txt',
@@ -26,7 +20,7 @@ export const PRODUCT_FORMATS = Object.freeze([
   'zip'
 ]);
 
-/** Alias used by render_document — A′: same as product surface. */
+/** Alias used by render_document. */
 export const RENDER_FORMATS = PRODUCT_FORMATS;
 
 /**
@@ -48,7 +42,7 @@ export const FORMAT_ENGINE_MATRIX = Object.freeze({
     pandoc: false,
     fallback: null,
     delivery: 'download',
-    notes: 'A′ extension-only markdown.'
+    notes: 'Markdown.'
   },
   txt: {
     defaultEngine: 'builtin',
@@ -57,7 +51,7 @@ export const FORMAT_ENGINE_MATRIX = Object.freeze({
     pandoc: false,
     fallback: null,
     delivery: 'download',
-    notes: 'A′ plain text.'
+    notes: 'Plain text.'
   },
   csv: {
     defaultEngine: 'builtin',
@@ -103,7 +97,7 @@ export const FORMAT_ENGINE_MATRIX = Object.freeze({
     fallback: null,
     delivery: 'browser_print',
     notes:
-      'A′: print-ready HTML → system print dialog → Save as PDF. No Pandoc, no extra install. Optional simple binary PDF not product default.'
+      'Print-ready HTML → system print dialog → Save as PDF.'
   }
 });
 
@@ -130,7 +124,6 @@ export function resolveEngine(format, options = {}) {
     };
   }
 
-  // A′: never route product traffic to pandoc
   if (options.forcePandoc || options.engine === 'pandoc') {
     return {
       engine: null,
@@ -140,7 +133,7 @@ export function resolveEngine(format, options = {}) {
       delivery: row.delivery,
       errorCode: 'ENGINE_NOT_IN_PRODUCT',
       message:
-        'Pandoc is not part of the extension-only product (A′). Use md/txt/csv/html/pdf(print)/zip/pptx.'
+        'Pandoc is not shipped. Use md/txt/csv/html/pdf(print)/zip/pptx.'
     };
   }
 
@@ -174,11 +167,11 @@ export function getRenderCapabilities() {
     matrix: FORMAT_ENGINE_MATRIX,
     pandoc: false,
     notes:
-      'All formats ship inside the extension. PDF = HTML print → Save as PDF. No npm/Pandoc for end users.'
+      'Formats ship inside the extension. PDF = HTML print → Save as PDF.'
   };
 }
 
-/** @deprecated lab only — always false in A′ product profile */
+/** Always false; Pandoc is not shipped. */
 export function isPandocReady() {
   return false;
 }

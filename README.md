@@ -12,19 +12,17 @@ Treat the already-logged-in Chrome as a programmable computer. 爪爪 is the age
 
 **爪爪 · 完全解放版** (`PawWork_ZhuaZhua`) is a Chrome MV3 **unpacked** extension. It runs a side-panel agent that can drive the current tab (`action`), execute guest JS against the browser (`sys` inside `run`), and keep sheet / Univer doc / site HTML artifacts in the session.
 
-Not on the Chrome Web Store. No hosted model — bring your own key.
-
 ## Load it
 
-1. Clone this repo, **or** download a [Release zip](https://github.com/Player-YN/PawWork_ZhuaZhua/releases)
-2. Chrome → `chrome://extensions` → Developer mode → **Load unpacked** → select the folder (`manifest.json` is at its root)
-3. Open the side panel → paste an OpenAI-compatible API key (BYOK; stored in `chrome.storage.local`) → send a task on a normal `http(s)` page
+Have a coding agent paste: **按 skills/install-zhuazhua 把爪爪装进 Chrome** — it follows [skills/install-zhuazhua/SKILL.md](skills/install-zhuazhua/SKILL.md).
 
-After editing files, click **重新加载** on the extension card. There is no `package.json` and no build step.
+Without an agent: clone or a [Release zip](https://github.com/Player-YN/PawWork_ZhuaZhua/releases) → `chrome://extensions` → Developer mode → **Load unpacked** → the folder with `manifest.json` at its root. Open the side panel → ⚙️ → paste an OpenAI-compatible API key → send on a normal `http(s)` page.
 
-Needs Chrome 135+. On Chrome 138+, enable **Allow User Scripts** on the extension details page if you want `sys.eval` or page-identity fetch. Close DevTools on the target tab before using `sys.cdp` (otherwise `CDP_BUSY`). Restricted pages such as `chrome://` and the Web Store return `NEED_PAGE`.
+After you edit `src/`, click **重新加载**. No `package.json`. No build step.
 
-侧栏顶栏始终显示 **Guarded / Full Access** chip。默认 Guarded：已知普通操作自动做，已知付款拒绝，已知删除先问你，页面脚本关闭。Full Access 是最高自治 **best-effort**，不是硬安全保证。
+Chrome 135+. Extension details → **Allow User Scripts** for `sys.eval` / page-identity fetch. Close DevTools on the target tab before `sys.cdp`. Restricted pages (`chrome://`, Web Store) return `NEED_PAGE`.
+
+侧栏顶栏始终显示 **Guarded / Full Access** chip。默认 Guarded：已知普通操作自动做，已知付款拒绝，已知删除先问你，页面脚本关闭。Full Access：其余已知/未知操作自动做，并允许页面脚本；已知付款仍拒绝，已知删除仍先问你。
 
 ## Tests
 
@@ -36,7 +34,7 @@ node tests/browser-smoke.cjs <path-to-playwright>  # loads the real extension
 
 ## Architecture
 
-Side panel → service worker → offscreen `SessionWorkspaceService` → AI SDK `ToolLoopAgent`. Process layering, domain objects, tool contracts, and the unimplemented boundaries are documented in [AGENTS.md](AGENTS.md) and the nested `AGENTS.md` files under `src/`.
+Side panel → service worker → offscreen `SessionWorkspaceService` → AI SDK `ToolLoopAgent`. Process layering, domain objects, and tool contracts are documented in [AGENTS.md](AGENTS.md) and the nested `AGENTS.md` files under `src/`.
 
 Release packaging: `python scripts/pack_extension.py --zip dist/pawwork.zip`.
 
@@ -44,12 +42,9 @@ Release packaging: `python scripts/pack_extension.py --zip dist/pawwork.zip`.
 
 [MIT](LICENSE). Third-party components: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## Chrome BOT 架构优化候选版
+## Chrome BOT 接线
 
-当前源码版本为 **1.2.0-bot-candidate**。保留原有模型工具、Task 语义和 Chrome 内运行边界；补充文档级页面目标、可跨 SW 重启的 tab 租约、执行归属/CDP 释放、RPC 方法清单与未知结果处理。
-
-架构取舍、修改清单、验证范围及本地验收见 [docs/CHROME_BOT_OPTIMIZATION.md](docs/CHROME_BOT_OPTIMIZATION.md)。
-**Node 测试通过不代表真机验收通过**：本轮受管理策略限制，Chromium 未加载待测扩展。
+源码版本 **1.2.0**。文档级页面目标、可跨 SW 重启的 tab 租约、执行归属/CDP 释放、RPC 方法清单与未知结果处理见 [docs/CHROME_BOT_OPTIMIZATION.md](docs/CHROME_BOT_OPTIMIZATION.md)。
 
 ```sh
 node --test tests/*.test.mjs

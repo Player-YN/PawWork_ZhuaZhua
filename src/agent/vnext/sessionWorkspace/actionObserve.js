@@ -151,11 +151,21 @@ export function actionResultToModelFacts(result) {
   if (compact.methodUsed) facts.methodUsed = compact.methodUsed;
   if (compact.code) facts.code = compact.code;
   if (compact.error) facts.error = compact.error;
+  if (compact.hint) facts.hint = compact.hint;
   if (compact.observationError) facts.observationError = compact.observationError;
   if (compact.screenshotError) facts.screenshotError = compact.screenshotError;
   if (compact.screenshot && compact.screenshot.attached) facts.screenshot = { attached: true };
   if (Array.isArray(compact.results)) facts.results = compact.results;
   if (compact.partial) facts.partial = compact.partial;
+  if (compact.listen) facts.listen = compact.listen;
+  if (compact.path) facts.path = compact.path;
+  if (compact.durationMs != null) facts.durationMs = compact.durationMs;
+  if (compact.hadSound != null) facts.hadSound = compact.hadSound;
+  if (compact.rms != null) facts.rms = compact.rms;
+  if (compact.text) facts.text = compact.text;
+  if (compact.mimeType) facts.mimeType = compact.mimeType;
+  if (compact.capturing != null) facts.capturing = compact.capturing;
+  if (compact.bytes != null) facts.bytes = compact.bytes;
   return facts;
 }
 

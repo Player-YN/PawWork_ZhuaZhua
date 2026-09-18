@@ -248,7 +248,7 @@ export function malformedDocWriteError(commands) {
         ok: false,
         code: 'BAD_INPUT',
         error: 'doc command is missing op',
-        hint: 'each commands[] item needs op (setText / insertParagraph / createDocument / …)'
+        hint: `legal op: ${[...ops].join(' | ')}`
       };
     }
     const op = String(cmd.op || cmd.type || '').trim();
@@ -257,7 +257,7 @@ export function malformedDocWriteError(commands) {
         ok: false,
         code: 'BAD_INPUT',
         error: op ? `unknown doc op "${op}"` : 'doc command is missing op',
-        hint: 'each commands[] item needs op (setText / insertParagraph / createDocument / …)'
+        hint: `legal op: ${[...ops].join(' | ')}`
       };
     }
   }
@@ -286,7 +286,7 @@ export function malformedWebWriteError(commands) {
         ok: false,
         code: 'BAD_INPUT',
         error: 'web command is missing op',
-        hint: 'each commands[] item needs op (setText / setHref / setSrc / replaceHtml / …)'
+        hint: `legal op: ${[...ops].join(' | ')}`
       };
     }
     const op = String(cmd.op || cmd.type || '').trim();
@@ -295,7 +295,7 @@ export function malformedWebWriteError(commands) {
         ok: false,
         code: 'BAD_INPUT',
         error: op ? `unknown web op "${op}"` : 'web command is missing op',
-        hint: 'each commands[] item needs op (setText / setHref / setSrc / replaceHtml / …)'
+        hint: `legal op: ${[...ops].join(' | ')}`
       };
     }
     if ((op === 'replaceHtml' || op === 'setHtml') && !String(cmd.html || cmd.content || cmd.value || '').trim() && !officePayloadPath(cmd)) {

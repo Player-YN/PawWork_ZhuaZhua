@@ -39,7 +39,7 @@ import {
 import { NEED_SELECTION } from './htmlApply.js';
 import { applyUniverDocCommands, parseUniverDoc, serializeUniverDoc, fromUniverDoc } from './docsModel.js';
 import { applySiteCommands, listSiteNodes, stampSiteHtml, pinnedSiteIds, siteSelectionsFromIds } from './siteApply.js';
-import { runSiteClone, WEB_CLONE_DESCRIPTION } from './siteClone.js';
+import { runSiteClone } from './siteClone.js';
 import { overviewFromDocSnapshot } from './docsApply.js';
 import {
   hydrateDocCommands,
@@ -67,7 +67,9 @@ export function createOfficeTools(env) {
   const sheet = {
     name: 'sheet',
     description:
-      'Read, write, and snapshot a live Univer spreadsheet. Omit artifactId to target the focused book. act=read returns a used-range sample (truncated/next/sheetRowCount — never the whole table). act=snapshot dumps the used range (omit a1) to /scratch CSV for run; SNAPSHOT_TOO_LARGE → pass a smaller a1, never silent truncate. act=write applies commands[] in place (host pulses + Undo). Commands: setRange {a1,value,sheet?} (a1 may be B:B); setFormula {a1,formula}; setValues2d/applyGrid {a1,values[][] or path|valuesPath|from to /scratch|/artifacts JSON — after run writes the grid, pass the path, do not retype cells; missing op or missing both values and path → BAD_INPUT, never ok with applied:0}; insertRow/insertCol/deleteRow/deleteCol {index,count?}; sort {a1,column,direction,hasHeader}; numberFormat {a1,pattern} e.g. 0%; createSheet/renameSheet (createSheet materializes before later writes in the same or next apply); named sheet must exist or NO_SUCH_SHEET — omit sheet to target the active one. reshapeSplit {a1|column,itemDelim,fieldDelim?,mode?,headers?} splits one column into a draft sheet. insertCellImage/insertFloatImage/insertImage {a1,src} — omit src to pin the selection; src may be a data URL, http(s), wi_ web-item id, or 图片N. Host resolves bound items to pixels. xlsx download may drop pictures. Successful writes return readback — quote the readback A1, not a guess. Trust sheets[].rowCount as used rows.',
+      'Read, write, or snapshot the open Univer spreadsheet. Omit artifactId to target the focused book. ' +
+      'Write with commands[] or a guest path to JSON; success is the readback, not a guessed A1. ' +
+      'Failed calls return {ok:false, code, error, hint}.',
     parameters: {
       type: 'object',
       properties: {
@@ -217,7 +219,8 @@ export function createOfficeTools(env) {
   const doc = {
     name: 'doc',
     description:
-      'Read and write long-form Univer document artifacts: paragraphs, lists, and drawings. act=write applies commands[] in place. After run writes blocks/commands JSON, pass path|from — do not retype. Missing op or empty/invalid payload → BAD_INPUT, never ok with applied:0. Missing file → ENOENT.',
+      'Read or write the open Univer document. Write with commands[] or a guest path to JSON. ' +
+      'Failed calls return {ok:false, code, error, hint}.',
     parameters: {
       type: 'object',
       properties: {
@@ -328,8 +331,9 @@ export function createOfficeTools(env) {
   const web = {
     name: 'web',
     description:
-      'Website page (data-paw-kind=site). Acts: read, write, undo, clone, capture. After create, mutate in place — never a second site HTML. Writes: setText/setHref/setSrc on a pinned node, commands[], or path|from to /scratch|/artifacts JSON (commands) or HTML (replaceHtml on the same file) — after run writes the payload, pass the path, do not retype. Missing op or empty payload → BAD_INPUT; missing file → ENOENT. ' +
-      WEB_CLONE_DESCRIPTION,
+      'Read, write, undo, clone, or capture a data-paw-kind=site page. Mutate the existing artifact in place. ' +
+      'Write with commands[] or a guest path; clone captures DOM+CSS+assets (source=active|url|path). ' +
+      'Failed calls return {ok:false, code, error, hint}.',
     parameters: {
       type: 'object',
       properties: {

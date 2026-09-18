@@ -1,3 +1,5 @@
+import { assertSafeByokEndpointUrl, redactSecretsInText } from '../../safeEndpointUrl.js';
+
 /**
  * Public-web search adapters. Host maps settings → one provider.
  * Output is always { results: [{ title, url, snippet, content }] }.
@@ -28,6 +30,7 @@ function normalizeHits(list, limit) {
 
 export async function searchTavily({ query, limit, apiKey, baseURL, fetchImpl, signal }) {
   const root = String(baseURL || 'https://api.tavily.com').replace(/\/$/, '');
+  assertSafeByokEndpointUrl(root, 'Tavily Base URL');
   const res = await fetchImpl(`${root}/search`, {
     method: 'POST',
     headers: {
@@ -45,7 +48,12 @@ export async function searchTavily({ query, limit, apiKey, baseURL, fetchImpl, s
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
-    throw new Error(`Tavily HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`);
+    throw new Error(
+      redactSecretsInText(
+        `Tavily HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`,
+        [apiKey]
+      )
+    );
   }
   const json = await res.json();
   return normalizeHits(json?.results, limit);
@@ -63,7 +71,12 @@ export async function searchBrave({ query, limit, apiKey, fetchImpl, signal }) {
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
-    throw new Error(`Brave HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`);
+    throw new Error(
+      redactSecretsInText(
+        `Brave HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`,
+        [apiKey]
+      )
+    );
   }
   const json = await res.json();
   return normalizeHits(json?.web?.results, limit);
@@ -71,6 +84,7 @@ export async function searchBrave({ query, limit, apiKey, fetchImpl, signal }) {
 
 export async function searchFirecrawl({ query, limit, apiKey, baseURL, fetchImpl, signal }) {
   const root = String(baseURL || 'https://api.firecrawl.dev').replace(/\/$/, '');
+  assertSafeByokEndpointUrl(root, 'Firecrawl Base URL');
   const attempts = [`${root}/v2/search`, `${root}/v1/search`];
   let lastErr = 'Search backend failed';
   for (const endpoint of attempts) {
@@ -89,7 +103,12 @@ export async function searchFirecrawl({ query, limit, apiKey, baseURL, fetchImpl
     }
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
-      throw new Error(`Search HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`);
+      throw new Error(
+        redactSecretsInText(
+          `Search HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`,
+          [apiKey]
+        )
+      );
     }
     const json = await res.json();
     const web = Array.isArray(json?.data?.web)

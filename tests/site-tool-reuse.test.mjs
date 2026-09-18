@@ -26,11 +26,16 @@ function sessionTools() {
 }
 
 test('prefix prefers ready-made site tools and does not dump the skill body', () => {
-  assert.equal(SYSTEM_PROMPT_VERSION, 'v14-general-agent');
+  assert.equal(SYSTEM_PROMPT_VERSION, 'v15-general-agent');
   const prefix = buildSessionAgentInstructions();
   assert.match(prefix, /你是"爪爪"/);
   assert.match(prefix, /不预设某种工具或路径总是更好/);
   assert.match(prefix, /也可以编写代码或组合多种能力/);
+  assert.match(prefix, /先用 clarify 询问用户是否要协助登录，并让用户选择/);
+  assert.match(prefix, /对该页调用 action，不要用 acquire/);
+  assert.match(prefix, /按持久的浏览器内任务自主规划路径/);
+  assert.match(prefix, /用 action 点击页面上已有的站内工具/);
+  assert.match(prefix, /用 acquire 在公开网上检索所需站点或工具/);
   // v13 site-tool-reuse principle sentences are not required in the prefix
   assert.doesNotMatch(prefix, /先募集现成工具/);
   assert.doesNotMatch(prefix, /run 是胶水/);
@@ -122,12 +127,13 @@ test('run and action descriptions list channels without a forced primary path', 
   assert.doesNotMatch(tools.action.description, /Prefer this for in-site/);
   assert.doesNotMatch(tools.action.description, /ready-made page controls beat/);
   assert.match(tools.action.description, /pointer/);
-  assert.match(tools.action.description, /RAW_ESCAPE_DENIED|NO_TARGET/);
+  assert.match(tools.action.description, /Failed calls return/);
+  assert.doesNotMatch(tools.action.description, /RAW_ESCAPE_DENIED|NO_TARGET|TAB_LEASED|FILE_CHOOSER/);
   assert.deepEqual(tools.action.parameters.required, ['op']);
   assert.ok(tools.action.parameters.properties.op.enum.includes('upload'));
   assert.ok(tools.action.parameters.properties.op.enum.includes('pointer'));
+  assert.ok(tools.action.parameters.properties.op.enum.includes('listen'));
   assert.ok(tools.action.parameters.properties.tabId);
-  assert.match(tools.action.description, /JPEG|screenshot/);
   assert.doesNotMatch(tools.action.description, /must screenshot first|prefer structure/i);
   assert.ok(tools.run.parameters.properties.code);
 });

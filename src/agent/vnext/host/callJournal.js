@@ -1,7 +1,6 @@
 /**
- * Durable call journal. Not task progress, not sessionAudit, not SW memory.
+ * Durable call journal.
  * Write-ahead: prepared+authorized must succeed before SW dispatch.
- * Exactly-once for arbitrary web pages does not exist; never blind-replay.
  */
 
 export const JOURNAL_SCHEMA = 'pawwork.call-journal/v1';

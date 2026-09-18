@@ -608,7 +608,14 @@ test('live brief persists through page-read hops and settled success', () => {
   const empty = createExecutionStatus({ sessionId: 's' });
   assert.equal(persistLiveActionBrief(empty, running), running);
   assert.equal(planLiveDisclosurePaint(empty, running).hidden, false);
+  assert.equal(planLiveDisclosurePaint(empty, running).text, running);
   assert.equal(planLiveDisclosurePaint(empty).hidden, true);
+  const thinking = applyExecutionStatus(
+    { ...state, current: { text: '正在读取当前标签', status: 'running', source: 'tool-call', tool: 'action', op: 'snapshot' } },
+    { type: 'tool-execution-end' }
+  );
+  assert.equal(persistLiveActionBrief(thinking, running), running);
+  assert.equal(planLiveDisclosurePaint(thinking, running).hidden, false);
 });
 
 test('live brief stays after settle until product folds', () => {
@@ -651,9 +658,11 @@ test('live shine targets glyphs, not the row chrome', () => {
   const motion = readFileSync(join(root, 'src/sidepanel/css/motion.css'), 'utf8');
   const shineAt = css.indexOf('Live 摘要');
   assert.ok(shineAt >= 0);
-  const shineBlock = css.slice(shineAt, shineAt + 1200);
+  const shineBlock = css.slice(shineAt, shineAt + 1400);
   assert.match(shineBlock, /\.turn-disclosure-current-text/);
-  assert.match(shineBlock, /background-clip:\s*text/);
+  assert.doesNotMatch(shineBlock, /color:\s*transparent/);
+  assert.doesNotMatch(shineBlock, /-webkit-text-fill-color:\s*transparent/);
+  assert.match(shineBlock, /-webkit-text-fill-color:\s*var\(--text-muted\)/);
   assert.equal(/\.turn-disclosure\.is-live \.turn-disclosure-current,/.test(shineBlock), false);
   assert.match(motion, /\.turn-disclosure-current-text/);
   assert.match(motion, /-webkit-text-fill-color:\s*var\(--text-muted\)/);

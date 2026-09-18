@@ -1,0 +1,17 @@
+---
+description: State what the system does; do not narrate limits, untested status, or what it is not
+alwaysApply: true
+---
+
+# State what the system does
+
+Write docs, comments, i18n, and prompts as operational facts: what a control does, where state lives, how to call an API, how to load / test / pack.
+
+Do not add:
+
+- Product caveats or “we do not guarantee” copy
+- “Not yet implemented” / “this is not a todo” essays
+- “Untested” / “CI doesn’t count” / “candidate / unofficial” banners
+- Commercial positioning (“not for sale”, “local experiment only”, “not a product feature”)
+
+If a sentence only narrates what the system is not, what was not tested, or what is not for sale, delete it. Keep the behavior.

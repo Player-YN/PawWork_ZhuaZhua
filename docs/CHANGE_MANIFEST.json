@@ -1,6 +1,6 @@
 {
   "baseline": "User-uploaded uncommitted workspace, not origin/main",
-  "version": "1.2.0-bot-candidate",
+  "version": "1.2.0",
   "changes": [
     {
       "path": ".github/workflows/ci.yml",

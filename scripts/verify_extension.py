@@ -1,7 +1,4 @@
-"""Check a load root's manifest, literal local imports/resources, and optional source parity.
-
-This is a static integrity check, not a Chrome runtime or model smoke test.
-"""
+"""Check a load root's manifest, literal local imports/resources, and optional source parity."""
 from __future__ import annotations
 import argparse
 import fnmatch
@@ -70,7 +67,7 @@ def verify(root: Path, source: Path | None = None) -> dict:
         for ref in group.get('resources', []):
             require(ref, wildcard=True)
 
-    # Literal imports only; computed URLs still need the browser smoke test.
+    # Literal imports only.
     imports = re.compile(r'''(?:\b(?:import|export)\s+(?:[^;"'`]*?\s+from\s*)?["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\))''')
     css_urls = re.compile(r'''url\(\s*["']?([^\s\)"']+)["']?\s*\)''')
     for name, path in sorted(files.items()):

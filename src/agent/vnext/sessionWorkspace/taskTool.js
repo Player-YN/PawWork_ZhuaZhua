@@ -117,7 +117,8 @@ export function createTaskTool(env = {}) {
   return {
     name: 'task',
     description:
-      'Inspect and persist durable task state. plan/checkpoint update the current task; wait/complete persist and yield immediately. schedule is only for future or recurring work explicitly requested by the user.',
+      'Inspect or persist durable task state: plan and checkpoint update the current task; wait and complete persist and yield; schedule creates a future or recurring task the user asked for. ' +
+      'Failed calls return {ok:false, code, error, hint}.',
     parameters: {
       type: 'object',
       properties: {

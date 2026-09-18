@@ -22,9 +22,7 @@ jobs:
       - name: Runtime regression
         run: node --test tests/*.test.mjs
 
-      # The release load root is generated from src/, never committed. These
-      # assertions are what keeps the shipped tree from drifting away from the
-      # tested tree; they need no browser.
+      # The release load root is generated from src/, never committed.
       - name: Pack release load root
         run: python scripts/pack_extension.py
 

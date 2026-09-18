@@ -4,6 +4,7 @@ import { createWorkspaceRpcTransport } from './agent/vnext/host/workspaceRpcTran
 // Static import only — dynamic import() is disallowed on ServiceWorkerGlobalScope
 // (https://github.com/w3c/ServiceWorker/issues/1356) and surfaces as Workspace RPC errors.
 import { loadLlmSettings } from './agent/llm.js';
+import { assertSafeByokEndpointUrl } from './agent/safeEndpointUrl.js';
 import { sheetTabMatches, htmlTabMatches } from './sidepanel/sessionIsolation.js';
 import { previewEntryForItem } from './agent/vnext/sessionWorkspace/openClassify.js';
 import { handleWorkspaceSys } from './agent/vnext/host/browserSysHost.js';
@@ -63,8 +64,8 @@ async function ensurePawWorkOffscreen() {
   if (pawworkOffscreenCreating) return pawworkOffscreenCreating;
   pawworkOffscreenCreating = chrome.offscreen.createDocument({
     url: PAWWORK_OFFSCREEN_URL,
-    reasons: ['WORKERS', 'BLOBS'],
-    justification: 'Run the browser-resident Web Workspace agent and materialize selected content independently of the side panel.'
+    reasons: ['WORKERS', 'BLOBS', 'USER_MEDIA'],
+    justification: 'Run the browser-resident Web Workspace agent, materialize selected content, and capture tab audio.'
   }).finally(() => { pawworkOffscreenCreating = null; });
   return pawworkOffscreenCreating;
 }
@@ -75,9 +76,12 @@ const forwardWorkspaceRpc = createWorkspaceRpcTransport({
 
 // PageWand Service Worker - Native Downloads & Smart Auto-Zip Engine
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   console.log("[PageWand] Background Service Worker Initialized.");
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error) => console.error(error));
+  if (details?.reason === 'install') {
+    chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` }).catch((error) => console.error(error));
+  }
 });
 
 chrome.action.onClicked.addListener((tab) => {
@@ -899,7 +903,7 @@ async function handleCanvasHost(_request) {
   return {
     ok: false,
     code: 'NO_CANVAS',
-    error: 'Design/Slides (tldraw) is removed. Leftover json-canvas opens as generic preview.'
+    error: 'Leftover json-canvas opens as generic preview.'
   };
 }
 
@@ -1641,19 +1645,10 @@ async function handleLlmProxyFetch(request) {
   if (!url || typeof url !== 'string') {
     return { ok: false, error: 'Missing url' };
   }
-  // Safety: only allow https LLM endpoints (and localhost for dev proxies)
-  let parsed;
   try {
-    parsed = new URL(url);
-  } catch {
-    return { ok: false, error: 'Invalid url' };
-  }
-  const allowed =
-    parsed.protocol === 'https:' ||
-    parsed.hostname === '127.0.0.1' ||
-    parsed.hostname === 'localhost';
-  if (!allowed) {
-    return { ok: false, error: 'Blocked non-HTTPS LLM endpoint' };
+    assertSafeByokEndpointUrl(url, 'LLM endpoint');
+  } catch (e) {
+    return { ok: false, error: e?.message || 'Blocked non-HTTPS LLM endpoint' };
   }
 
   const methodUpper = String(method || 'POST').toUpperCase();

@@ -191,7 +191,7 @@ export function isPrimaryShelfChip(folderId) {
 }
 
 /**
- * Hide retired Design/Slides chips. Leftover items stay openable under Files/Legacy.
+ * Fold design/slides chips; leftover items stay openable under Files/Legacy.
  * @param {Array<{id:string,label?:string,items:object[]}>} folders
  */
 export function foldLegacyShelfFolders(folders = []) {

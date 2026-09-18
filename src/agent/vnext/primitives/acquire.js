@@ -216,7 +216,7 @@ export function createAcquireTool(ctx) {
   return {
     name: 'acquire',
     description:
-      'Bring unknown public web into the guest (search / fetch / map / crawl). Anonymous — no user cookies. Session guest sees /scratch/sources; this primitive writes /work/sources and the host remaps. Not for an already-open tab or a login/cookie/captcha/IP-bound URL: that is sys.fetch as:"page". Never mutates Selection Groups.',
+      'Bring unknown public web into the guest (search / fetch / map / crawl). Anonymous — no user cookies. Session guest sees /scratch/sources; this primitive writes /work/sources and the host remaps. Transcribe lives on the session acquire tool. Not for an already-open tab or a login/cookie/captcha/IP-bound URL: that is sys.fetch as:"page". Never mutates Selection Groups.',
     parameters: {
       type: 'object',
       properties: {

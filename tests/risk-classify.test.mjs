@@ -9,6 +9,12 @@ import {
   CLASSIFIED_SOURCE_SW
 } from '../src/agent/vnext/host/riskClassify.js';
 
+test('listen is a page-read and does not need a dispatch ticket', () => {
+  const out = classifyRisk({ channel: 'action', op: 'listen', listen: 'start', rev: '' });
+  assert.equal(out.risk, 'read');
+  assert.equal(needsDispatchTicket(out), false);
+});
+
 test('host classifier ignores model risk/intent and treats named Save as known reversible', () => {
   const out = classifyRisk({
     channel: 'action',

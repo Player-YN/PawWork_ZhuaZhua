@@ -29,7 +29,7 @@ CSP：`extension_pages` 允许 `'wasm-unsafe-eval'`（QuickJS / Univer）；sand
     workspace_rpc          → ensurePawWorkOffscreen + 契约检查（仅只读调用最多重试 8 次；写入不重试）
     workspace_page_action  → handleWorkspacePageAction → 各 frame content_script
     sheet_host             → 打开/复用 sheet.html，再 pawwork_sheet_rpc
-    canvas_host            → docs.html 同类 RPC（无 Design/Slides）
+    canvas_host            → docs.html 同类 RPC
     workspace_fetch / workspace_sys / workspace_capture_* / workspace_find_tab / …
     workspace_tab_lease_peek|release / workspace_task_resolve_page
     storage_local_get|set  → chrome.storage.local 代理
@@ -81,13 +81,14 @@ Background：
 - 页面操作先成功写入 storage.session 的租约；`tabs.close` 同样占锁。`sys.cdp` 的 targetId 先归一到 page tabId，不能绕过锁。`sys.tabs.current` 不再 fallback 当前焦点；缺省只允许已注入的本轮 defaultTabId。
 - `execution-end`、finally、abort 通过 `browserExecution.js` 精确释放 sessionId+executionId：先撤销后续派发，再取消 sys/断开 CDP，最后放锁。SW 首次执行前与 offscreen 活动执行对账，恢复失败不继续派发。浏览器重启/扩展重载会清空 storage.session 租约与 session 政策覆盖。
 - `action` mutate 与关键 `sys` 副作用走双门：offscreen `gatedDispatch`（分类 + journal + 审批 + one-shot ticket）后，SW `consumeDispatchTicket` 再分类一次。已知付款即使有 ticket 也不派发。Guarded 的 raw eval/CDP 在 SW 再拦一次。
-- `sys.eval/waitFor/fetch(as:page)` 使用 documentIds 定向，可以传 documentId/expectedUrl。`sys.upload` / `action op=upload` 共用 SW `uploadChannel.js`：字节经 `chrome.scripting.executeScript({ world:'MAIN', func, args })` 分块注入，默认 `DataTransfer` + `input.files` setter + 手派 `input`/`change`，找不到 file input 再脚本 drop。`auto` 不 attach CDP。回执带 `methodUsed`、`trusted:false`、`siteAccepted:'unknown'`，不声称站点已接受。未知写入回执要先观察再决定，不能自动重放；确认动作后的观察失败单列 observationError。
+- `sys.eval/waitFor/fetch(as:page)` 使用 documentIds 定向，可以传 documentId/expectedUrl。`sys.upload` / `action op=upload` 共用 SW `uploadChannel.js`：字节经 `chrome.scripting.executeScript({ world:'MAIN', func, args })` 分块注入，默认 `DataTransfer` + `input.files` setter + 手派 `input`/`change`，找不到 file input 再脚本 drop。`auto` 不 attach CDP。回执带 `methodUsed`、`trusted:false`、`siteAccepted:'unknown'`。未知写入回执先观察再决定，不自动重放；确认动作后的观察失败单列 observationError。
 - 预览页 workLock 仍是同 session 画布 UI 锁，不与 live tab 租约合并。
 - 合并 snapshot 后 `controls` 再截到 80 条。
-- `fill_form` 按 `frameId` 拆开发送，出现失败/未知回执停止后续 frame；返回已知的部分结果，不伪装为原子事务。
+- `fill_form` 按 `frameId` 拆开发送，出现失败/未知回执停止后续 frame；返回已知的部分结果。
 - `wait` + `text`（无 `ref`）对所有 frame 并行等，任一命中即停。
 - `name` 回退：内部 `op: resolve_name`（不在模型 schema 里）。
 - 限制页（`chrome://`、`edge://`、`about:`、`devtools://`、`view-source:`、Web Store、扩展页）→ `NEED_PAGE`。
+- `action op=listen` 不进 content script、不要求 `rev`。SW `tabCapture.getMediaStreamId({targetTabId})` 后由 offscreen `getUserMedia` + MediaRecorder 环缓冲；`clip` 写入本轮 `/scratch`。`getMediaStreamId` 需要手势时侧栏 one-shot 批准（与删除同一套 approval）。TAB_LEASED 与其它 action 相同。
 
 Content script：
 
@@ -108,13 +109,13 @@ Content script：
 | 存哪 | 键 / 库 | 用途 |
 |------|---------|------|
 | IndexedDB + OPFS | `pawwork-session-workspace-v1` | 会话 / group / artifact / fsNodes / `meta`（含可选 `task:*`）（offscreen） |
-| `chrome.storage.local` | `pagewand_providers`、`pagewand_active_provider_id` | BYOK |
-| 同上 | `pagewand_web_acquire` | acquire 搜索/抓取设置 |
+| `chrome.storage.local` | `pagewand_providers`、`pagewand_active_provider_id` | 侧栏 API Key / 模型 |
+| 同上 | `pagewand_web_acquire` | acquire 搜索 / 抓取 / 转写设置 |
 | 同上 | `pagewand_theme_mode`（兼 `pagewand_theme`） | 侧栏主题 |
 | 同上 | `pagewand_user_skills` | 用户固化 skill（`agent/skills.js`，侧栏） |
 
 ## 其它宿主事实
 
-- 权限与命令见根 AGENTS.md / `manifest.json`。`userScripts` 给 `sys.eval` / page `fetch`；`debugger` 给 `sys.cdp`。Chrome 135+ 的 `userScripts.execute` 需要扩展卡片 **允许运行用户脚本**（或更早的开发者模式）。CDP 挂上时 Chrome 会显示调试横幅；F12 已打开会 `CDP_BUSY`。`eval` / page `fetch` / `cdp` 不注入扩展预览页。`sys` 是系统调用表，不是产品功能列表（[agent/AGENTS.md](agent/AGENTS.md)）。
+- 权限与命令见根 AGENTS.md / `manifest.json`。`userScripts` 给 `sys.eval` / page `fetch`；`debugger` 给 `sys.cdp`。Chrome 135+ 的 `userScripts.execute` 需要扩展卡片 **允许运行用户脚本**（或更早的开发者模式）。CDP 挂上时 Chrome 会显示调试横幅；F12 已打开会 `CDP_BUSY`。`eval` / page `fetch` / `cdp` 不注入扩展预览页。`sys` ABI 见 [agent/AGENTS.md](agent/AGENTS.md)。
 - 区域截图：Alt+Shift+C → content script 框选 → SW `captureVisibleTab` 裁剪 → 剪贴板 + 对话附件。
 - `llm_proxy_fetch`：侧栏/设置探测模型时走 SW，避免页面 CORS。

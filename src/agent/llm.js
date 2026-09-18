@@ -1,5 +1,5 @@
 /**
- * Provider settings for BYOK OpenAI-compatible HTTPS.
+ * Provider settings for OpenAI-compatible HTTPS.
  * Inference goes through AI SDK (`createPageWandLanguageModel`), not this file.
  *
  *   pagewand_providers: [{ id, name, baseURL, apiKey, model, createdAt, image?, lastProbe? }]
@@ -11,6 +11,8 @@
  * a leftover nested `image` on a chat record. Never overwrite chat base
  * with an image path.
  */
+
+import { assertSafeByokEndpointUrl, redactSecretsInText } from './safeEndpointUrl.js';
 
 export const DEFAULT_BASE = 'https://api.deepseek.com/v1';
 
@@ -175,7 +177,9 @@ function normalizeLastProbe(raw) {
     at: Number.isFinite(at) ? at : 0,
     count: Number.isFinite(count) && count >= 0 ? Math.round(count) : 0
   };
-  if (typeof raw.error === 'string' && raw.error.trim()) out.error = raw.error.trim().slice(0, 240);
+  if (typeof raw.error === 'string' && raw.error.trim()) {
+    out.error = redactSecretsInText(raw.error.trim()).slice(0, 240);
+  }
   return out;
 }
 
@@ -531,6 +535,8 @@ export async function upsertProvider(provider, opts = {}) {
   const { providers, activeProviderId } = await loadProvidersState();
   const next = normalizeProvider(provider);
   if (!next) throw new Error('INVALID_PROVIDER');
+  if (next.baseURL) assertSafeByokEndpointUrl(next.baseURL, 'Provider Base URL');
+  if (next.image?.baseURL) assertSafeByokEndpointUrl(next.image.baseURL, 'Image Base URL');
   const idx = providers.findIndex((p) => p.id === next.id);
   // Preserve existing API key when UI sends empty (user left field blank = keep)
   if (idx >= 0) {

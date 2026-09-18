@@ -7,7 +7,12 @@ import {
   tavilySearchProbeUrl,
   tavilySearchProbeBody,
   braveSearchProbeUrl,
-  braveSearchProbeHeaders
+  braveSearchProbeHeaders,
+  normalizeWebAcquireSettings,
+  sttModelsUrl,
+  sttProbeUrl,
+  inferSttProtocol,
+  DEFAULT_STT_BASE_URL
 } from '../src/agent/webAcquireSettings.js';
 
 test('Firecrawl credit-usage URLs try v2 then v1', () => {
@@ -51,6 +56,24 @@ test('Tavily probe is a tiny search POST', () => {
     max_results: 1,
     search_depth: 'basic'
   });
+});
+
+test('remote http acquire bases are not kept', () => {
+  const got = normalizeWebAcquireSettings({
+    tavilyBaseURL: 'http://proxy.invalid',
+    firecrawlBaseURL: 'http://proxy.invalid/v1',
+    sttBaseURL: 'http://proxy.invalid/v1'
+  });
+  assert.equal(got.tavilyBaseURL, 'https://api.tavily.com');
+  assert.equal(got.firecrawlBaseURL, 'https://api.firecrawl.dev');
+  assert.equal(got.sttBaseURL, DEFAULT_STT_BASE_URL);
+});
+
+test('STT models probe is GET /models on the OpenAI-compatible root', () => {
+  assert.equal(sttModelsUrl('https://api.groq.com/openai/v1/'), 'https://api.groq.com/openai/v1/models');
+  assert.equal(sttProbeUrl('https://api.groq.com/openai/v1', 'groq'), 'https://api.groq.com/openai/v1/models');
+  assert.equal(sttProbeUrl('https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen'), 'https://dashscope.aliyuncs.com/compatible-mode/v1/models');
+  assert.equal(inferSttProtocol('groq', 'https://api.groq.com/openai/v1'), 'openai-transcriptions');
 });
 
 test('Brave probe is a tiny web search GET', () => {

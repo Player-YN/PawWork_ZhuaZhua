@@ -335,14 +335,14 @@
             aria-haspopup="listbox"
             aria-expanded="false"
             aria-controls="sessionBindAddMenu"
-            title="为本任务瞄准 Group（优先上下文，不是权限门）"
+            title="为本任务瞄准 Group"
           >瞄准组</button>
           <div class="session-bind-add-menu" id="sessionBindAddMenu" hidden></div>
           <div class="bind-group-hint" id="bindGroupHint" hidden>
             <div class="bind-group-hint-card">
               <span class="bind-group-hint-text">
                 <span data-i18n="bindGroupHint">没有瞄准项。Agent 仍可访问整页。</span>
-                <strong data-i18n="bindGroupHintEmphasis">瞄准只提高优先级，不是权限边界。</strong>
+                <strong data-i18n="bindGroupHintEmphasis">瞄准项会优先进入上下文。</strong>
               </span>
               <button type="button" class="bind-group-hint-x" id="bindGroupHintClose" aria-label="关闭">×</button>
             </div>
@@ -552,7 +552,7 @@
         <button id="skillModalCloseBtn" class="modal-close-btn">&times;</button>
       </div>
       <div class="modal-body">
-        <p class="skill-catalog-subtitle">用户 Skills 保存在本机；运行消耗云端 BYOK API（扩展内 vNext Runtime）。</p>
+        <p class="skill-catalog-subtitle">用户 Skills 保存在本机；运行使用设置里的 API Key。</p>
         <div id="skillCardsGrid" class="skill-cards-grid"></div>
       </div>
     </div>
@@ -739,6 +739,45 @@
             <div class="api-editor-actions">
               <button type="button" class="btn btn-secondary" id="cancelWebAcquireBtn" data-i18n="cancel">取消</button>
               <button type="button" class="btn btn-primary" id="saveWebAcquireBtn" data-i18n="saveWebAcquireBtn">保存</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-api-card" id="settingsSttCard" aria-labelledby="settingsSttTitle">
+          <h4 class="settings-api-card-title" id="settingsSttTitle" data-i18n="settingsSttTitle">转写 / 听写</h4>
+          <p class="settings-hint" id="sttStatusLine" data-i18n="sttEmptyHint">尚未添加转写 API。</p>
+          <div id="sttVendorList" class="api-vendor-list"></div>
+          <button type="button" class="api-add-btn" id="addSttBtn" data-i18n="addSttBtn">＋ 添加转写 API</button>
+          <div id="sttEditor" class="api-vendor-editor" hidden>
+            <div class="provider-presets-row" id="sttPresetRow" role="group" aria-label="转写供应商">
+              <button type="button" class="provider-preset-chip" data-stt-preset="groq">Groq</button>
+              <button type="button" class="provider-preset-chip" data-stt-preset="iflytek">讯飞</button>
+              <button type="button" class="provider-preset-chip" data-stt-preset="doubao">豆包</button>
+              <button type="button" class="provider-preset-chip" data-stt-preset="qwen">千问</button>
+              <button type="button" class="provider-preset-chip" data-stt-preset="openai-compatible" data-i18n="presetCustom">自定义</button>
+            </div>
+            <label class="settings-label" for="sttBaseInput">Base URL</label>
+            <input type="text" id="sttBaseInput" class="modal-input" placeholder="https://api.groq.com/openai/v1" autocomplete="off" />
+            <label class="settings-label" for="sttKeyInput">API Key</label>
+            <input type="password" id="sttKeyInput" class="modal-input" placeholder="gsk_..." autocomplete="off" />
+            <label class="settings-label" for="sttModelInput" data-i18n="settingsSttModel">模型</label>
+            <div class="chat-model-input-row">
+              <input type="text" id="sttModelInput" class="modal-input" placeholder="whisper-large-v3" autocomplete="off" list="sttModelSuggestions" />
+              <button type="button" id="sttProbeBtn" class="btn btn-secondary settings-mini-btn" data-i18n="sttProbeBtn">探测</button>
+            </div>
+            <p class="settings-hint" id="sttProbeResult" hidden></p>
+            <datalist id="sttModelSuggestions">
+              <option value="whisper-large-v3"></option>
+              <option value="whisper-large-v3-turbo"></option>
+              <option value="whisper-1"></option>
+              <option value="gpt-4o-transcribe"></option>
+              <option value="qwen3-asr-flash"></option>
+              <option value="ifasr"></option>
+              <option value="doubao-seed-2-0-lite-260428"></option>
+            </datalist>
+            <div class="api-editor-actions">
+              <button type="button" class="btn btn-secondary" id="cancelSttEditorBtn" data-i18n="cancel">取消</button>
+              <button type="button" class="btn btn-primary" id="saveSttBtn" data-i18n="saveSttBtn">保存转写 API</button>
             </div>
           </div>
         </section>

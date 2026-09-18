@@ -222,6 +222,11 @@ export function createTurnDisclosureUi(deps) {
     const plan = planLiveDisclosurePaint(state, lastText);
     stripInstrumentExtras(el);
     if (plan.hidden) {
+      if ((mode === 'live' || mode === 'sticky') && (lastText || el.dataset.hadBrief === '1')) {
+        el.hidden = false;
+        el.classList.remove('is-empty');
+        return el;
+      }
       el.classList.add('is-empty');
       el.hidden = true;
       if (!lastText) el.replaceChildren();
@@ -229,6 +234,7 @@ export function createTurnDisclosureUi(deps) {
     }
     el.hidden = false;
     el.classList.remove('is-empty');
+    el.dataset.hadBrief = '1';
     const labelId = `td-${id}-label`;
     el.setAttribute('aria-labelledby', labelId);
     let head = el.querySelector('.turn-disclosure-head');

@@ -1,10 +1,11 @@
 /**
  * PageWand — OpenAI-compatible language model via Vercel AI SDK
- * BYOK from active provider in chrome.storage; HTTPS inference only (no cloud agent orchestrator).
+ * Active provider from chrome.storage; HTTPS inference.
  */
 
 import { createOpenAICompatible } from './vnext/adapters/vendor/ai-sdk-loader.mjs';
 import { loadLlmSettings, DEFAULT_BASE } from './llm.js';
+import { assertSafeByokEndpointUrl } from './safeEndpointUrl.js';
 import { isAbortLike, toAbortError } from './vnext/host/userStop.js';
 
 const DEFAULT_MODEL_ID = 'deepseek-v4-flash';
@@ -244,6 +245,7 @@ export async function createPageWandLanguageModel(opts = {}) {
 
   const modelId = resolveModelName(opts.model || settings.model);
   const baseURL = settings.apiBase || DEFAULT_BASE;
+  assertSafeByokEndpointUrl(baseURL, 'LLM Base URL');
   const providerName =
     (settings.providerName && String(settings.providerName).trim()) || 'pagewand';
 
@@ -272,6 +274,7 @@ export async function createPageWandLanguageModel(opts = {}) {
 export function createExtensionFetch(opts = {}) {
   return async function pagewandFetch(input, init = {}) {
     const url = typeof input === 'string' ? input : input?.url || '';
+    assertSafeByokEndpointUrl(url, 'LLM endpoint');
     const keepReasoning = /openrouter\.ai/i.test(String(url));
     const cleanedInit = stripUnsupportedFieldsFromRequestInit(init, opts.reasoning || null, {
       keepReasoning

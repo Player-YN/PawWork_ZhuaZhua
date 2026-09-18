@@ -404,8 +404,17 @@ export async function gatedDispatch(req = {}, deps = {}) {
 export async function hostAnswerApproval(journal, params = {}) {
   const approvalId = String(params.approvalId || '');
   const sessionId = String(params.sessionId || '');
-  const rec = await journal.getApproval(approvalId);
-  if (!rec) return { ok: false, code: 'NOT_PENDING', error: 'no pending approval' };
+  const rec = journal && typeof journal.getApproval === 'function'
+    ? await journal.getApproval(approvalId)
+    : null;
+  if (!rec) {
+    return answerApprovalWaiter({
+      approvalId,
+      sessionId,
+      decision: params.decision,
+      streamId: params.streamId
+    });
+  }
   if (rec.sessionId !== sessionId) return { ok: false, code: 'APPROVAL_MISMATCH', error: 'approval belongs to another session' };
   if (params.payloadHash && rec.payloadHash && String(params.payloadHash) !== String(rec.payloadHash)) {
     return { ok: false, code: 'APPROVAL_MISMATCH', error: 'approval payload hash does not match' };
@@ -434,7 +443,12 @@ export async function hostAnswerApproval(journal, params = {}) {
     }
     return { ok: false, code: 'APPROVAL_EXPIRED', error: 'approval expired' };
   }
-  return answerApprovalWaiter({ approvalId, sessionId, decision: params.decision });
+  return answerApprovalWaiter({
+    approvalId,
+    sessionId,
+    decision: params.decision,
+    streamId: params.streamId
+  });
 }
 
 export async function hostGetPendingApproval(journal, sessionId) {

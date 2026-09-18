@@ -1,12 +1,5 @@
 /**
  * Host risk classifier. Model-supplied risk / intent / confidence are ignored.
- *
- * Existing stack = aim lock + document identity + tab mutex + canvas optimistic
- * lock + honest lost receipts + progress notes + after-the-fact audit.
- * Missing until this module + journal: host-enforced capability policy and
- * delete approval; write-ahead operation journal + independent postconditions.
- * Never treat task.evidence / audit / action ok / model prose as verified.
- * Never treat lease / execution / UNKNOWN codes as a journal.
  */
 
 export const RISK_READ = 'read';
@@ -83,7 +76,7 @@ const PAYMENT_URL_RE =
 const PAYMENT_HOST_RE =
   /(^|\.)(paypal\.|stripe\.|checkout\.shopify|alipay\.|alipayobjects\.|pay\.weixin|checkout\.)/i;
 
-const ACTION_READ = new Set(['snapshot', 'wait', 'resolve_name', 'resolve_intent']);
+const ACTION_READ = new Set(['snapshot', 'wait', 'listen', 'resolve_name', 'resolve_intent']);
 const ACTION_FILL = new Set(['fill', 'fill_form', 'select', 'scroll']);
 const ACTION_MUTATE = new Set(['click', 'fill', 'fill_form', 'select', 'press', 'scroll', 'upload', 'pointer']);
 
@@ -260,10 +253,12 @@ function classifyAction(input = {}) {
   };
 
   if (ACTION_READ.has(op) || !op) {
+    const reason = op === 'wait' ? 'action:wait' : op === 'listen' ? 'action:listen' : 'action:snapshot';
+    const summary = op === 'wait' ? '读取页面等待条件' : op === 'listen' ? '读取标签音频' : '读取页面快照';
     return verdict({
       risk: RISK_READ,
-      reason: op === 'wait' ? 'action:wait' : 'action:snapshot',
-      summary: op === 'wait' ? '读取页面等待条件' : '读取页面快照',
+      reason,
+      summary,
       signals: ['action-read'],
       target: base
     });
@@ -340,7 +335,7 @@ function classifyAction(input = {}) {
   }
 
   if (op === 'pointer') {
-    const pointerMethod = String(input.method || '').toLowerCase();
+    const pointerMethod = String(input.pointerMethod || input.method || '').toLowerCase();
     if (pointerMethod === 'cdp') {
       return verdict({
         risk: RISK_RAW,

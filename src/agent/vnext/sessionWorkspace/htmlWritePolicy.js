@@ -1,6 +1,6 @@
 /**
- * Host law: HTML files are websites or documents — not a design engine.
- * Model-origin generic writes cannot land leftover pawCanvas / tldraw snapshots.
+ * HTML writes: website (data-paw-kind=site) or document (data-paw-kind=document).
+ * Rejects pawCanvas / tldraw JSON payloads.
  */
 
 import { isPawCanvasDoc } from './openClassify.js';
@@ -9,7 +9,7 @@ const USE_CANVAS = {
   ok: false,
   code: 'USE_CANVAS',
   error:
-    'Design/Slides (tldraw) is removed. write_artifact cannot create pawCanvas JSON. HTML files are only a website (data-paw-kind="site") or a document (data-paw-kind="document").',
+    'write_artifact cannot create pawCanvas JSON. HTML files are a website (data-paw-kind="site") or a document (data-paw-kind="document").',
   hint: 'use write_artifact with data-paw-kind=site, or run op=doc'
 };
 

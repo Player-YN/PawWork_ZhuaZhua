@@ -1,3 +1,5 @@
+import { assertSafeByokEndpointUrl, redactSecretsInText } from '../../safeEndpointUrl.js';
+
 /**
  * Optional Firecrawl scrape for acquire fetch (public pages → markdown).
  * Binary URLs and missing keys fall through to the caller’s raw GET.
@@ -31,7 +33,9 @@ const CRAWL_POLL_MS = 250;
 const CRAWL_TIMEOUT_MS = 90_000;
 
 function firecrawlRoot(baseURL) {
-  return String(baseURL || 'https://api.firecrawl.dev').replace(/\/$/, '');
+  const root = String(baseURL || 'https://api.firecrawl.dev').replace(/\/$/, '');
+  assertSafeByokEndpointUrl(root, 'Firecrawl Base URL');
+  return root;
 }
 
 function firecrawlHeaders(apiKey) {
@@ -77,7 +81,12 @@ export async function scrapeFirecrawl({ url, apiKey, baseURL, fetchImpl, signal 
     }
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
-      throw new Error(`Firecrawl HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`);
+      throw new Error(
+        redactSecretsInText(
+          `Firecrawl HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`,
+          [apiKey]
+        )
+      );
     }
     const json = await res.json();
     const markdown = markdownFromFirecrawl(json);
@@ -133,7 +142,12 @@ export async function mapFirecrawl({ url, limit, query, apiKey, baseURL, fetchIm
     }
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
-      throw new Error(`Site map HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`);
+      throw new Error(
+        redactSecretsInText(
+          `Site map HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`,
+          [apiKey]
+        )
+      );
     }
     const json = await res.json();
     return normalizeMapLinks(json, cap);
@@ -183,7 +197,12 @@ export async function crawlFirecrawl({ url, limit, apiKey, baseURL, fetchImpl, s
     }
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
-      throw new Error(`Site crawl HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`);
+      throw new Error(
+        redactSecretsInText(
+          `Site crawl HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`,
+          [apiKey]
+        )
+      );
     }
     started = { json: await res.json(), endpoint };
     break;
@@ -210,7 +229,12 @@ export async function crawlFirecrawl({ url, limit, apiKey, baseURL, fetchImpl, s
       if (res.status === 404) continue;
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        throw new Error(`Site crawl status HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`);
+        throw new Error(
+          redactSecretsInText(
+            `Site crawl status HTTP ${res.status}${errText ? `: ${errText.slice(0, 180)}` : ''}`,
+            [apiKey]
+          )
+        );
       }
       json = await res.json();
       break;
